@@ -3,11 +3,11 @@ package main
 import (
 	"log"
 
+	"github.com/GravSpace/GravSpace/internal/auth"
+	"github.com/GravSpace/GravSpace/internal/s3"
+	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/rizal/storage-object/internal/auth"
-	"github.com/rizal/storage-object/internal/s3"
-	"github.com/rizal/storage-object/internal/storage"
 )
 
 func main() {
@@ -51,10 +51,12 @@ func main() {
 	s3.GET("/", s3Handler.ListBuckets)
 
 	// Bucket operations
+	s3.HEAD("/:bucket", s3Handler.HeadBucket)
 	s3.PUT("/:bucket", s3Handler.CreateBucket)
 	s3.GET("/:bucket", s3Handler.ListObjects)
 
 	// Object operations
+	s3.HEAD("/:bucket/*", s3Handler.HeadObject)
 	s3.GET("/:bucket/*", s3Handler.GetObject)
 	s3.PUT("/:bucket/*", s3Handler.PutObject)
 

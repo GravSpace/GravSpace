@@ -1,4 +1,4 @@
-module github.com/rizal/storage-object
+module github.com/GravSpace/GravSpace
 
 go 1.24.0
 

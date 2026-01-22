@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/GravSpace/GravSpace/internal/auth"
 	"github.com/labstack/echo/v4"
-	"github.com/rizal/storage-object/internal/auth"
 )
 
 type AdminHandler struct {

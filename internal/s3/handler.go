@@ -2,12 +2,13 @@ package s3
 
 import (
 	"encoding/xml"
+	"fmt"
 	"mime"
 	"net/http"
 	"path/filepath"
 
+	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/labstack/echo/v4"
-	"github.com/rizal/storage-object/internal/storage"
 )
 
 type S3Handler struct {
@@ -80,8 +81,30 @@ func (h *S3Handler) ListBuckets(c echo.Context) error {
 
 func (h *S3Handler) CreateBucket(c echo.Context) error {
 	bucket := c.Param("bucket")
+	exists, err := h.Storage.BucketExists(bucket)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if exists {
+		// S3 returns 200 if you already own it, but for simplicity/clarity
+		// we can keep it as is or return 200. Let's return 200 to be compatible
+		// with "idempotent" create bucket behavior often expected.
+		return c.NoContent(http.StatusOK)
+	}
 	if err := h.Storage.CreateBucket(bucket); err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *S3Handler) HeadBucket(c echo.Context) error {
+	bucket := c.Param("bucket")
+	exists, err := h.Storage.BucketExists(bucket)
+	if err != nil {
+		return c.NoContent(http.StatusInternalServerError)
+	}
+	if !exists {
+		return c.NoContent(http.StatusNotFound)
 	}
 	return c.NoContent(http.StatusOK)
 }
@@ -104,6 +127,29 @@ func (h *S3Handler) GetObject(c echo.Context) error {
 
 	c.Response().Header().Set("x-amz-version-id", vid)
 	return c.Stream(http.StatusOK, contentType, reader)
+}
+
+func (h *S3Handler) HeadObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	obj, err := h.Storage.StatObject(bucket, key, versionID)
+	if err != nil {
+		return c.NoContent(http.StatusNotFound)
+	}
+
+	contentType := mime.TypeByExtension(filepath.Ext(key))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	c.Response().Header().Set(echo.HeaderContentType, contentType)
+	c.Response().Header().Set(echo.HeaderContentLength, fmt.Sprintf("%d", obj.Size))
+	c.Response().Header().Set(echo.HeaderLastModified, obj.ModTime.Format(http.TimeFormat))
+	c.Response().Header().Set("x-amz-version-id", obj.VersionID)
+
+	return c.NoContent(http.StatusOK)
 }
 
 func (h *S3Handler) PutObject(c echo.Context) error {

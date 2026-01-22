@@ -22,10 +22,12 @@ type Object struct {
 // Storage defines the interface for object storage
 type Storage interface {
 	CreateBucket(name string) error
+	BucketExists(name string) (bool, error)
 	ListBuckets() ([]string, error)
 	DeleteBucket(name string) error
 	PutObject(bucket, key string, reader io.Reader) (string, error)
 	GetObject(bucket, key, versionID string) (io.ReadCloser, string, error)
+	StatObject(bucket, key, versionID string) (*Object, error)
 	DeleteObject(bucket, key, versionID string) error
 	ListObjects(bucket, prefix, delimiter string) ([]Object, []string, error)
 	ListVersions(bucket, key string) ([]Object, error)
@@ -45,6 +47,17 @@ func NewFileStorage(root string) (*FileStorage, error) {
 
 func (s *FileStorage) CreateBucket(name string) error {
 	return os.MkdirAll(filepath.Join(s.Root, name), 0755)
+}
+
+func (s *FileStorage) BucketExists(name string) (bool, error) {
+	_, err := os.Stat(filepath.Join(s.Root, name))
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (s *FileStorage) ListBuckets() ([]string, error) {
@@ -105,6 +118,31 @@ func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, s
 
 	reader, err := os.Open(filepath.Join(objectDir, versionID))
 	return reader, versionID, err
+}
+
+func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error) {
+	objectDir := filepath.Join(s.Root, bucket, key)
+	if versionID == "" {
+		data, err := os.ReadFile(filepath.Join(objectDir, "latest"))
+		if err != nil {
+			return nil, err
+		}
+		versionID = string(data)
+	}
+
+	path := filepath.Join(objectDir, versionID)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Object{
+		Key:       key,
+		VersionID: versionID,
+		Size:      info.Size(),
+		IsLatest:  true, // Simplification for now, we'd need to check against 'latest' to be precise
+		ModTime:   info.ModTime(),
+	}, nil
 }
 
 func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
