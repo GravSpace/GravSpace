@@ -41,6 +41,7 @@ func main() {
 	admin.POST("/users/:username/keys", adminHandler.GenerateKey)
 	admin.POST("/users/:username/policies", adminHandler.AddPolicy)
 	admin.DELETE("/users/:username/policies/:name", adminHandler.RemovePolicy)
+	admin.GET("/presign", adminHandler.GeneratePresignURL)
 
 	// S3 API Routes (Protected)
 	s3 := e.Group("")

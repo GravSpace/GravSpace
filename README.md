@@ -3,10 +3,12 @@
 High Performance S3 Compatible Object Storage focused on speed and simplicity.
 
 ## Features
-- **S3 Compatibility**: Partial support for S3 API (Bucket and Object operations).
-- **Go Backend**: High-performance core using Echo framework.
-- **NuxtJS Frontend**: Modern dashboard for bucket and object management.
-- **Simplicity**: No complex configuration, just start and store.
+- **S3 Compatibility**: Support for S3 API (Buckets, Objects, and **Versioning**).
+- **IAM Policy Management**: Fine-grained access control with JSON policies.
+- **Anonymous/Public Access**: One-click public buckets and folders.
+- **Presigned URLs**: Authentication via query-string parameters.
+- **High Performance**: Go-powered core with Nuxt 4 dashboard.
+- **MIME Type Detection**: Direct in-browser display for images and documents.
 
 ## Getting Started
 

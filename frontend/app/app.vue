@@ -116,7 +116,9 @@
                         style="margin-right: 0.5rem;">Preview</button>
                       <button class="btn btn-small" @click="downloadObject(obj.Key)"
                         style="margin-right: 0.5rem;">Download</button>
-                      <button class="btn btn-small btn-secondary" @click="fetchVersions(obj.Key)">History</button>
+                      <button class="btn btn-small btn-secondary" @click="fetchVersions(obj.Key)"
+                        style="margin-right: 0.5rem;">History</button>
+                      <button class="btn btn-small btn-secondary" @click="copyPresignedUrl(obj.Key)">Copy Link</button>
                     </td>
                   </tr>
                   <tr v-if="objectVersions[obj.Key]" class="row-expanded">
@@ -130,6 +132,8 @@
                           <button class="btn btn-small btn-secondary"
                             @click="previewObject = { key: obj.Key, versionId: v.VersionId }">Preview</button>
                           <button class="btn btn-small" @click="downloadObject(obj.Key, v.VersionId)">Download</button>
+                          <button class="btn btn-small btn-secondary"
+                            @click="copyPresignedUrl(obj.Key, v.VersionId)">Copy Link</button>
                         </div>
                       </div>
                     </td>
@@ -600,12 +604,35 @@ async function togglePublic(bucket, prefix = "") {
   }
 }
 
-async function removePolicy(username, name) {
-  if (!confirm(`Remove policy ${name}?`)) return
-  await authFetch(`${API_BASE}/admin/users/${username}/policies/${name}`, {
-    method: 'DELETE'
-  })
-  await fetchUsers()
+async function copyPresignedUrl(key, versionId = null) {
+  const isObjPublic = isPublic(selectedBucket.value, key)
+
+  if (isObjPublic) {
+    const baseUrl = `${window.location.protocol}//${window.location.host}/${selectedBucket.value}/${key}`
+    let finalUrl = baseUrl
+    if (versionId) finalUrl += (finalUrl.includes('?') ? '&' : '?') + `versionId=${versionId}`
+    try {
+      await navigator.clipboard.writeText(finalUrl)
+      alert("Public link copied to clipboard!")
+    } catch (err) {
+      alert("Failed to copy: " + err)
+    }
+    return
+  }
+
+  // Fetch from backend for private/presigned
+  let url = `${API_BASE}/admin/presign?bucket=${selectedBucket.value}&key=${key}`
+  if (versionId) url += `&versionId=${versionId}`
+
+  try {
+    const res = await authFetch(url)
+    if (!res.ok) throw new Error("Failed to generate presigned URL")
+    const data = await res.json()
+    await navigator.clipboard.writeText(data.url)
+    alert("Presigned URL copied to clipboard!")
+  } catch (err) {
+    alert("Error: " + err.message)
+  }
 }
 
 watch(currentTab, (newTab) => {
