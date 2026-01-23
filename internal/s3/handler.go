@@ -40,9 +40,26 @@ type ListBucketResult struct {
 	CommonPrefixes []string  `xml:"CommonPrefixes>Prefix"`
 }
 
+type ListBucketV2Result struct {
+	XMLName               xml.Name  `xml:"ListBucketResult"`
+	Name                  string    `xml:"Name"`
+	Prefix                string    `xml:"Prefix"`
+	Delimiter             string    `xml:"Delimiter"`
+	IsTruncated           bool      `xml:"IsTruncated"`
+	Contents              []Content `xml:"Contents"`
+	CommonPrefixes        []string  `xml:"CommonPrefixes>Prefix"`
+	KeyCount              int       `xml:"KeyCount"`
+	MaxKeys               int       `xml:"MaxKeys"`
+	ContinuationToken     string    `xml:"ContinuationToken,omitempty"`
+	NextContinuationToken string    `xml:"NextContinuationToken,omitempty"`
+}
+
 type Content struct {
-	Key  string `xml:"Key"`
-	Size int64  `xml:"Size"`
+	Key          string `xml:"Key"`
+	LastModified string `xml:"LastModified"`
+	ETag         string `xml:"ETag"`
+	Size         int64  `xml:"Size"`
+	StorageClass string `xml:"StorageClass"`
 }
 
 type ListVersionsResult struct {
@@ -163,10 +180,30 @@ func (h *S3Handler) PutObject(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+func (h *S3Handler) DeleteObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	if err := h.Storage.DeleteObject(bucket, key, versionID); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *S3Handler) DeleteBucket(c echo.Context) error {
+	bucket := c.Param("bucket")
+	if err := h.Storage.DeleteBucket(bucket); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (h *S3Handler) ListObjects(c echo.Context) error {
 	bucket := c.Param("bucket")
 	prefix := c.QueryParam("prefix")
 	delimiter := c.QueryParam("delimiter")
+	listType := c.QueryParam("list-type")
 
 	// Check if this is a ListVersions request
 	if c.QueryParam("versions") != "" || c.Request().URL.Query().Has("versions") {
@@ -178,6 +215,29 @@ func (h *S3Handler) ListObjects(c echo.Context) error {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
+	if listType == "2" {
+		result := ListBucketV2Result{
+			Name:           bucket,
+			Prefix:         prefix,
+			Delimiter:      delimiter,
+			CommonPrefixes: commonPrefixes,
+			MaxKeys:        1000,
+			KeyCount:       len(objects) + len(commonPrefixes),
+			IsTruncated:    false,
+		}
+		for _, o := range objects {
+			result.Contents = append(result.Contents, Content{
+				Key:          o.Key,
+				Size:         o.Size,
+				LastModified: o.ModTime.Format(http.TimeFormat),
+				ETag:         fmt.Sprintf("\"%s\"", o.VersionID),
+				StorageClass: "STANDARD",
+			})
+		}
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXML)
+		return c.XML(http.StatusOK, result)
+	}
+
 	result := ListBucketResult{
 		Name:           bucket,
 		Prefix:         prefix,
@@ -185,7 +245,13 @@ func (h *S3Handler) ListObjects(c echo.Context) error {
 		CommonPrefixes: commonPrefixes,
 	}
 	for _, o := range objects {
-		result.Contents = append(result.Contents, Content{Key: o.Key, Size: o.Size})
+		result.Contents = append(result.Contents, Content{
+			Key:          o.Key,
+			Size:         o.Size,
+			LastModified: o.ModTime.Format(http.TimeFormat),
+			ETag:         fmt.Sprintf("\"%s\"", o.VersionID),
+			StorageClass: "STANDARD",
+		})
 	}
 
 	c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXML)

@@ -53,12 +53,14 @@ func main() {
 	// Bucket operations
 	s3.HEAD("/:bucket", s3Handler.HeadBucket)
 	s3.PUT("/:bucket", s3Handler.CreateBucket)
+	s3.DELETE("/:bucket", s3Handler.DeleteBucket)
 	s3.GET("/:bucket", s3Handler.ListObjects)
 
 	// Object operations
 	s3.HEAD("/:bucket/*", s3Handler.HeadObject)
 	s3.GET("/:bucket/*", s3Handler.GetObject)
 	s3.PUT("/:bucket/*", s3Handler.PutObject)
+	s3.DELETE("/:bucket/*", s3Handler.DeleteObject)
 
 	// Start server
 	e.Logger.Fatal(e.Start(":8080"))
