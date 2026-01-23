@@ -3,7 +3,9 @@ package main
 import (
 	"log"
 
+	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/auth"
+	"github.com/GravSpace/GravSpace/internal/health"
 	"github.com/GravSpace/GravSpace/internal/s3"
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/labstack/echo/v4"
@@ -32,6 +34,22 @@ func main() {
 	s3Handler := &s3.S3Handler{Storage: store}
 	store.StartLifecycleWorker()
 	adminHandler := &s3.AdminHandler{UserManager: um}
+	healthChecker := health.NewHealthChecker()
+
+	// Initialize Audit Logger
+	auditLogger, err := audit.NewAuditLogger("./data/audit.log")
+	if err != nil {
+		log.Printf("Warning: Failed to initialize audit logger: %v", err)
+		auditLogger = nil // Continue without audit logging
+	}
+	if auditLogger != nil {
+		defer auditLogger.Close()
+	}
+
+	// Health Check Routes (no auth required)
+	e.GET("/health/live", healthChecker.LivenessHandler)
+	e.GET("/health/ready", healthChecker.ReadinessHandler)
+	e.GET("/health/startup", healthChecker.StartupHandler)
 
 	// Admin Routes
 	admin := e.Group("/admin")
@@ -46,7 +64,7 @@ func main() {
 
 	// S3 API Routes (Protected)
 	s3 := e.Group("")
-	s3.Use(auth.S3AuthMiddleware(um))
+	s3.Use(auth.S3AuthMiddleware(um, auditLogger))
 
 	// List Buckets
 	s3.GET("/", s3Handler.ListBuckets)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -534,8 +535,19 @@ func (s *FileStorage) DeleteBucketLifecycle(bucket string) error {
 }
 
 func (s *FileStorage) StartLifecycleWorker() {
+	// Get interval from environment variable, default to 1 hour
+	intervalStr := os.Getenv("LIFECYCLE_WORKER_INTERVAL")
+	interval := 1 * time.Hour
+	if intervalStr != "" {
+		if minutes, err := strconv.Atoi(intervalStr); err == nil {
+			interval = time.Duration(minutes) * time.Minute
+		}
+	}
+
+	fmt.Printf("Starting lifecycle worker with interval: %v\n", interval)
+
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour)
+		ticker := time.NewTicker(interval)
 		for range ticker.C {
 			s.ProcessLifecycleRules()
 		}

@@ -1,4 +1,5 @@
 <template>
+  <LoginDialog />
   <div class="flex h-screen bg-background text-foreground overflow-hidden">
     <!-- SIDEBAR -->
     <aside class="w-64 border-r bg-card flex flex-col">
@@ -17,17 +18,20 @@
           {{ item.label }}
         </button>
       </nav>
-      <div class="p-4 border-t space-y-4">
+      <div class="p-4 border-t space-y-2">
         <div class="flex items-center gap-3 px-3">
           <Avatar class="w-8 h-8">
             <AvatarImage src="" />
-            <AvatarFallback>AD</AvatarFallback>
+            <AvatarFallback>{{ authState.accessKeyId.substring(0, 2).toUpperCase() }}</AvatarFallback>
           </Avatar>
-          <div class="flex flex-col">
-            <span class="text-xs font-semibold">Admin Account</span>
-            <span class="text-[10px] text-muted-foreground">System Administrator</span>
+          <div class="flex flex-col flex-1">
+            <span class="text-xs font-semibold">{{ authState.accessKeyId }}</span>
+            <span class="text-[10px] text-muted-foreground">Authenticated</span>
           </div>
         </div>
+        <Button variant="outline" size="sm" class="w-full" @click="handleLogout">
+          Logout
+        </Button>
       </div>
     </aside>
 
@@ -537,6 +541,8 @@ import {
 } from '@/components/ui/breadcrumb'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { S3Signer } from './lib/s3-signer'
+import LoginDialog from './components/LoginDialog.vue'
+import { useAuth } from './composables/useAuth'
 
 const currentTab = ref('buckets')
 const buckets = ref([])
@@ -576,10 +582,8 @@ const newFolderName = ref('')
 
 const fileInput = ref(null)
 const API_BASE = 'http://localhost:8080'
-const ADMIN_KEY_ID = 'admin'
-const ADMIN_SECRET_KEY = 'adminsecret'
-
-const signer = new S3Signer(ADMIN_KEY_ID, ADMIN_SECRET_KEY)
+// Auth state from composable
+const { authState, logout: authLogout } = useAuth()
 
 const navItems = [
   { id: 'buckets', label: 'Dashboard', icon: LayoutDashboard },

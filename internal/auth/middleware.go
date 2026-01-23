@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/labstack/echo/v4"
 )
 
@@ -22,7 +23,7 @@ type S3Error struct {
 	HostId     string   `xml:"HostId"`
 }
 
-func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
+func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			authHeader := c.Request().Header.Get("Authorization")
@@ -72,6 +73,9 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 			if accessKeyID != "" {
 				user, _ = um.GetUserByKey(accessKeyID)
 				if user == nil {
+					if auditLogger != nil {
+						auditLogger.LogDenied(accessKeyID, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "Invalid access key")
+					}
 					return sendS3Error(c, "InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist in our records.", "", "")
 				}
 
@@ -136,6 +140,9 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 				calculatedSignature := CalculateSignature(secretKey, date, region, service, stringToSign)
 
 				if providedSignature != calculatedSignature {
+					if auditLogger != nil {
+						auditLogger.LogDenied(user.Username, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "Signature mismatch")
+					}
 					return sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
 				}
 			}
@@ -143,7 +150,15 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 			// Policy Enforcement
 			action, resource := determineS3Action(c)
 			if !um.CheckPermission(user, action, resource) {
+				if auditLogger != nil {
+					auditLogger.LogDenied(user.Username, action, resource, c.RealIP(), c.Request().UserAgent(), "Policy denied")
+				}
 				return sendS3Error(c, "AccessDenied", "Access Denied by IAM Policy", c.Param("bucket"), c.Param("*"))
+			}
+
+			// Log successful authentication and authorization
+			if auditLogger != nil {
+				auditLogger.LogSuccess(user.Username, action, resource, c.RealIP(), c.Request().UserAgent(), nil)
 			}
 
 			c.Set("user", user)
