@@ -425,7 +425,7 @@
       <DialogContent class="sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>{{ selectedUserForPolicy ? 'Attach Policy to ' + selectedUserForPolicy : 'Dynamic Policy Builder'
-            }}
+          }}
           </DialogTitle>
           <DialogDescription>
             Specify permissions in standard AWS IAM JSON format.
@@ -535,6 +535,7 @@ import {
   Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbSeparator
 } from '@/components/ui/breadcrumb'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { S3Signer } from './lib/s3-signer'
 
 const currentTab = ref('buckets')
 const buckets = ref([])
@@ -575,6 +576,9 @@ const newFolderName = ref('')
 const fileInput = ref(null)
 const API_BASE = 'http://localhost:8080'
 const ADMIN_KEY_ID = 'admin'
+const ADMIN_SECRET_KEY = 'adminsecret'
+
+const signer = new S3Signer(ADMIN_KEY_ID, ADMIN_SECRET_KEY)
 
 const navItems = [
   { id: 'buckets', label: 'Dashboard', icon: LayoutDashboard },
@@ -584,20 +588,15 @@ const navItems = [
 
 // CORE S3 / AUTH LOGIC
 async function authFetch(url, options = {}) {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const dateStamp = `${year}${month}${day}`;
+  const method = options.method || 'GET'
+  const headers = options.headers || {}
 
-  options.headers = {
-    ...options.headers,
-    'Authorization': `AWS4-HMAC-SHA256 Credential=${ADMIN_KEY_ID}/${dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=mock-signature-from-server`
+  if (options.body && typeof options.body === 'string' && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json'
   }
 
-  if (options.body && typeof options.body === 'string' && !options.headers['Content-Type']) {
-    options.headers['Content-Type'] = 'application/json'
-  }
+  const signedOptions = await signer.sign(method, url, headers, options.body)
+  options.headers = signedOptions
 
   return fetch(url, options)
 }

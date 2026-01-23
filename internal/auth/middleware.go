@@ -58,6 +58,7 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 				// Extract Credential and Signature
 				parts := strings.Split(authHeader, " ")
 				for _, p := range parts {
+					p = strings.TrimSuffix(p, ",")
 					if strings.HasPrefix(p, "Credential=") {
 						cred := strings.TrimPrefix(p, "Credential=")
 						accessKeyID = strings.Split(cred, "/")[0]
@@ -98,6 +99,7 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 					// Parse Auth Header for signed headers
 					parts := strings.Split(authHeader, " ")
 					for _, p := range parts {
+						p = strings.TrimSuffix(p, ",")
 						if strings.HasPrefix(p, "SignedHeaders=") {
 							signedHeadersStr = strings.TrimPrefix(p, "SignedHeaders=")
 						}
@@ -105,6 +107,7 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 					algorithm = "AWS4-HMAC-SHA256"
 					// Extract scope from auth header
 					for _, p := range parts {
+						p = strings.TrimSuffix(p, ",")
 						if strings.HasPrefix(p, "Credential=") {
 							cred := strings.TrimPrefix(p, "Credential=")
 							credentialScope = strings.Join(strings.Split(cred, "/")[1:], "/")
@@ -132,8 +135,7 @@ func S3AuthMiddleware(um *UserManager) echo.MiddlewareFunc {
 				stringToSign := BuildStringToSign(algorithm, amzDate, credentialScope, canonicalRequest)
 				calculatedSignature := CalculateSignature(secretKey, date, region, service, stringToSign)
 
-				if providedSignature != calculatedSignature && providedSignature != "mock-signature-from-server" {
-					// Note: allowed mock-signature-from-server for backward compatibility during transition
+				if providedSignature != calculatedSignature {
 					return sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
 				}
 			}
