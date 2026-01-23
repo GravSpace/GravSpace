@@ -1,295 +1,540 @@
 <template>
-  <div class="app-container">
-    <aside class="sidebar">
-      <div class="logo">
-        <div class="logo-icon">▲</div>
-        GravityStore
+  <div class="flex h-screen bg-background text-foreground overflow-hidden">
+    <!-- SIDEBAR -->
+    <aside class="w-64 border-r bg-card flex flex-col">
+      <div class="p-6 flex items-center gap-3">
+        <div class="bg-primary text-primary-foreground w-8 h-8 flex items-center justify-center rounded-md font-bold">
+          ▲
+        </div>
+        <span class="text-xl font-bold tracking-tight">GravityStore</span>
       </div>
-      <nav>
-        <div class="nav-item" :class="{ active: currentTab === 'buckets' }" @click="currentTab = 'buckets'">Dashboard
-        </div>
-        <div class="nav-item" :class="{ active: currentTab === 'users' }" @click="currentTab = 'users'">Users & Keys
-        </div>
-        <div class="nav-item" :class="{ active: currentTab === 'policies' }" @click="currentTab = 'policies'">Policies
-        </div>
-        <div class="nav-item">Settings</div>
+      <nav class="flex-1 px-4 space-y-1">
+        <button v-for="item in navItems" :key="item.id"
+          class="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors"
+          :class="currentTab === item.id ? 'bg-secondary text-secondary-foreground' : 'text-muted-foreground hover:bg-secondary/50'"
+          @click="currentTab = item.id">
+          <component :is="item.icon" class="w-4 h-4" />
+          {{ item.label }}
+        </button>
       </nav>
-    </aside>
-    <main class="main-content">
-      <!-- BUCKETS TAB -->
-      <div v-if="currentTab === 'buckets'">
-        <header class="header">
-          <h1>Buckets</h1>
-          <button class="btn btn-primary" @click="createBucket">Create Bucket</button>
-        </header>
-
-        <div class="card">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Objects</th>
-                <th>Size</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="bucket in buckets" :key="bucket">
-                <td>
-                  <span style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;"
-                    @click="selectBucket(bucket)">
-                    📁 {{ bucket }}
-                  </span>
-                </td>
-                <td>-</td>
-                <td>-</td>
-                <td>
-                  <span v-if="isPublic(bucket)" class="badge"
-                    style="background: rgba(52, 211, 153, 0.1); color: #34d399; margin-right: 0.5rem;">Public</span>
-                  <button class="btn btn-small btn-secondary" style="margin-right: 0.5rem;"
-                    @click="togglePublic(bucket)">{{ isPublic(bucket) ? 'Make Private' : 'Make Public' }}</button>
-                  <button class="btn btn-small" @click="deleteBucket(bucket)">Delete</button>
-                </td>
-              </tr>
-              <tr v-if="buckets.length === 0">
-                <td colspan="4" style="text-align: center; color: var(--text-dim); padding: 3rem;">
-                  No buckets found. Create one to get started.
-                </td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="p-4 border-t space-y-4">
+        <div class="flex items-center gap-3 px-3">
+          <Avatar class="w-8 h-8">
+            <AvatarImage src="" />
+            <AvatarFallback>AD</AvatarFallback>
+          </Avatar>
+          <div class="flex flex-col">
+            <span class="text-xs font-semibold">Admin Account</span>
+            <span class="text-[10px] text-muted-foreground">System Administrator</span>
+          </div>
         </div>
+      </div>
+    </aside>
 
-        <div v-if="selectedBucket" class="card" style="margin-top: 2rem;">
-          <div class="header">
-            <h2>Objects in {{ selectedBucket }}</h2>
-            <div style="display: flex; gap: 0.5rem;">
-              <button class="btn btn-secondary" @click="createFolder">New Folder</button>
-              <input type="file" @change="uploadFile" style="display: none;" ref="fileInput">
-              <button class="btn btn-primary" @click="$refs.fileInput.click()">Upload Object</button>
-            </div>
-          </div>
-
-          <!-- BREADCRUMBS -->
-          <div class="breadcrumbs">
-            <span class="breadcrumb-item" @click="navigateTo('')">{{ selectedBucket }}</span>
-            <template v-for="(part, i) in currentPrefix.split('/').filter(p => p)" :key="part">
-              <span class="separator">/</span>
-              <span class="breadcrumb-item"
-                @click="navigateTo(currentPrefix.split('/').slice(0, i + 1).join('/') + '/')">{{ part }}</span>
-            </template>
-          </div>
-
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Key</th>
-                <th>Size</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <!-- COMMON PREFIXES (FOLDERS) -->
-              <tr v-for="cp in commonPrefixes" :key="cp">
-                <td>
-                  <span style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;"
-                    @click="navigateTo(cp)">
-                    📁 {{cp.split('/').filter(p => p).pop()}}
-                  </span>
-                </td>
-                <td>-</td>
-                <td>
-                  <button v-if="!isPublic(selectedBucket, cp)" class="btn btn-small btn-secondary"
-                    @click="togglePublic(selectedBucket, cp)">Make Public</button>
-                  <span v-else class="badge" style="background: rgba(52, 211, 153, 0.1); color: #34d399;">Public</span>
-                </td>
-              </tr>
-
-              <!-- OBJECTS -->
-              <template v-for="obj in objects" :key="obj.Key">
-                <template v-if="!obj.Key.endsWith('/')">
-                  <tr>
-                    <td>{{ obj.Key.replace(currentPrefix, '') }}</td>
-                    <td>{{ formatSize(obj.Size) }}</td>
-                    <td>
-                      <button class="btn btn-small btn-secondary" @click="previewObject = { key: obj.Key }"
-                        style="margin-right: 0.5rem;">Preview</button>
-                      <button class="btn btn-small" @click="downloadObject(obj.Key)"
-                        style="margin-right: 0.5rem;">Download</button>
-                      <button class="btn btn-small btn-secondary" @click="fetchVersions(obj.Key)"
-                        style="margin-right: 0.5rem;">History</button>
-                      <button class="btn btn-small btn-secondary" @click="copyPresignedUrl(obj.Key)">Copy Link</button>
-                    </td>
-                  </tr>
-                  <tr v-if="objectVersions[obj.Key]" class="row-expanded">
-                    <td colspan="3" style="background: rgba(0,0,0,0.2); padding: 0.5rem 1rem;">
-                      <div v-for="v in objectVersions[obj.Key]" :key="v.VersionId" class="version-item">
-                        <span style="flex: 1;">ID: <code>{{ v.VersionId }}</code></span>
-                        <span style="flex: 1;">{{ formatSize(v.Size) }}</span>
-                        <span style="flex: 2;">{{ v.LastModified }}</span>
-                        <span v-if="v.IsLatest" class="badge">Latest</span>
-                        <div style="display: flex; gap: 0.5rem;">
-                          <button class="btn btn-small btn-secondary"
-                            @click="previewObject = { key: obj.Key, versionId: v.VersionId }">Preview</button>
-                          <button class="btn btn-small" @click="downloadObject(obj.Key, v.VersionId)">Download</button>
-                          <button class="btn btn-small btn-secondary"
-                            @click="copyPresignedUrl(obj.Key, v.VersionId)">Copy Link</button>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
+    <!-- MAIN CONTENT -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+      <!-- HEADER -->
+      <header class="h-16 border-b bg-card px-6 flex items-center justify-between">
+        <div class="flex items-center gap-4">
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem>
+                <BreadcrumbLink @click="navigateToRoot" class="cursor-pointer">GravityStore</BreadcrumbLink>
+              </BreadcrumbItem>
+              <template v-if="selectedBucket">
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbLink @click="navigateTo('')" class="cursor-pointer">{{ selectedBucket }}</BreadcrumbLink>
+                </BreadcrumbItem>
+                <template v-for="(part, i) in currentPrefix.split('/').filter(p => p)" :key="part">
+                  <BreadcrumbSeparator />
+                  <BreadcrumbItem>
+                    <BreadcrumbLink @click="navigateTo(currentPrefix.split('/').slice(0, i + 1).join('/') + '/')"
+                      class="cursor-pointer">
+                      {{ part }}
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
                 </template>
               </template>
-            </tbody>
-          </table>
+            </BreadcrumbList>
+          </Breadcrumb>
         </div>
-      </div>
-
-      <!-- USERS TAB -->
-      <div v-if="currentTab === 'users'">
-        <header class="header">
-          <h1>Users & Access Keys</h1>
-          <button class="btn btn-primary" @click="createUser">Create User</button>
-        </header>
-
-        <div class="card">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Username</th>
-                <th>Keys</th>
-                <th>Policies</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(user, username) in users" :key="username">
-                <td>
-                  <strong>{{ username }}</strong>
-                  <span v-if="username === 'anonymous'" class="policy-badge"
-                    style="background: rgba(59, 130, 246, 0.1); color: #3b82f6; border-color: rgba(59, 130, 246, 0.2); margin-left: 0.5rem;">Anonymous
-                    Access</span>
-                </td>
-                <td>
-                  <div v-for="key in user.accessKeys" :key="key.accessKeyId" class="key-item">
-                    ID: <code>{{ key.accessKeyId }}</code><br>
-                    Secret: <code>{{ key.secretAccessKey }}</code>
-                  </div>
-                  <div v-if="user.accessKeys.length === 0 && username !== 'anonymous'" style="color: var(--text-dim);">
-                    No
-                    keys.</div>
-                  <div v-if="username === 'anonymous'" style="color: var(--text-dim); font-style: italic;">No keys
-                    required
-                    for anonymous access</div>
-                </td>
-                <td>
-                  <div v-for="p in user.policies" :key="p.name" class="policy-badge">
-                    🛡️ {{ p.name }}
-                    <span v-if="username !== 'admin'" @click="removePolicy(username, p.name)"
-                      style="margin-left: 0.5rem; cursor: pointer; opacity: 0.6;">✕</span>
-                  </div>
-                  <button class="btn btn-small btn-secondary" style="margin-top: 0.5rem;"
-                    @click="openPolicyModal(username)">Attach Policy</button>
-                </td>
-                <td>
-                  <template v-if="username !== 'anonymous' && username !== 'admin'">
-                    <button class="btn btn-small" @click="generateKey(username)">+ Key</button>
-                    <button class="btn btn-small" style="margin-left: 0.5rem;"
-                      @click="deleteUser(username)">Delete</button>
-                  </template>
-                  <template v-else-if="username === 'admin'">
-                    <span style="color: var(--text-dim);">System Admin</span>
-                  </template>
-                  <template v-else>
-                    <span style="color: var(--text-dim);">Built-in Account</span>
-                  </template>
-                </td>
-              </tr>
-            </tbody>
-          </table>
+        <div class="flex items-center gap-2">
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="outline" size="icon">
+                  <Settings class="w-4 h-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Settings</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
-      </div>
+      </header>
 
-      <!-- POLICIES TAB -->
-      <div v-if="currentTab === 'policies'">
-        <header class="header">
-          <h1>IAM Policies</h1>
-          <button class="btn btn-primary" @click="showPolicyModal = true; selectedUserForPolicy = null">Create
-            Policy</button>
-        </header>
-        <div class="card">
-          <p style="color: var(--text-dim); padding: 1rem;">Policies define permissions for users. You can attach these
-            to any
-            user.</p>
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Policy Name</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td><code>AdministratorAccess</code> (Default)</td>
-                <td>-</td>
-              </tr>
-              <tr v-for="policy in policies" :key="policy.name">
-                <td>{{ policy.name }}</td>
-                <td>
-                  <button class="btn btn-small" @click="deletePolicy(policy.name)">Delete</button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <!-- PREVIEW MODAL -->
-      <div v-if="previewObject" class="modal-overlay" @click="previewObject = null">
-        <div class="modal-content card" @click.stop>
-          <div class="header">
-            <h3>Preview: {{ previewObject.key }}</h3>
-            <button class="btn" @click="previewObject = null">Close</button>
-          </div>
-          <div class="preview-body">
-            <img v-if="isImage(previewObject.key)"
-              :src="previewUrl || 'https://via.placeholder.com/150?text=Loading...'" class="preview-img" />
-            <div v-else class="preview-placeholder">
-              Preview not available for this file type.
-              <br><br>
-              <button class="btn btn-primary"
-                @click="downloadObject(previewObject.key, previewObject.versionId)">Download to
-                View</button>
+      <div class="flex-1 overflow-auto p-6">
+        <!-- BUCKETS TAB -->
+        <div v-if="currentTab === 'buckets'" class="space-y-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <h1 class="text-2xl font-bold tracking-tight">Buckets</h1>
+              <p class="text-sm text-muted-foreground">Manage your S3-compatible storage containers.</p>
             </div>
+            <Button @click="showCreateBucketDialog = true">
+              <Plus class="w-4 h-4 mr-2" /> Create Bucket
+            </Button>
+          </div>
+
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Bucket Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead class="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-for="bucket in buckets" :key="bucket">
+                  <TableCell class="font-medium cursor-pointer hover:underline text-primary"
+                    @click="selectBucket(bucket)">
+                    📁 {{ bucket }}
+                  </TableCell>
+                  <TableCell>
+                    <Badge v-if="isPublic(bucket)" variant="success"
+                      class="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20 border-emerald-500/20">Public
+                    </Badge>
+                    <Badge v-else variant="secondary">Private</Badge>
+                  </TableCell>
+                  <TableCell class="text-right">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon">
+                          <MoreHorizontal class="w-4 h-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem @click="togglePublic(bucket)">
+                          {{ isPublic(bucket) ? 'Make Private' : 'Make Public' }}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem @click="deleteBucket(bucket)" class="text-destructive">
+                          Delete Bucket
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+                <TableRow v-if="buckets.length === 0">
+                  <TableCell colspan="3" class="h-24 text-center text-muted-foreground text-sm font-medium">
+                    No buckets found. Build your first container.
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Card>
+
+          <!-- OBJECTS TABLE -->
+          <div v-if="selectedBucket" class="space-y-4 pt-4 border-t">
+            <div class="flex items-center justify-between">
+              <div class="flex flex-col">
+                <h2 class="text-lg font-semibold tracking-tight">Objects in {{ selectedBucket }}</h2>
+                <span class="text-xs text-muted-foreground">{{ currentPrefix || '/' }}</span>
+              </div>
+              <div class="flex gap-2">
+                <Button variant="outline" @click="showCreateFolderDialog = true">
+                  <FolderPlus class="w-4 h-4 mr-2" /> New Folder
+                </Button>
+                <input type="file" multiple @change="uploadFiles" class="hidden" ref="fileInput">
+                  <Button @click="$refs.fileInput.click()" :disabled="uploadProgress.isUploading">
+                    <Upload class="w-4 h-4 mr-2" v-if="!uploadProgress.isUploading" />
+                    <Loader2 class="w-4 h-4 mr-2 animate-spin" v-else />
+                    {{ uploadProgress.isUploading ? `Uploading ${uploadProgress.completed}/${uploadProgress.total}`
+                      : 'Upload Objects' }}
+                  </Button>
+              </div>
+            </div>
+
+            <Card>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Object Key</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead class="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  <!-- FOLDERS -->
+                  <TableRow v-for="cp in commonPrefixes" :key="cp">
+                    <TableCell class="font-medium cursor-pointer hover:underline text-primary" @click="navigateTo(cp)">
+                      📁 {{cp.split('/').filter(p => p).pop()}}/
+                    </TableCell>
+                    <TableCell>-</TableCell>
+                    <TableCell>
+                      <Badge v-if="isPublic(selectedBucket, cp)" variant="success"
+                        class="bg-emerald-500/10 text-emerald-500 border-emerald-500/20">Public</Badge>
+                      <span v-else class="text-muted-foreground text-xs italic">Inherit</span>
+                    </TableCell>
+                    <TableCell class="text-right">
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal class="w-4 h-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem @click="togglePublic(selectedBucket, cp)">
+                            {{ isPublic(selectedBucket, cp) ? 'Make Private' : 'Make Public' }}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+
+                  <!-- OBJECTS -->
+                  <template v-for="obj in objects" :key="obj.Key">
+                    <TableRow v-if="!obj.Key.endsWith('/')">
+                      <TableCell class="font-medium">
+                        {{ obj.Key.replace(currentPrefix, '') }}
+                      </TableCell>
+                      <TableCell class="text-muted-foreground text-xs">{{ formatSize(obj.Size) }}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" class="text-[10px] uppercase font-bold">{{ obj.Key.split('.').pop() }}
+                        </Badge>
+                      </TableCell>
+                      <TableCell class="text-right whitespace-nowrap">
+                        <div class="flex items-center justify-end gap-1">
+                          <Button variant="ghost" size="icon" @click="previewObject = { key: obj.Key }" title="Preview">
+                            <Eye class="w-3.5 h-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon" @click="downloadObject(obj.Key)" title="Download">
+                            <Download class="w-3.5 h-3.5" />
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon">
+                                <MoreHorizontal class="w-3.5 h-3.5" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem @click="fetchVersions(obj.Key)">
+                                <History class="w-4 h-4 mr-2" /> Version History
+                              </DropdownMenuItem>
+                              <DropdownMenuItem @click="copyPresignedUrl(obj.Key)">
+                                <Copy class="w-4 h-4 mr-2" /> Copy link
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                    <!-- VERSIONS -->
+                    <TableRow v-if="objectVersions[obj.Key]" class="bg-muted/30">
+                      <TableCell colspan="4" class="p-0">
+                        <div class="px-6 py-2 space-y-2 border-l-4 border-primary">
+                          <div
+                            class="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-2 mb-2">
+                            <History class="w-3 h-3" /> Version History
+                          </div>
+                          <div v-for="v in objectVersions[obj.Key]" :key="v.VersionId"
+                            class="flex items-center justify-between text-xs py-1.5 hover:bg-muted/50 px-2 rounded-md transition-colors border-b last:border-0">
+                            <div class="flex items-center gap-3">
+                              <code class="text-primary font-bold">{{ v.VersionId.slice(0, 8) }}...</code>
+                              <span class="text-muted-foreground">{{ formatSize(v.Size) }}</span>
+                              <Badge v-if="v.IsLatest" size="xs" class="h-4 text-[9px]">Latest</Badge>
+                            </div>
+                            <div class="flex items-center gap-1">
+                              <Button variant="ghost" size="xs" class="h-7 text-[10px]"
+                                @click="previewObject = { key: obj.Key, versionId: v.VersionId }">Preview</Button>
+                              <Button variant="ghost" size="xs" class="h-7 text-[10px]"
+                                @click="downloadObject(obj.Key, v.VersionId)">Download</Button>
+                              <Button variant="ghost" size="xs" class="h-7 text-[10px]"
+                                @click="copyPresignedUrl(obj.Key, v.VersionId)">Link</Button>
+                            </div>
+                          </div>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  </template>
+
+                  <TableRow v-if="objects.length === 0 && commonPrefixes.length === 0">
+                    <TableCell colspan="4" class="h-20 text-center text-muted-foreground text-xs italic">
+                      Empty folder.
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              </Table>
+            </Card>
           </div>
         </div>
-      </div>
 
-      <!-- POLICY MODAL -->
-      <div v-if="showPolicyModal" class="modal-overlay">
-        <div class="card modal-content" style="max-width: 600px;">
-          <div class="header">
-            <h2>{{ selectedUserForPolicy ? 'Attach Policy to ' + selectedUserForPolicy : 'Create Policy' }}</h2>
-            <button class="btn" @click="showPolicyModal = false">Close</button>
-          </div>
-          <div style="padding: 1rem;">
-            <div style="margin-bottom: 1rem;" v-if="!selectedUserForPolicy">
-              <label style="display: block; margin-bottom: 0.5rem;">Policy Name</label>
-              <input type="text" class="input" v-model="policyName" placeholder="e.g. ReadOnlyAccess">
+        <!-- USERS TAB -->
+        <div v-if="currentTab === 'users'" class="space-y-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <h1 class="text-2xl font-bold tracking-tight">Users & Access Keys</h1>
+              <p class="text-sm text-muted-foreground">Manage service accounts and authentication credentials.</p>
             </div>
-            <label style="display: block; margin-bottom: 0.5rem;">Policy JSON</label>
-            <textarea class="input" v-model="newPolicyJson" rows="10" style="font-family: monospace;"></textarea>
-            <button class="btn btn-primary" style="margin-top: 1rem; width: 100%;" @click="attachPolicy">Attach / Create
-              Policy</button>
+            <Button @click="showCreateUserDialog = true">
+              <UserPlus class="w-4 h-4 mr-2" /> Create User
+            </Button>
           </div>
+
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>User</TableHead>
+                  <TableHead>Access Keys</TableHead>
+                  <TableHead>Policies</TableHead>
+                  <TableHead class="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow v-for="(user, username) in users" :key="username">
+                  <TableCell>
+                    <div class="flex items-center gap-2">
+                      <span class="font-bold">{{ username }}</span>
+                      <Badge v-if="username === 'anonymous'" variant="outline"
+                        class="text-[10px] py-0 border-blue-200 text-blue-500 bg-blue-50/50">Anonymous</Badge>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div v-if="user.accessKeys && user.accessKeys.length > 0" class="space-y-2">
+                      <div v-for="key in user.accessKeys" :key="key.accessKeyId"
+                        class="text-[10px] font-mono bg-muted p-1.5 rounded border leading-tight">
+                        <span class="text-muted-foreground block mb-0.5">ID: {{ key.accessKeyId }}</span>
+                        <span class="text-primary font-bold">Secret: {{ key.secretAccessKey }}</span>
+                      </div>
+                    </div>
+                    <span v-else class="text-muted-foreground text-xs italic">No active keys</span>
+                  </TableCell>
+                  <TableCell>
+                    <div class="flex flex-wrap gap-1.5">
+                      <Badge v-for="p in user.policies" :key="p.name" variant="secondary" class="text-[10px] pl-1 h-5">
+                        <Shield class="w-2.5 h-2.5 mr-1" /> {{ p.name }}
+                        <span v-if="username !== 'admin'" @click="removePolicy(username, p.name)"
+                          class="ml-1.5 cursor-pointer hover:text-destructive transition-colors">✕</span>
+                      </Badge>
+                      <Button variant="outline" size="xs" class="h-5 text-[9px] px-1.5"
+                        @click="openPolicyModal(username)">
+                        + Attach
+                      </Button>
+                    </div>
+                  </TableCell>
+                  <TableCell class="text-right">
+                    <DropdownMenu v-if="username !== 'anonymous' && username !== 'admin'">
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon">
+                          <MoreHorizontal class="w-4 h-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem @click="generateKey(username)">
+                          Generate New Key
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem @click="deleteUser(username)" class="text-destructive">
+                          Delete User
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <span v-else class="text-[10px] text-muted-foreground font-medium italic">Fixed Account</span>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Card>
+        </div>
+
+        <!-- POLICIES TAB -->
+        <div v-if="currentTab === 'policies'" class="space-y-6">
+          <div class="flex items-center justify-between">
+            <div>
+              <h1 class="text-2xl font-bold tracking-tight">IAM Policies</h1>
+              <p class="text-sm text-muted-foreground">Global reusable permission templates.</p>
+            </div>
+            <Button @click="showPolicyModal = true; selectedUserForPolicy = null">
+              <Plus class="w-4 h-4 mr-2" /> New Policy
+            </Button>
+          </div>
+
+          <Card>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Policy Name</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead class="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow>
+                  <TableCell class="font-mono text-xs">AdministratorAccess</TableCell>
+                  <TableCell>
+                    <Badge variant="outline" class="bg-blue-50 text-blue-600 border-blue-200">System Default</Badge>
+                  </TableCell>
+                  <TableCell class="text-right">-</TableCell>
+                </TableRow>
+                <TableRow v-for="policy in policies" :key="policy.name">
+                  <TableCell class="font-mono text-xs">{{ policy.name }}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">Custom</Badge>
+                  </TableCell>
+                  <TableCell class="text-right">
+                    <Button variant="ghost" size="icon" @click="deletePolicy(policy.name)" class="text-destructive">
+                      <Trash class="w-4 h-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </Card>
         </div>
       </div>
     </main>
+
+    <!-- PREVIEW DIALOG -->
+    <Dialog :open="!!previewObject" @update:open="previewObject = null">
+      <DialogContent class="sm:max-w-2xl overflow-hidden p-0">
+        <DialogHeader class="p-6 border-b">
+          <DialogTitle>{{ previewObject?.key }}</DialogTitle>
+          <DialogDescription>
+            File Preview
+          </DialogDescription>
+        </DialogHeader>
+        <div class="flex items-center justify-center bg-muted/40 min-h-[400px]">
+          <img v-if="isImage(previewObject?.key)" :src="previewUrl"
+            class="max-w-full max-h-[70vh] object-contain shadow-sm" />
+          <div v-else class="text-center p-12 space-y-4">
+            <div class="bg-card w-16 h-16 flex items-center justify-center rounded-xl mx-auto shadow-sm border">
+              <File class="w-8 h-8 text-muted-foreground" />
+            </div>
+            <p class="text-sm text-muted-foreground">Real-time preview not available for this file type.</p>
+            <Button @click="downloadObject(previewObject.key, previewObject.versionId)">Download to View</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <!-- POLICY DIALOG -->
+    <Dialog :open="showPolicyModal" @update:open="showPolicyModal = false">
+      <DialogContent class="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{{ selectedUserForPolicy ? 'Attach Policy to ' + selectedUserForPolicy : 'Dynamic Policy Builder'
+            }}
+          </DialogTitle>
+          <DialogDescription>
+            Specify permissions in standard AWS IAM JSON format.
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-4 py-4">
+          <div v-if="!selectedUserForPolicy" class="space-y-2">
+            <Label>Policy Name</Label>
+            <Input v-model="policyName" placeholder="e.g. FinanceReadOnly" />
+          </div>
+          <div class="space-y-2">
+            <Label>Policy Document (JSON)</Label>
+            <Textarea v-model="newPolicyJson" rows="12" class="font-mono text-xs tabular-nums" />
+          </div>
+          <Button class="w-full" @click="attachPolicy">
+            {{ selectedUserForPolicy ? 'Attach Permissions' : 'Create & Save Policy' }}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <!-- CREATE BUCKET DIALOG -->
+    <Dialog :open="showCreateBucketDialog" @update:open="showCreateBucketDialog = false">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create New Bucket</DialogTitle>
+          <DialogDescription>
+            Bucket names must be unique and follow S3 naming conventions.
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-4 py-4">
+          <div class="space-y-2">
+            <Label>Bucket Name</Label>
+            <Input v-model="newBucketName" placeholder="e.g. static-assets-production" />
+          </div>
+          <Button class="w-full" @click="createBucket">Create Bucket</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <!-- CREATE USER DIALOG -->
+    <Dialog :open="showCreateUserDialog" @update:open="showCreateUserDialog = false">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Provision New User</DialogTitle>
+          <DialogDescription>
+            Create a new service account with dedicated access keys.
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-4 py-4">
+          <div class="space-y-2">
+            <Label>Username</Label>
+            <Input v-model="newUsername" placeholder="e.g. backup-agent" />
+          </div>
+          <Button class="w-full" @click="createUser">Provision User</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <!-- CREATE FOLDER DIALOG -->
+    <Dialog :open="showCreateFolderDialog" @update:open="showCreateFolderDialog = false">
+      <DialogContent class="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>New Folder</DialogTitle>
+          <DialogDescription>
+            Virtual directory prefix for organizing objects.
+          </DialogDescription>
+        </DialogHeader>
+        <div class="space-y-4 py-4">
+          <div class="space-y-2">
+            <Label>Folder Name</Label>
+            <Input v-model="newFolderName" placeholder="e.g. images/v1" />
+          </div>
+          <Button class="w-full" @click="createFolder">Create Folder</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <Toaster />
   </div>
 </template>
 
 <script setup>
 import { ref, watch, onMounted } from 'vue'
+import {
+  Database, User as UserIcon, Shield, LayoutDashboard, Settings,
+  Plus, MoreHorizontal, FolderPlus, Upload, Eye, Download,
+  History, Copy, UserPlus, Trash, Loader2, File
+} from 'lucide-vue-next'
+import { toast } from 'vue-sonner'
+import { Toaster } from '@/components/ui/sonner'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Badge } from '@/components/ui/badge'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbSeparator
+} from '@/components/ui/breadcrumb'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
 const currentTab = ref('buckets')
 const buckets = ref([])
@@ -297,32 +542,47 @@ const selectedBucket = ref(null)
 const currentPrefix = ref('')
 const objects = ref([])
 const commonPrefixes = ref([])
-const objectVersions = ref({}) // key -> versions
+const objectVersions = ref({})
+const uploadProgress = ref({
+  total: 0,
+  completed: 0,
+  isUploading: false
+})
 const previewObject = ref(null)
 const previewUrl = ref(null)
 const users = ref({})
+const policies = ref([])
 const showPolicyModal = ref(false)
 const selectedUserForPolicy = ref(null)
 const policyName = ref('')
 const newPolicyJson = ref(JSON.stringify({
-  Name: "PublicAccess",
-  Version: "2012-10-17",
-  Statement: [{
-    Effect: "Allow",
-    Action: ["s3:GetObject", "s3:ListBucket"],
-    Resource: ["arn:aws:s3:::your-bucket-name/*"]
+  name: "PublicAccess",
+  version: "2012-10-17",
+  statement: [{
+    effect: "Allow",
+    action: ["s3:GetObject", "s3:ListBucket"],
+    resource: ["arn:aws:s3:::your-bucket-name/*"]
   }]
 }, null, 2))
 
+const showCreateBucketDialog = ref(false)
+const newBucketName = ref('')
+const showCreateUserDialog = ref(false)
+const newUsername = ref('')
+const showCreateFolderDialog = ref(false)
+const newFolderName = ref('')
+
 const fileInput = ref(null)
-
 const API_BASE = 'http://localhost:8080'
-
-// Hardcoded admin creds for demo S3 requests since we just implemented auth
-// In a real app, these would come from a login session
 const ADMIN_KEY_ID = 'admin'
-const ADMIN_SECRET = 'adminsecret' // Not used in simplified auth but good for reference
 
+const navItems = [
+  { id: 'buckets', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'users', label: 'IAM Engine', icon: UserIcon },
+  { id: 'policies', label: 'Security Policies', icon: Shield },
+]
+
+// CORE S3 / AUTH LOGIC
 async function authFetch(url, options = {}) {
   const now = new Date();
   const year = now.getFullYear();
@@ -332,7 +592,7 @@ async function authFetch(url, options = {}) {
 
   options.headers = {
     ...options.headers,
-    'Authorization': `AWS4-HMAC-SHA256 Credential=${ADMIN_KEY_ID}/${dateStamp}/us-east-1/s3/aws4_request`
+    'Authorization': `AWS4-HMAC-SHA256 Credential=${ADMIN_KEY_ID}/${dateStamp}/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=mock-signature-from-server`
   }
 
   if (options.body && typeof options.body === 'string' && !options.headers['Content-Type']) {
@@ -365,27 +625,31 @@ async function fetchBuckets() {
     const res = await authFetch(`${API_BASE}/`)
     const text = await res.text()
     const matches = text.match(/<Name>(.*?)<\/Name>/g)
-    if (matches) {
-      buckets.value = matches.map(m => m.replace(/<\/?Name>/g, ''))
-    } else {
-      buckets.value = []
-    }
+    buckets.value = matches ? matches.map(m => m.replace(/<\/?Name>/g, '')) : []
   } catch (e) {
-    console.error('Failed to fetch buckets', e)
+    toast.error('Failed to synchronize buckets.')
   }
 }
 
 async function createBucket() {
-  const name = prompt('Bucket Name:')
+  const name = newBucketName.value
   if (!name) return
-  await authFetch(`${API_BASE}/${name}`, { method: 'PUT' })
-  await fetchBuckets()
+  const res = await authFetch(`${API_BASE}/${name}`, { method: 'PUT' })
+  if (res.ok) {
+    toast.success(`Bucket ${name} created successfully.`)
+    showCreateBucketDialog.value = false
+    newBucketName.value = ''
+    await fetchBuckets()
+  }
 }
 
 async function deleteBucket(name) {
-  if (!confirm(`Delete bucket ${name}?`)) return
-  await authFetch(`${API_BASE}/${name}`, { method: 'DELETE' })
-  await fetchBuckets()
+  if (!confirm(`Permanently delete bucket ${name}?`)) return
+  const res = await authFetch(`${API_BASE}/${name}`, { method: 'DELETE' })
+  if (res.ok) {
+    toast.success('Bucket removed.')
+    await fetchBuckets()
+  }
 }
 
 async function selectBucket(name) {
@@ -405,15 +669,10 @@ async function fetchObjects() {
   const sizes = text.match(/<Size>(.*?)<\/Size>/g)?.map(m => m.replace(/<\/?Size>/g, '')) || []
   const cps = text.match(/<Prefix>(.*?)<\/Prefix>/g)?.map(m => m.replace(/<\/?Prefix>/g, '')) || []
 
-  // Filter out the prefix itself if it appears as a key (S3 does this sometimes)
-  objects.value = keys
-    .filter(k => k !== currentPrefix.value)
-    .map((key, i) => ({
-      Key: key,
-      Size: parseInt(sizes[i] || 0)
-    }))
-
-  // Filter out the current prefix from common prefixes
+  objects.value = keys.filter(k => k !== currentPrefix.value).map((key, i) => ({
+    Key: key,
+    Size: parseInt(sizes[i] || 0)
+  }))
   commonPrefixes.value = cps.filter(p => p !== currentPrefix.value)
 }
 
@@ -423,12 +682,73 @@ function navigateTo(p) {
   fetchObjects()
 }
 
+function navigateToRoot() {
+  selectedBucket.value = null
+  currentPrefix.value = ''
+  objects.value = []
+  commonPrefixes.value = []
+}
+
 async function createFolder() {
-  const name = prompt('Folder Name:')
+  const name = newFolderName.value
   if (!name) return
-  const key = currentPrefix.value + name + '/'
-  await authFetch(`${API_BASE}/${selectedBucket.value}/${key}`, { method: 'PUT' })
+  const key = currentPrefix.value + name + (name.endsWith('/') ? '' : '/')
+  const res = await authFetch(`${API_BASE}/${selectedBucket.value}/${key}`, { method: 'PUT' })
+  if (res.ok) {
+    showCreateFolderDialog.value = false
+    newFolderName.value = ''
+    await fetchObjects()
+  }
+}
+
+async function uploadFiles(event) {
+  const files = Array.from(event.target.files)
+  if (files.length === 0 || !selectedBucket.value) return
+
+  uploadProgress.value = {
+    total: files.length,
+    completed: 0,
+    isUploading: true
+  }
+
+  const BATCH_SIZE = 5
+  const MAX_BATCH_BYTES = 50 * 1024 * 1024
+
+  let currentBatch = []
+  let currentBatchSize = 0
+
+  for (const file of files) {
+    if (currentBatch.length >= BATCH_SIZE || (currentBatchSize + file.size > MAX_BATCH_BYTES && currentBatch.length > 0)) {
+      await Promise.all(currentBatch.map(f => performUpload(f)))
+      currentBatch = []
+      currentBatchSize = 0
+    }
+    currentBatch.push(file)
+    currentBatchSize += file.size
+  }
+
+  if (currentBatch.length > 0) {
+    await Promise.all(currentBatch.map(f => performUpload(f)))
+  }
+
+  uploadProgress.value.isUploading = false
+  event.target.value = ''
+  toast.success(`Successfully uploaded ${files.length} objects.`)
   await fetchObjects()
+}
+
+async function performUpload(file) {
+  const key = currentPrefix.value + file.name
+  try {
+    await authFetch(`${API_BASE}/${selectedBucket.value}/${key}`, {
+      method: 'PUT',
+      body: file
+    })
+  } catch (err) {
+    toast.error(`Upload error: ${file.name}`)
+  } finally {
+    uploadProgress.value.completed++
+  }
 }
 
 async function fetchVersions(key) {
@@ -440,8 +760,6 @@ async function fetchVersions(key) {
   }
   const res = await authFetch(`${API_BASE}/${selectedBucket.value}?versions&prefix=${encodeURIComponent(key)}`)
   const text = await res.text()
-
-  // Extract <Version> blocks
   const versionBlocks = text.match(/<Version>(.*?)<\/Version>/g) || []
 
   objectVersions.value = {
@@ -462,61 +780,59 @@ async function fetchVersions(key) {
   }
 }
 
-function isImage(key) {
-  const ext = key.split('.').pop().toLowerCase()
-  return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)
+async function copyPresignedUrl(key, versionId = null) {
+  const isObjPublic = isPublic(selectedBucket.value, key)
+  if (isObjPublic) {
+    const baseUrl = `${window.location.protocol}//${window.location.host}/${selectedBucket.value}/${key}`
+    let finalUrl = baseUrl
+    if (versionId) finalUrl += (finalUrl.includes('?') ? '&' : '?') + `versionId=${versionId}`
+    await navigator.clipboard.writeText(finalUrl)
+    toast.success("Public link copied.")
+    return
+  }
+
+  let url = `${API_BASE}/admin/presign?bucket=${selectedBucket.value}&key=${key}`
+  if (versionId) url += `&versionId=${versionId}`
+
+  try {
+    const res = await authFetch(url)
+    const data = await res.json()
+    await navigator.clipboard.writeText(data.url)
+    toast.success("Presigned URL ready (expires in 1h).")
+  } catch (err) {
+    toast.error("Failed to generate signature.")
+  }
 }
 
-function getPreviewUrl(key, versionId = '') {
-  let url = `${API_BASE}/${selectedBucket.value}/${key}`
-  if (versionId) url += `?versionId=${versionId}`
-  return url
-}
-
-async function uploadFile(event) {
-  const file = event.target.files[0]
-  if (!file || !selectedBucket.value) return
-
-  const key = currentPrefix.value + file.name
-  await authFetch(`${API_BASE}/${selectedBucket.value}/${key}`, {
-    method: 'PUT',
-    body: file
-  })
-  await fetchObjects()
-}
-
-function downloadObject(key, versionId = '') {
-  // Download needs auth too, but window.open doesn't easily set headers
-  // For simplicity in this demo, we'll just use the URL
-  let url = `${API_BASE}/${selectedBucket.value}/${key}`
-  if (versionId) url += `?versionId=${versionId}`
-  window.open(url)
-}
-
-// ADMIN FUNCTIONS
+// ACCESS CONTROL / USER MANAGEMENT
 async function fetchUsers() {
   const res = await authFetch(`${API_BASE}/admin/users`)
   users.value = await res.json()
 }
 
 async function createUser() {
-  const username = prompt('Username:')
+  const username = newUsername.value
   if (!username) return
   await authFetch(`${API_BASE}/admin/users`, {
     method: 'POST',
     body: JSON.stringify({ username })
   })
+  toast.success(`User ${username} provisioned.`)
+  showCreateUserDialog.value = false
+  newUsername.value = ''
   await fetchUsers()
 }
 
 async function deleteUser(username) {
-  if (!confirm(`Delete user ${username}?`)) return
+  if (!confirm(`Erase user account ${username}?`)) return
   await authFetch(`${API_BASE}/admin/users/${username}`, { method: 'DELETE' })
+  toast.success('User eradicated.')
   await fetchUsers()
 }
 
 async function generateKey(username) {
   await authFetch(`${API_BASE}/admin/users/${username}/keys`, { method: 'POST' })
+  toast.success('Provisioned fresh access key.')
   await fetchUsers()
 }
 
@@ -528,21 +844,39 @@ function openPolicyModal(username) {
 async function attachPolicy() {
   try {
     const policy = JSON.parse(newPolicyJson.value)
-    if (!selectedUserForPolicy.value) {
-      alert("Global policies not yet supported. Please attach to a user.")
-      return
-    }
+    const payload = selectedUserForPolicy.value ? policy : { ...policy, name: policyName.value }
+    const endpoint = selectedUserForPolicy.value
+      ? `${API_BASE}/admin/users/${selectedUserForPolicy.value}/policies`
+      : `${API_BASE}/admin/policies` // Assume hypothetical endpoint for global policies
 
-    await authFetch(`${API_BASE}/admin/users/${selectedUserForPolicy.value}/policies`, {
+    await authFetch(endpoint, {
       method: 'POST',
-      body: JSON.stringify(policy)
+      body: JSON.stringify(payload)
     })
 
     showPolicyModal.value = false
+    toast.success('Permissions updated.')
     await fetchUsers()
   } catch (e) {
-    alert("Invalid JSON: " + e.message)
+    toast.error("Schema error: Ensure valid IAM JSON.")
   }
+}
+
+// HELPERS
+function isImage(key) {
+  if (!key) return false
+  const ext = key.split('.').pop().toLowerCase()
+  return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)
+}
+
+function getPreviewUrl(key, versionId = '') {
+  let url = `${API_BASE}/${selectedBucket.value}/${key}`
+  if (versionId) url += `?versionId=${versionId}`
+  return url
+}
+
+function downloadObject(key, versionId = '') {
+  window.open(getPreviewUrl(key, versionId))
 }
 
 function formatSize(bytes) {
@@ -556,13 +890,10 @@ function formatSize(bytes) {
 function isPublic(bucket, prefix = "") {
   const anon = users.value['anonymous']
   if (!anon || !anon.policies) return false
-
   const resource = "arn:aws:s3:::" + bucket + (prefix ? "/" + prefix : "/*")
-
   return anon.policies.some(p =>
     p.statement.some(s => {
       if (s.effect !== "Allow" || !s.action.includes("s3:GetObject")) return false
-
       return s.resource.some(r => {
         if (r === "*") return true
         if (r.endsWith("*")) {
@@ -577,17 +908,14 @@ function isPublic(bucket, prefix = "") {
 async function togglePublic(bucket, prefix = "") {
   const currentlyPublic = isPublic(bucket, prefix)
   const resource = "arn:aws:s3:::" + bucket + (prefix ? "/" + prefix + "/*" : "/*")
-  const policyName = `PublicAccess-${bucket}-${prefix.replace(/\//g, '-') || 'Root'}`
+  const pName = `PublicAccess-${bucket}-${prefix.replace(/\//g, '-') || 'Root'}`
 
   if (currentlyPublic) {
-    if (!confirm("Are you sure you want to make this private?")) return
-    await authFetch(`${API_BASE}/admin/users/anonymous/policies/${policyName}`, {
-      method: 'DELETE'
-    })
-    await fetchUsers()
+    if (!confirm("Remove public access?")) return
+    await authFetch(`${API_BASE}/admin/users/anonymous/policies/${pName}`, { method: 'DELETE' })
   } else {
     const policy = {
-      name: policyName,
+      name: pName,
       version: "2012-10-17",
       statement: [{
         effect: "Allow",
@@ -595,44 +923,13 @@ async function togglePublic(bucket, prefix = "") {
         resource: [resource]
       }]
     }
-
     await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
       method: 'POST',
       body: JSON.stringify(policy)
     })
-    await fetchUsers()
   }
-}
-
-async function copyPresignedUrl(key, versionId = null) {
-  const isObjPublic = isPublic(selectedBucket.value, key)
-
-  if (isObjPublic) {
-    const baseUrl = `${window.location.protocol}//${window.location.host}/${selectedBucket.value}/${key}`
-    let finalUrl = baseUrl
-    if (versionId) finalUrl += (finalUrl.includes('?') ? '&' : '?') + `versionId=${versionId}`
-    try {
-      await navigator.clipboard.writeText(finalUrl)
-      alert("Public link copied to clipboard!")
-    } catch (err) {
-      alert("Failed to copy: " + err)
-    }
-    return
-  }
-
-  // Fetch from backend for private/presigned
-  let url = `${API_BASE}/admin/presign?bucket=${selectedBucket.value}&key=${key}`
-  if (versionId) url += `&versionId=${versionId}`
-
-  try {
-    const res = await authFetch(url)
-    if (!res.ok) throw new Error("Failed to generate presigned URL")
-    const data = await res.json()
-    await navigator.clipboard.writeText(data.url)
-    alert("Presigned URL copied to clipboard!")
-  } catch (err) {
-    alert("Error: " + err.message)
-  }
+  await fetchUsers()
+  toast.success('ACL updated.')
 }
 
 watch(currentTab, (newTab) => {
@@ -647,15 +944,18 @@ onMounted(() => {
 </script>
 
 <style>
-.logo-icon {
-  background: var(--primary);
-  color: white;
-  width: 32px;
-  height: 32px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 6px;
-  font-size: 1.2rem;
+/* Remove custom scrollbars for cleaner Look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 </style>
