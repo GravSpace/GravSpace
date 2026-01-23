@@ -42,6 +42,32 @@ func (h *AdminHandler) DeleteBucket(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+func (h *AdminHandler) GetBucketInfo(c echo.Context) error {
+	bucket := c.Param("bucket")
+	info, err := h.Storage.GetBucketInfo(bucket)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if info == nil {
+		return c.String(http.StatusNotFound, "Bucket not found")
+	}
+	return c.JSON(http.StatusOK, info)
+}
+
+func (h *AdminHandler) SetBucketVersioning(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+	if err := h.Storage.SetBucketVersioning(bucket, req.Enabled); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
 func (h *AdminHandler) ListObjects(c echo.Context) error {
 	bucket := c.Param("bucket")
 	prefix := c.QueryParam("prefix")
@@ -81,7 +107,8 @@ func (h *AdminHandler) GetObject(c echo.Context) error {
 
 	reader, vid, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
-		return c.NoContent(http.StatusNotFound)
+		fmt.Printf("DEBUG: GetObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
+		return c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
 	}
 	defer reader.Close()
 
@@ -108,6 +135,29 @@ func (h *AdminHandler) PutObject(c echo.Context) error {
 	}
 	c.Response().Header().Set("x-amz-version-id", vid)
 	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) DownloadObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	reader, vid, err := h.Storage.GetObject(bucket, key, versionID)
+	if err != nil {
+		fmt.Printf("DEBUG: DownloadObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
+		return c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
+	}
+	defer reader.Close()
+
+	contentType := mime.TypeByExtension(filepath.Ext(key))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	c.Response().Header().Set("x-amz-version-id", vid)
+	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
+
+	return c.Stream(http.StatusOK, contentType, reader)
 }
 
 func (h *AdminHandler) DeleteObject(c echo.Context) error {

@@ -75,6 +75,8 @@ type Storage interface {
 	BucketExists(name string) (bool, error)
 	ListBuckets() ([]string, error)
 	DeleteBucket(name string) error
+	GetBucketInfo(name string) (*database.BucketRow, error)
+	SetBucketVersioning(name string, enabled bool) error
 	PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error)
 	GetObject(bucket, key, versionID string) (io.ReadCloser, string, error)
 	StatObject(bucket, key, versionID string) (*Object, error)
@@ -169,6 +171,20 @@ func (s *FileStorage) BucketExists(name string) (bool, error) {
 	return false, err
 }
 
+func (s *FileStorage) GetBucketInfo(name string) (*database.BucketRow, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+	return s.DB.GetBucket(name)
+}
+
+func (s *FileStorage) SetBucketVersioning(name string, enabled bool) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.SetBucketVersioning(name, enabled)
+}
+
 func (s *FileStorage) ListBuckets() ([]string, error) {
 	// Try cache first
 	if cached, ok := s.Cache.Get(cache.BucketListKey()); ok {
@@ -226,18 +242,45 @@ func (s *FileStorage) DeleteBucket(name string) error {
 }
 
 func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error) {
-	objectDir := filepath.Join(s.Root, bucket, key)
-	if err := os.MkdirAll(objectDir, 0755); err != nil {
-		return "", err
-	}
-
 	// If key is a folder placeholder (ends in /), just create the directory
 	if strings.HasSuffix(key, "/") {
+		objectDir := filepath.Join(s.Root, bucket, key)
+		if err := os.MkdirAll(objectDir, 0755); err != nil {
+			return "", err
+		}
 		return "", nil
 	}
 
+	// Check if versioning is enabled for this bucket
+	versioningEnabled := false
+	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil {
+			versioningEnabled = bucketInfo.VersioningEnabled
+		}
+	}
+
 	versionID := fmt.Sprintf("%d", time.Now().UnixNano())
-	path := filepath.Join(objectDir, versionID)
+	var path string
+	var size int64
+
+	if versioningEnabled {
+		// Versioned storage: create directory structure
+		objectDir := filepath.Join(s.Root, bucket, key)
+		if err := os.MkdirAll(objectDir, 0755); err != nil {
+			return "", err
+		}
+		path = filepath.Join(objectDir, versionID)
+	} else {
+		// Non-versioned storage: simple file
+		objectDir := filepath.Join(s.Root, bucket, filepath.Dir(key))
+		if err := os.MkdirAll(objectDir, 0755); err != nil {
+			return "", err
+		}
+		path = filepath.Join(s.Root, bucket, key)
+		versionID = "simple"
+	}
+
 	file, err := os.Create(path)
 	if err != nil {
 		return "", err
@@ -254,7 +297,7 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}
 
-	size, err := io.Copy(writeCloser, reader)
+	size, err = io.Copy(writeCloser, reader)
 	if err != nil {
 		return "", err
 	}
@@ -262,10 +305,13 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		writeCloser.Close()
 	}
 
-	// Update latest pointer
-	err = os.WriteFile(filepath.Join(objectDir, "latest"), []byte(versionID), 0644)
-	if err != nil {
-		return "", err
+	// Update latest pointer only for versioned storage
+	if versioningEnabled {
+		objectDir := filepath.Join(s.Root, bucket, key)
+		err = os.WriteFile(filepath.Join(objectDir, "latest"), []byte(versionID), 0644)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	// Save metadata to database
@@ -292,7 +338,18 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 }
 
 func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, string, error) {
-	objectDir := filepath.Join(s.Root, bucket, key)
+	fullPath := filepath.Join(s.Root, bucket, key)
+	info, err := os.Stat(fullPath)
+	if err == nil && !info.IsDir() {
+		// Legacy file support: if it's a simple file, return it directly.
+		reader, err := os.Open(fullPath)
+		if err != nil {
+			return nil, "", err
+		}
+		return reader, "legacy", nil
+	}
+
+	objectDir := fullPath
 	if versionID == "" {
 		data, err := os.ReadFile(filepath.Join(objectDir, "latest"))
 		if err != nil {
@@ -323,7 +380,19 @@ func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, s
 }
 
 func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error) {
-	objectDir := filepath.Join(s.Root, bucket, key)
+	fullPath := filepath.Join(s.Root, bucket, key)
+	info, err := os.Stat(fullPath)
+	if err == nil && !info.IsDir() {
+		return &Object{
+			Key:       key,
+			VersionID: "legacy",
+			Size:      info.Size(),
+			IsLatest:  true,
+			ModTime:   info.ModTime(),
+		}, nil
+	}
+
+	objectDir := fullPath
 	if versionID == "" {
 		data, err := os.ReadFile(filepath.Join(objectDir, "latest"))
 		if err != nil {
@@ -333,7 +402,7 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 	}
 
 	path := filepath.Join(objectDir, versionID)
-	info, err := os.Stat(path)
+	info, err = os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +419,7 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 		Key:            key,
 		VersionID:      versionID,
 		Size:           info.Size(),
-		IsLatest:       true, // Simplification for now, we'd need to check against 'latest' to be precise
+		IsLatest:       true,
 		ModTime:        info.ModTime(),
 		EncryptionType: encryptionType,
 	}, nil
@@ -388,12 +457,38 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter string) ([]Object, [
 	seenPrefixes := make(map[string]bool)
 
 	err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || !info.IsDir() || path == bucketDir {
+		if err != nil || path == bucketDir {
 			return err
 		}
 
 		rel, _ := filepath.Rel(bucketDir, path)
-		// Ensure directory keys have trailing slash for consistent S3 logic
+
+		if !info.IsDir() {
+			// Check if it's a standalone file (no 'latest' in its directory)
+			parent := filepath.Dir(path)
+			if _, err := os.Stat(filepath.Join(parent, "latest")); err == nil {
+				return nil // Versioned file, will be handled by its parent directory
+			}
+			if filepath.Base(path) == "latest" {
+				return nil // Control file
+			}
+
+			// Filter by prefix
+			if prefix != "" && !strings.HasPrefix(rel, prefix) {
+				return nil
+			}
+
+			objects = append(objects, Object{
+				Key:       rel,
+				VersionID: "legacy",
+				Size:      info.Size(),
+				IsLatest:  true,
+				ModTime:   info.ModTime(),
+			})
+			return nil
+		}
+
+		// It's a directory
 		relKey := rel + "/"
 
 		// Filter by prefix
@@ -453,7 +548,25 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter string) ([]Object, [
 }
 
 func (s *FileStorage) ListVersions(bucket, key string) ([]Object, error) {
-	objectDir := filepath.Join(s.Root, bucket, key)
+	fullPath := filepath.Join(s.Root, bucket, key)
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if !info.IsDir() {
+		return []Object{
+			{
+				Key:       key,
+				VersionID: "legacy",
+				Size:      info.Size(),
+				IsLatest:  true,
+				ModTime:   info.ModTime(),
+			},
+		}, nil
+	}
+
+	objectDir := fullPath
 	entries, err := os.ReadDir(objectDir)
 	if err != nil {
 		return nil, err

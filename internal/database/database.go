@@ -261,6 +261,23 @@ func (d *Database) BucketExists(name string) (bool, error) {
 	return exists, err
 }
 
+func (d *Database) GetBucket(name string) (*BucketRow, error) {
+	var bucket BucketRow
+	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled FROM buckets WHERE name = ?", name).
+		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &bucket, err
+}
+
+func (d *Database) SetBucketVersioning(name string, enabled bool) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE buckets SET versioning_enabled = ? WHERE name = ?", enabled, name)
+	metrics.RecordDBQuery("SetBucketVersioning", time.Since(start))
+	return err
+}
+
 // Object operations
 func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	start := time.Now()
