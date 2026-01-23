@@ -140,6 +140,8 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 				calculatedSignature := CalculateSignature(secretKey, date, region, service, stringToSign)
 
 				if providedSignature != calculatedSignature {
+					fmt.Printf("Signature Mismatch!\nCalculated: %s\nProvided: %s\nCanonical Request:\n%s\nString to Sign:\n%s\n",
+						calculatedSignature, providedSignature, canonicalRequest, stringToSign)
 					if auditLogger != nil {
 						auditLogger.LogDenied(user.Username, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "Signature mismatch")
 					}

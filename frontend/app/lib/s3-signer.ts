@@ -49,6 +49,8 @@ export class S3Signer {
         signedHeaders: string[],
         payloadHash: string
     ): Promise<string> {
+        // Use path as-is - browser already encodes it correctly
+        // S3 expects the canonical URI to match exactly what's in the request
         const canonicalUri = path || '/';
 
         const canonicalQuery = Object.keys(query)

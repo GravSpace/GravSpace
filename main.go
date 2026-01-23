@@ -2,14 +2,20 @@ package main
 
 import (
 	"log"
+	"net/http"
+	"time"
 
 	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/auth"
+	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/health"
+	"github.com/GravSpace/GravSpace/internal/metrics"
 	"github.com/GravSpace/GravSpace/internal/s3"
 	"github.com/GravSpace/GravSpace/internal/storage"
+	"github.com/golang-jwt/jwt"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -18,22 +24,34 @@ func main() {
 	// Middleware
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
-	e.Use(middleware.CORS())
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins:  []string{"*"},
+		AllowHeaders:  []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "x-amz-date", "x-amz-content-sha256", "x-amz-server-side-encryption"},
+		AllowMethods:  []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodOptions},
+		ExposeHeaders: []string{"x-amz-version-id", "x-amz-server-side-encryption", "ETag", "Content-Length", "Last-Modified"},
+	}))
+	e.Use(metrics.Middleware())
+
+	// Initialize Database
+	db, err := database.NewDatabase("./data/metadata.db")
+	if err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
 
 	// Initialize Storage and Auth
-	store, err := storage.NewFileStorage("./data")
+	store, err := storage.NewFileStorage("./data", db)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	um, err := auth.NewUserManager("./data/users.json")
+	um, err := auth.NewUserManager(db)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	s3Handler := &s3.S3Handler{Storage: store}
 	store.StartLifecycleWorker()
-	adminHandler := &s3.AdminHandler{UserManager: um}
+	adminHandler := &s3.AdminHandler{UserManager: um, Storage: store}
 	healthChecker := health.NewHealthChecker()
 
 	// Initialize Audit Logger
@@ -51,12 +69,61 @@ func main() {
 	e.GET("/health/ready", healthChecker.ReadinessHandler)
 	e.GET("/health/startup", healthChecker.StartupHandler)
 
+	// Metrics endpoint (no auth required)
+	e.GET("/metrics", echo.WrapHandler(promhttp.Handler()))
+
+	// Start metrics updater
+	metrics.StartMetricsUpdater()
+
+	// Auth Routes
+	e.POST("/login", func(c echo.Context) error {
+		var login struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := c.Bind(&login); err != nil {
+			return err
+		}
+
+		user, err := um.Authenticate(login.Username, login.Password)
+		if err != nil {
+			return echo.ErrUnauthorized
+		}
+
+		// Create token
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+			"username": user.Username,
+			"exp":      time.Now().Add(time.Hour * 72).Unix(),
+		})
+
+		t, err := token.SignedString([]byte("secret")) // Use a proper secret in production
+		if err != nil {
+			return err
+		}
+
+		return c.JSON(http.StatusOK, echo.Map{
+			"token":    t,
+			"username": user.Username,
+		})
+	})
+
 	// Admin Routes
 	admin := e.Group("/admin")
+	// Add JWT middleware here once implemented or use Echo's default
+	admin.Use(middleware.JWT([]byte("secret")))
+
 	admin.GET("/stats", adminHandler.GetSystemStats)
+	admin.GET("/buckets", adminHandler.ListBuckets)
+	admin.PUT("/buckets/:bucket", adminHandler.CreateBucket)
+	admin.DELETE("/buckets/:bucket", adminHandler.DeleteBucket)
+	admin.GET("/buckets/:bucket/objects", adminHandler.ListObjects)
+	admin.GET("/buckets/:bucket/objects/*", adminHandler.GetObject)
+	admin.PUT("/buckets/:bucket/objects/*", adminHandler.PutObject)
+	admin.DELETE("/buckets/:bucket/objects/*", adminHandler.DeleteObject)
 	admin.GET("/users", adminHandler.ListUsers)
 	admin.POST("/users", adminHandler.CreateUser)
 	admin.DELETE("/users/:username", adminHandler.DeleteUser)
+	admin.POST("/users/:username/password", adminHandler.UpdatePassword)
 	admin.POST("/users/:username/keys", adminHandler.GenerateKey)
 	admin.POST("/users/:username/policies", adminHandler.AddPolicy)
 	admin.DELETE("/users/:username/policies/:name", adminHandler.RemovePolicy)

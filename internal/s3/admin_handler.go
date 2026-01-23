@@ -2,16 +2,123 @@ package s3
 
 import (
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/auth"
+	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/labstack/echo/v4"
 )
 
 type AdminHandler struct {
 	UserManager *auth.UserManager
+	Storage     storage.Storage
+}
+
+func (h *AdminHandler) ListBuckets(c echo.Context) error {
+	buckets, err := h.Storage.ListBuckets()
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, buckets)
+}
+
+func (h *AdminHandler) CreateBucket(c echo.Context) error {
+	bucket := c.Param("bucket")
+	if err := h.Storage.CreateBucket(bucket); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusCreated)
+}
+
+func (h *AdminHandler) DeleteBucket(c echo.Context) error {
+	bucket := c.Param("bucket")
+	if err := h.Storage.DeleteBucket(bucket); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) ListObjects(c echo.Context) error {
+	bucket := c.Param("bucket")
+	prefix := c.QueryParam("prefix")
+	delimiter := c.QueryParam("delimiter")
+
+	if c.Request().URL.Query().Has("versions") {
+		objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter)
+		if err != nil {
+			return c.String(http.StatusInternalServerError, err.Error())
+		}
+		var allVersions []storage.Object
+		for _, o := range objects {
+			versions, _ := h.Storage.ListVersions(bucket, o.Key)
+			allVersions = append(allVersions, versions...)
+		}
+		return c.JSON(http.StatusOK, echo.Map{
+			"versions":        allVersions,
+			"common_prefixes": commonPrefixes,
+		})
+	}
+
+	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{
+		"objects":         objects,
+		"common_prefixes": commonPrefixes,
+	})
+}
+
+func (h *AdminHandler) GetObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	reader, vid, err := h.Storage.GetObject(bucket, key, versionID)
+	if err != nil {
+		return c.NoContent(http.StatusNotFound)
+	}
+	defer reader.Close()
+
+	contentType := mime.TypeByExtension(filepath.Ext(key))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	c.Response().Header().Set("x-amz-version-id", vid)
+	if c.QueryParam("download") == "true" {
+		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
+	}
+
+	return c.Stream(http.StatusOK, contentType, reader)
+}
+
+func (h *AdminHandler) PutObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+
+	vid, err := h.Storage.PutObject(bucket, key, c.Request().Body, "")
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	c.Response().Header().Set("x-amz-version-id", vid)
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) DeleteObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	if err := h.Storage.DeleteObject(bucket, key, versionID); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (h *AdminHandler) ListUsers(c echo.Context) error {
@@ -32,6 +139,20 @@ func (h *AdminHandler) CreateUser(c echo.Context) error {
 func (h *AdminHandler) DeleteUser(c echo.Context) error {
 	username := c.Param("username")
 	h.UserManager.DeleteUser(username)
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) UpdatePassword(c echo.Context) error {
+	username := c.Param("username")
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return err
+	}
+	if err := h.UserManager.UpdatePassword(username, req.Password); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
 	return c.NoContent(http.StatusOK)
 }
 

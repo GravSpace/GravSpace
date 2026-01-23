@@ -343,12 +343,32 @@ func (h *S3Handler) GetObject(c echo.Context) error {
 	}
 	defer reader.Close()
 
+	// Check encryption (we need the Stat or just trust the Engine handles it)
+	// The Engine already returns a decrypted reader, but we might want the header
+	obj, _ := h.Storage.StatObject(bucket, key, versionID)
+	if obj != nil && obj.EncryptionType != "" {
+		c.Response().Header().Set("x-amz-server-side-encryption", obj.EncryptionType)
+	}
+
 	contentType := mime.TypeByExtension(filepath.Ext(key))
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
+	// Set S3 headers
 	c.Response().Header().Set("x-amz-version-id", vid)
+
+	// Expose headers for CORS
+	c.Response().Header().Set("Access-Control-Expose-Headers", "x-amz-version-id, x-amz-server-side-encryption, ETag, Content-Length, Last-Modified")
+
+	// Support response-content-disposition query param
+	if disp := c.QueryParam("response-content-disposition"); disp != "" {
+		c.Response().Header().Set("Content-Disposition", disp)
+	} else if c.QueryParam("download") == "true" {
+		filename := filepath.Base(key)
+		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	}
+
 	return c.Stream(http.StatusOK, contentType, reader)
 }
 
@@ -408,9 +428,13 @@ func (h *S3Handler) PutObject(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	}
 
-	vid, err := h.Storage.PutObject(bucket, key, c.Request().Body)
+	encryptionType := c.Request().Header.Get("x-amz-server-side-encryption")
+	vid, err := h.Storage.PutObject(bucket, key, c.Request().Body, encryptionType)
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if encryptionType != "" {
+		c.Response().Header().Set("x-amz-server-side-encryption", encryptionType)
 	}
 	c.Response().Header().Set("x-amz-version-id", vid)
 	return c.NoContent(http.StatusOK)

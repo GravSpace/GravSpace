@@ -7,6 +7,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"github.com/GravSpace/GravSpace/internal/database"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Statement struct {
@@ -33,56 +36,83 @@ type User struct {
 }
 
 type UserManager struct {
-	Users    map[string]*User `json:"users"`
-	filePath string
-	mu       sync.RWMutex
+	DB    *database.Database
+	Users map[string]*User // Cache for performance, but sync with DB
+	mu    sync.RWMutex
 }
 
-func NewUserManager(filePath string) (*UserManager, error) {
+func NewUserManager(db *database.Database) (*UserManager, error) {
 	um := &UserManager{
-		Users:    make(map[string]*User),
-		filePath: filePath,
+		Users: make(map[string]*User),
+		DB:    db,
 	}
 
-	if _, err := os.Stat(filePath); err == nil {
-		data, err := os.ReadFile(filePath)
-		if err != nil {
+	if db != nil {
+		if err := um.LoadFromDB(); err != nil {
 			return nil, err
 		}
-		if err := json.Unmarshal(data, &um.Users); err != nil {
-			return nil, err
-		}
-	} else {
-		// Create default admin user with deterministic keys for demo
-		admin := &User{
-			Username: "admin",
-			AccessKeys: []AccessKey{
-				{AccessKeyID: "admin", SecretAccessKey: "adminsecret"},
-			},
-		}
-		um.Users["admin"] = admin
-
-		// Create anonymous user
-		um.Users["anonymous"] = &User{Username: "anonymous"}
-
-		um.save()
-	}
-
-	// Double check anonymous exists if file was loaded but it was missing
-	if _, ok := um.Users["anonymous"]; !ok {
-		um.Users["anonymous"] = &User{Username: "anonymous"}
-		um.save()
 	}
 
 	return um, nil
 }
 
-func (um *UserManager) save() error {
-	data, err := json.MarshalIndent(um.Users, "", "  ")
+func (um *UserManager) LoadFromDB() error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	usernames, err := um.DB.ListUsers()
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(um.filePath, data, 0644)
+
+	for _, username := range usernames {
+		userRecord, err := um.DB.GetUser(username)
+		if err != nil {
+			return err
+		}
+		if userRecord == nil {
+			continue
+		}
+
+		user := &User{
+			Username: userRecord.Username,
+		}
+
+		// Load keys
+		keys, err := um.DB.GetAccessKeys(username)
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			user.AccessKeys = append(user.AccessKeys, AccessKey{
+				AccessKeyID:     k.AccessKeyID,
+				SecretAccessKey: k.SecretAccessKey,
+			})
+		}
+
+		// Load policies
+		policies, err := um.DB.GetUserPolicies(username)
+		if err != nil {
+			return err
+		}
+		for _, p := range policies {
+			var policy Policy
+			if err := json.Unmarshal([]byte(p.Data), &policy); err != nil {
+				continue
+			}
+			user.Policies = append(user.Policies, policy)
+		}
+
+		um.Users[username] = user
+	}
+
+	// Double check anonymous
+	if _, ok := um.Users["anonymous"]; !ok {
+		um.Users["anonymous"] = &User{Username: "anonymous"}
+		um.DB.UpsertUser("anonymous", "")
+	}
+
+	return nil
 }
 
 func (um *UserManager) CreateUser(username string) *User {
@@ -95,7 +125,10 @@ func (um *UserManager) CreateUser(username string) *User {
 
 	user := &User{Username: username}
 	um.Users[username] = user
-	um.save()
+
+	if um.DB != nil {
+		um.DB.UpsertUser(username, "")
+	}
 	return user
 }
 
@@ -103,7 +136,10 @@ func (um *UserManager) DeleteUser(username string) {
 	um.mu.Lock()
 	defer um.mu.Unlock()
 	delete(um.Users, username)
-	um.save()
+
+	if um.DB != nil {
+		um.DB.DeleteUser(username)
+	}
 }
 
 func (um *UserManager) GenerateKey(username string) *AccessKey {
@@ -121,7 +157,10 @@ func (um *UserManager) GenerateKey(username string) *AccessKey {
 	}
 
 	user.AccessKeys = append(user.AccessKeys, key)
-	um.save()
+
+	if um.DB != nil {
+		um.DB.CreateAccessKey(username, key.AccessKeyID, key.SecretAccessKey)
+	}
 	return &key
 }
 
@@ -149,7 +188,12 @@ func (um *UserManager) AddPolicy(username string, policy Policy) error {
 	}
 
 	user.Policies = append(user.Policies, policy)
-	return um.save()
+
+	if um.DB != nil {
+		pJSON, _ := json.Marshal(policy)
+		return um.DB.UpsertUserPolicy(username, policy.Name, string(pJSON))
+	}
+	return nil
 }
 
 func (um *UserManager) RemovePolicy(username, policyName string) error {
@@ -168,7 +212,11 @@ func (um *UserManager) RemovePolicy(username, policyName string) error {
 		}
 	}
 	user.Policies = next
-	return um.save()
+
+	if um.DB != nil {
+		return um.DB.DeleteUserPolicy(username, policyName)
+	}
+	return nil
 }
 
 func (um *UserManager) CheckPermission(user *User, action, resource string) bool {
@@ -219,6 +267,44 @@ func matchResource(resources []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func (um *UserManager) Authenticate(username, password string) (*User, error) {
+	um.mu.RLock()
+	defer um.mu.RUnlock()
+
+	userRecord, err := um.DB.GetUser(username)
+	if err != nil {
+		return nil, err
+	}
+	if userRecord == nil {
+		return nil, os.ErrNotExist
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(userRecord.PasswordHash), []byte(password)); err != nil {
+		return nil, err
+	}
+
+	return um.Users[username], nil
+}
+
+func (um *UserManager) UpdatePassword(username, newPassword string) error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	if um.DB != nil {
+		if err := um.DB.UpsertUser(username, string(hash)); err != nil {
+			return err
+		}
+	}
+
+	// Password changed successfully, return nil
+	return nil
 }
 
 func generateRandomString(n int) string {

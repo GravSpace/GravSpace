@@ -10,15 +10,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/GravSpace/GravSpace/internal/cache"
+	"github.com/GravSpace/GravSpace/internal/crypto"
+	"github.com/GravSpace/GravSpace/internal/database"
+	"github.com/GravSpace/GravSpace/internal/metrics"
 )
 
 // Object represents a stored object version
 type Object struct {
-	Key       string
-	VersionID string
-	Size      int64
-	IsLatest  bool
-	ModTime   time.Time
+	Key            string
+	VersionID      string
+	Size           int64
+	IsLatest       bool
+	ModTime        time.Time
+	EncryptionType string
 }
 
 // CORSConfiguration represents the S3 CORS configuration
@@ -69,7 +75,7 @@ type Storage interface {
 	BucketExists(name string) (bool, error)
 	ListBuckets() ([]string, error)
 	DeleteBucket(name string) error
-	PutObject(bucket, key string, reader io.Reader) (string, error)
+	PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error)
 	GetObject(bucket, key, versionID string) (io.ReadCloser, string, error)
 	StatObject(bucket, key, versionID string) (*Object, error)
 	DeleteObject(bucket, key, versionID string) error
@@ -100,18 +106,56 @@ type Storage interface {
 
 // FileStorage implements Storage using the local filesystem
 type FileStorage struct {
-	Root string
+	Root       string
+	DB         *database.Database
+	Cache      cache.Cache
+	SyncWorker *SyncWorker
 }
 
-func NewFileStorage(root string) (*FileStorage, error) {
+func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
 	}
-	return &FileStorage{Root: root}, nil
+
+	// Initialize cache
+	c := cache.NewInMemoryCache()
+
+	// Create storage instance
+	s := &FileStorage{
+		Root:  root,
+		DB:    db,
+		Cache: c,
+	}
+
+	// Initialize and start sync worker (every 5 minutes by default)
+	syncInterval := 5 * time.Minute
+	if intervalEnv := os.Getenv("SYNC_WORKER_INTERVAL"); intervalEnv != "" {
+		if minutes, err := strconv.Atoi(intervalEnv); err == nil {
+			syncInterval = time.Duration(minutes) * time.Minute
+		}
+	}
+	s.SyncWorker = NewSyncWorker(s, syncInterval)
+	s.SyncWorker.Start()
+	fmt.Printf("Starting filesystem sync worker with interval: %v\n", syncInterval)
+
+	return s, nil
 }
 
 func (s *FileStorage) CreateBucket(name string) error {
-	return os.MkdirAll(filepath.Join(s.Root, name), 0755)
+	if err := os.MkdirAll(filepath.Join(s.Root, name), 0755); err != nil {
+		return err
+	}
+
+	// Create in database
+	if s.DB != nil {
+		s.DB.CreateBucket(name, "admin")
+		metrics.BucketsTotal.Inc()
+	}
+
+	// Invalidate bucket list cache
+	s.Cache.Delete(cache.BucketListKey())
+
+	return nil
 }
 
 func (s *FileStorage) BucketExists(name string) (bool, error) {
@@ -126,6 +170,26 @@ func (s *FileStorage) BucketExists(name string) (bool, error) {
 }
 
 func (s *FileStorage) ListBuckets() ([]string, error) {
+	// Try cache first
+	if cached, ok := s.Cache.Get(cache.BucketListKey()); ok {
+		metrics.RecordCacheHit("bucket_list")
+		if buckets, ok := cached.([]string); ok {
+			return buckets, nil
+		}
+	}
+	metrics.RecordCacheMiss("bucket_list")
+
+	// Try database
+	if s.DB != nil {
+		buckets, err := s.DB.ListBuckets()
+		if err == nil {
+			// Cache for 5 minutes
+			s.Cache.Set(cache.BucketListKey(), buckets, 5*time.Minute)
+			return buckets, nil
+		}
+	}
+
+	// Fallback to filesystem
 	entries, err := os.ReadDir(s.Root)
 	if err != nil {
 		return nil, err
@@ -136,14 +200,32 @@ func (s *FileStorage) ListBuckets() ([]string, error) {
 			buckets = append(buckets, entry.Name())
 		}
 	}
+
+	// Cache the result
+	s.Cache.Set(cache.BucketListKey(), buckets, 5*time.Minute)
 	return buckets, nil
 }
 
 func (s *FileStorage) DeleteBucket(name string) error {
-	return os.RemoveAll(filepath.Join(s.Root, name))
+	if err := os.RemoveAll(filepath.Join(s.Root, name)); err != nil {
+		return err
+	}
+
+	// Delete from database
+	if s.DB != nil {
+		s.DB.DeleteBucket(name)
+		metrics.BucketsTotal.Dec()
+	}
+
+	// Invalidate caches
+	s.Cache.Delete(cache.BucketListKey())
+	s.Cache.Delete(cache.BucketCORSKey(name))
+	s.Cache.Delete(cache.BucketLifecycleKey(name))
+
+	return nil
 }
 
-func (s *FileStorage) PutObject(bucket, key string, reader io.Reader) (string, error) {
+func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error) {
 	objectDir := filepath.Join(s.Root, bucket, key)
 	if err := os.MkdirAll(objectDir, 0755); err != nil {
 		return "", err
@@ -161,14 +243,52 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader) (string, e
 		return "", err
 	}
 	defer file.Close()
-	_, err = io.Copy(file, reader)
+
+	// Copy data and track size
+	var writeCloser io.WriteCloser = file
+	var errW error
+	if encryptionType == "AES256" {
+		writeCloser, errW = crypto.EncryptStream(crypto.GetMasterKey(), file)
+		if errW != nil {
+			return "", errW
+		}
+	}
+
+	size, err := io.Copy(writeCloser, reader)
 	if err != nil {
 		return "", err
+	}
+	if writeCloser != file {
+		writeCloser.Close()
 	}
 
 	// Update latest pointer
 	err = os.WriteFile(filepath.Join(objectDir, "latest"), []byte(versionID), 0644)
-	return versionID, err
+	if err != nil {
+		return "", err
+	}
+
+	// Save metadata to database
+	if s.DB != nil {
+		objectRow := &database.ObjectRow{
+			Bucket:         bucket,
+			Key:            key,
+			VersionID:      versionID,
+			Size:           size,
+			ETag:           versionID,
+			ContentType:    "application/octet-stream",
+			IsLatest:       true,
+			EncryptionType: encryptionType,
+		}
+		s.DB.CreateObject(objectRow)
+		metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
+		metrics.StorageBytes.WithLabelValues(bucket).Add(float64(size))
+	}
+
+	// Invalidate object list cache for this bucket
+	s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+
+	return versionID, nil
 }
 
 func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, string, error) {
@@ -182,7 +302,24 @@ func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, s
 	}
 
 	reader, err := os.Open(filepath.Join(objectDir, versionID))
-	return reader, versionID, err
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Check if encrypted
+	if s.DB != nil {
+		obj, _ := s.DB.GetObject(bucket, key, versionID)
+		if obj != nil && obj.EncryptionType == "AES256" {
+			decryptedReader, err := crypto.DecryptStream(crypto.GetMasterKey(), reader)
+			if err != nil {
+				reader.Close()
+				return nil, "", err
+			}
+			return decryptedReader, versionID, nil
+		}
+	}
+
+	return reader, versionID, nil
 }
 
 func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error) {
@@ -201,17 +338,42 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 		return nil, err
 	}
 
+	encryptionType := ""
+	if s.DB != nil {
+		obj, _ := s.DB.GetObject(bucket, key, versionID)
+		if obj != nil {
+			encryptionType = obj.EncryptionType
+		}
+	}
+
 	return &Object{
-		Key:       key,
-		VersionID: versionID,
-		Size:      info.Size(),
-		IsLatest:  true, // Simplification for now, we'd need to check against 'latest' to be precise
-		ModTime:   info.ModTime(),
+		Key:            key,
+		VersionID:      versionID,
+		Size:           info.Size(),
+		IsLatest:       true, // Simplification for now, we'd need to check against 'latest' to be precise
+		ModTime:        info.ModTime(),
+		EncryptionType: encryptionType,
 	}, nil
 }
 
 func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
 	objectDir := filepath.Join(s.Root, bucket, key)
+
+	// Delete from database
+	if s.DB != nil {
+		// Get size for metrics before deleting
+		obj, _ := s.DB.GetObject(bucket, key, versionID)
+		if obj != nil {
+			metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
+			metrics.StorageBytes.WithLabelValues(bucket).Sub(float64(obj.Size))
+		}
+		s.DB.DeleteObject(bucket, key, versionID)
+	}
+
+	// Invalidate cache
+	s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+	s.Cache.Delete(cache.ObjectMetadataKey(bucket, key, versionID))
+
 	if versionID == "" {
 		// Delete everything for this key if no version specified
 		return os.RemoveAll(objectDir)
@@ -395,7 +557,9 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 	}
 
 	// Now PutObject using the assembled stream
-	vid, err := s.PutObject(bucket, key, tempFile)
+	// For multipart, we should ideally retrieve the encryption type from the upload session.
+	// For now, we'll pass "" as we don't store it in the session yet.
+	vid, err := s.PutObject(bucket, key, tempFile, "")
 	if err != nil {
 		return "", err
 	}
@@ -480,10 +644,23 @@ func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error
 	if err != nil {
 		return err
 	}
+
+	// Invalidate cache
+	s.Cache.Delete(cache.BucketCORSKey(bucket))
+
 	return os.WriteFile(path, data, 0644)
 }
 
 func (s *FileStorage) GetBucketCors(bucket string) (*CORSConfiguration, error) {
+	// Try cache first
+	if cached, ok := s.Cache.Get(cache.BucketCORSKey(bucket)); ok {
+		metrics.RecordCacheHit("bucket_cors")
+		if cors, ok := cached.(*CORSConfiguration); ok {
+			return cors, nil
+		}
+	}
+	metrics.RecordCacheMiss("bucket_cors")
+
 	path := filepath.Join(s.Root, bucket, "cors.json")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("CORS configuration not found")
@@ -496,10 +673,17 @@ func (s *FileStorage) GetBucketCors(bucket string) (*CORSConfiguration, error) {
 	if err := json.Unmarshal(data, &cors); err != nil {
 		return nil, err
 	}
+
+	// Cache for 30 minutes
+	s.Cache.Set(cache.BucketCORSKey(bucket), &cors, 30*time.Minute)
+
 	return &cors, nil
 }
 
 func (s *FileStorage) DeleteBucketCors(bucket string) error {
+	// Invalidate cache
+	s.Cache.Delete(cache.BucketCORSKey(bucket))
+
 	path := filepath.Join(s.Root, bucket, "cors.json")
 	return os.Remove(path)
 }
@@ -510,10 +694,23 @@ func (s *FileStorage) PutBucketLifecycle(bucket string, lifecycle LifecycleConfi
 	if err != nil {
 		return err
 	}
+
+	// Invalidate cache
+	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
+
 	return os.WriteFile(path, data, 0644)
 }
 
 func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error) {
+	// Try cache first
+	if cached, ok := s.Cache.Get(cache.BucketLifecycleKey(bucket)); ok {
+		metrics.RecordCacheHit("bucket_lifecycle")
+		if lifecycle, ok := cached.(*LifecycleConfiguration); ok {
+			return lifecycle, nil
+		}
+	}
+	metrics.RecordCacheMiss("bucket_lifecycle")
+
 	path := filepath.Join(s.Root, bucket, "lifecycle.json")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, fmt.Errorf("Lifecycle configuration not found")
@@ -526,10 +723,17 @@ func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration
 	if err := json.Unmarshal(data, &lifecycle); err != nil {
 		return nil, err
 	}
+
+	// Cache for 30 minutes
+	s.Cache.Set(cache.BucketLifecycleKey(bucket), &lifecycle, 30*time.Minute)
+
 	return &lifecycle, nil
 }
 
 func (s *FileStorage) DeleteBucketLifecycle(bucket string) error {
+	// Invalidate cache
+	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
+
 	path := filepath.Join(s.Root, bucket, "lifecycle.json")
 	return os.Remove(path)
 }
