@@ -75,9 +75,14 @@ export class S3Signer {
 
         let payloadHash = 'UNSIGNED-PAYLOAD';
         if (payload) {
-            if (typeof payload === 'string' || payload instanceof ArrayBuffer || payload instanceof Blob) {
-                // For real production we might want to hash the body, but UNSIGNED-PAYLOAD is valid for S3
-                payloadHash = 'UNSIGNED-PAYLOAD';
+            if (payload instanceof Blob || payload instanceof File) {
+                // Calculate actual SHA256 hash for file uploads
+                const arrayBuffer = await payload.arrayBuffer();
+                payloadHash = await this.hash(arrayBuffer);
+            } else if (payload instanceof ArrayBuffer) {
+                payloadHash = await this.hash(payload);
+            } else if (typeof payload === 'string') {
+                payloadHash = await this.hash(payload);
             }
         }
         headers['x-amz-content-sha256'] = payloadHash;

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -19,6 +20,48 @@ type Object struct {
 	ModTime   time.Time
 }
 
+// CORSConfiguration represents the S3 CORS configuration
+type CORSConfiguration struct {
+	CORSRules []CORSRule `json:"cors_rules"`
+}
+
+// CORSRule represents a single CORS rule
+type CORSRule struct {
+	AllowedOrigins []string `json:"allowed_origins"`
+	AllowedMethods []string `json:"allowed_methods"`
+	AllowedHeaders []string `json:"allowed_headers"`
+	MaxAgeSeconds  int      `json:"max_age_seconds"`
+	ExposeHeaders  []string `json:"expose_headers"`
+}
+
+// LifecycleConfiguration represents S3 Lifecycle configuration
+type LifecycleConfiguration struct {
+	Rules []LifecycleRule `json:"rules"`
+}
+
+// LifecycleRule represents a single lifecycle rule
+type LifecycleRule struct {
+	ID         string            `json:"id"`
+	Status     string            `json:"status"` // "Enabled" or "Disabled"
+	Filter     LifecycleFilter   `json:"filter"`
+	Expiration ElementExpiration `json:"expiration"`
+}
+
+type LifecycleFilter struct {
+	Prefix string `json:"prefix"`
+}
+
+type ElementExpiration struct {
+	Days int `json:"days"`
+}
+
+// Part represents a part of a multipart upload
+type Part struct {
+	PartNumber int
+	ETag       string
+	Size       int64
+}
+
 // Storage defines the interface for object storage
 type Storage interface {
 	CreateBucket(name string) error
@@ -31,6 +74,27 @@ type Storage interface {
 	DeleteObject(bucket, key, versionID string) error
 	ListObjects(bucket, prefix, delimiter string) ([]Object, []string, error)
 	ListVersions(bucket, key string) ([]Object, error)
+
+	// Multipart Upload
+	InitiateMultipartUpload(bucket, key string) (string, error)
+	UploadPart(bucket, key, uploadID string, partNumber int, reader io.Reader) (string, error)
+	CompleteMultipartUpload(bucket, key, uploadID string, parts []Part) (string, error)
+	AbortMultipartUpload(bucket, key, uploadID string) error
+
+	// Tagging
+	PutObjectTagging(bucket, key, versionID string, tags map[string]string) error
+	GetObjectTagging(bucket, key, versionID string) (map[string]string, error)
+
+	// CORS
+	PutBucketCors(bucket string, cors CORSConfiguration) error
+	GetBucketCors(bucket string) (*CORSConfiguration, error)
+	DeleteBucketCors(bucket string) error
+
+	// Lifecycle
+	PutBucketLifecycle(bucket string, lifecycle LifecycleConfiguration) error
+	GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error)
+	DeleteBucketLifecycle(bucket string) error
+	StartLifecycleWorker()
 }
 
 // FileStorage implements Storage using the local filesystem
@@ -255,4 +319,282 @@ func (s *FileStorage) ListVersions(bucket, key string) ([]Object, error) {
 	})
 
 	return versions, nil
+}
+
+func (s *FileStorage) InitiateMultipartUpload(bucket, key string) (string, error) {
+	uploadID := fmt.Sprintf("%d", time.Now().UnixNano())
+	uploadDir := filepath.Join(s.Root, bucket, ".uploads", uploadID)
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		return "", err
+	}
+	// Store the intended key for verification or recovery
+	if err := os.WriteFile(filepath.Join(uploadDir, "key"), []byte(key), 0644); err != nil {
+		return "", err
+	}
+	return uploadID, nil
+}
+
+func (s *FileStorage) UploadPart(bucket, key, uploadID string, partNumber int, reader io.Reader) (string, error) {
+	uploadDir := filepath.Join(s.Root, bucket, ".uploads", uploadID)
+	if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("upload %s not found", uploadID)
+	}
+
+	partPath := filepath.Join(uploadDir, fmt.Sprintf("%d", partNumber))
+	file, err := os.Create(partPath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, reader)
+	if err != nil {
+		return "", err
+	}
+
+	etag := fmt.Sprintf("part-%d", partNumber) // S3 etags are usually MD5, but we use a simple placeholder
+	return etag, nil
+}
+
+func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, parts []Part) (string, error) {
+	uploadDir := filepath.Join(s.Root, bucket, ".uploads", uploadID)
+	if _, err := os.Stat(uploadDir); os.IsNotExist(err) {
+		return "", fmt.Errorf("upload %s not found", uploadID)
+	}
+
+	// Create temporary file for assembly
+	tempFile, err := os.CreateTemp("", "mpu-assembly-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	// Sort parts by part number just in case
+	sort.Slice(parts, func(i, j int) bool {
+		return parts[i].PartNumber < parts[j].PartNumber
+	})
+
+	for _, p := range parts {
+		partPath := filepath.Join(uploadDir, fmt.Sprintf("%d", p.PartNumber))
+		pf, err := os.Open(partPath)
+		if err != nil {
+			return "", fmt.Errorf("part %d missing: %w", p.PartNumber, err)
+		}
+		_, err = io.Copy(tempFile, pf)
+		pf.Close()
+		if err != nil {
+			return "", err
+		}
+	}
+
+	// Seek back to start
+	if _, err := tempFile.Seek(0, 0); err != nil {
+		return "", err
+	}
+
+	// Now PutObject using the assembled stream
+	vid, err := s.PutObject(bucket, key, tempFile)
+	if err != nil {
+		return "", err
+	}
+
+	// Cleanup
+	os.RemoveAll(uploadDir)
+
+	return vid, nil
+}
+
+func (s *FileStorage) AbortMultipartUpload(bucket, key, uploadID string) error {
+	uploadDir := filepath.Join(s.Root, bucket, ".uploads", uploadID)
+	return os.RemoveAll(uploadDir)
+}
+
+func (s *FileStorage) PutObjectTagging(bucket, key, versionID string, tags map[string]string) error {
+	objectDir := filepath.Join(s.Root, bucket, key)
+	if versionID == "" {
+		data, err := os.ReadFile(filepath.Join(objectDir, "latest"))
+		if err != nil {
+			return err
+		}
+		versionID = string(data)
+	}
+
+	// S3 tags are stored per version. We'll put them in the same directory as the version file.
+	// But wait, the current engine stores versions as files *inside* an object directory.
+	// Let's refine: data/bucket/key/V1 (file), data/bucket/key/V1.tags (json)
+	tagsPath := filepath.Join(objectDir, versionID+".tags")
+
+	// Convert map[string]string to JSON
+	// Simple implementation for now
+	var lines []string
+	for k, v := range tags {
+		lines = append(lines, fmt.Sprintf("%q:%q", k, v))
+	}
+	json := "{" + strings.Join(lines, ",") + "}"
+	return os.WriteFile(tagsPath, []byte(json), 0644)
+}
+
+func (s *FileStorage) GetObjectTagging(bucket, key, versionID string) (map[string]string, error) {
+	objectDir := filepath.Join(s.Root, bucket, key)
+	if versionID == "" {
+		data, err := os.ReadFile(filepath.Join(objectDir, "latest"))
+		if err != nil {
+			return nil, err
+		}
+		versionID = string(data)
+	}
+
+	tagsPath := filepath.Join(objectDir, versionID+".tags")
+	if _, err := os.Stat(tagsPath); os.IsNotExist(err) {
+		return make(map[string]string), nil
+	}
+
+	data, err := os.ReadFile(tagsPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Very simple "parser" for our simple "json"
+	tags := make(map[string]string)
+	content := strings.Trim(string(data), "{}")
+	if content == "" {
+		return tags, nil
+	}
+	pairs := strings.Split(content, ",")
+	for _, p := range pairs {
+		kv := strings.Split(p, ":")
+		if len(kv) == 2 {
+			k := strings.Trim(kv[0], "\"")
+			v := strings.Trim(kv[1], "\"")
+			tags[k] = v
+		}
+	}
+	return tags, nil
+}
+
+func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error {
+	path := filepath.Join(s.Root, bucket, "cors.json")
+	data, err := json.MarshalIndent(cors, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func (s *FileStorage) GetBucketCors(bucket string) (*CORSConfiguration, error) {
+	path := filepath.Join(s.Root, bucket, "cors.json")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("CORS configuration not found")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cors CORSConfiguration
+	if err := json.Unmarshal(data, &cors); err != nil {
+		return nil, err
+	}
+	return &cors, nil
+}
+
+func (s *FileStorage) DeleteBucketCors(bucket string) error {
+	path := filepath.Join(s.Root, bucket, "cors.json")
+	return os.Remove(path)
+}
+
+func (s *FileStorage) PutBucketLifecycle(bucket string, lifecycle LifecycleConfiguration) error {
+	path := filepath.Join(s.Root, bucket, "lifecycle.json")
+	data, err := json.MarshalIndent(lifecycle, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0644)
+}
+
+func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error) {
+	path := filepath.Join(s.Root, bucket, "lifecycle.json")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil, fmt.Errorf("Lifecycle configuration not found")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var lifecycle LifecycleConfiguration
+	if err := json.Unmarshal(data, &lifecycle); err != nil {
+		return nil, err
+	}
+	return &lifecycle, nil
+}
+
+func (s *FileStorage) DeleteBucketLifecycle(bucket string) error {
+	path := filepath.Join(s.Root, bucket, "lifecycle.json")
+	return os.Remove(path)
+}
+
+func (s *FileStorage) StartLifecycleWorker() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		for range ticker.C {
+			s.ProcessLifecycleRules()
+		}
+	}()
+}
+
+func (s *FileStorage) ProcessLifecycleRules() {
+	buckets, err := s.ListBuckets()
+	if err != nil {
+		return
+	}
+
+	for _, bucket := range buckets {
+		config, err := s.GetBucketLifecycle(bucket)
+		if err != nil {
+			continue
+		}
+
+		for _, rule := range config.Rules {
+			if rule.Status != "Enabled" {
+				continue
+			}
+
+			// Simple walk through objects
+			bucketPath := filepath.Join(s.Root, bucket)
+			filepath.Walk(bucketPath, func(path string, info os.FileInfo, err error) error {
+				if err != nil || info.IsDir() {
+					return nil
+				}
+
+				// Skip hidden files/internal files
+				rel, _ := filepath.Rel(bucketPath, path)
+				if strings.HasPrefix(rel, ".") || rel == "lifecycle.json" || rel == "cors.json" || rel == "tags.json" {
+					return nil
+				}
+
+				// Check prefix
+				if !strings.HasPrefix(rel, rule.Filter.Prefix) {
+					return nil
+				}
+
+				// Check expiration
+				if rule.Expiration.Days > 0 {
+					expiryDate := info.ModTime().Add(time.Duration(rule.Expiration.Days) * 24 * time.Hour)
+					if time.Now().After(expiryDate) {
+						os.Remove(path)
+						// Also cleanup empty version directories if any
+						dir := filepath.Dir(path)
+						if dir != bucketPath {
+							entries, _ := os.ReadDir(dir)
+							if len(entries) == 0 {
+								os.Remove(dir)
+							}
+						}
+					}
+				}
+
+				return nil
+			})
+		}
+	}
 }

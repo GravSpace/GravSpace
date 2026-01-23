@@ -509,6 +509,7 @@
 </template>
 
 <script setup>
+import 'vue-sonner/style.css'
 import { ref, watch, onMounted } from 'vue'
 import {
   Database, User as UserIcon, Shield, LayoutDashboard, Settings,
@@ -906,8 +907,8 @@ function isPublic(bucket, prefix = "") {
 
 async function togglePublic(bucket, prefix = "") {
   const currentlyPublic = isPublic(bucket, prefix)
-  const resource = "arn:aws:s3:::" + bucket + (prefix ? "/" + prefix + "/*" : "/*")
-  const pName = `PublicAccess-${bucket}-${prefix.replace(/\//g, '-') || 'Root'}`
+  const resource = "arn:aws:s3:::" + bucket + (prefix.length > 0 ? "/" + prefix + "*" : "/*")
+  const pName = `PublicAccess-${bucket}-${prefix.replace(/\s+$/, "").replace(/\//g, "") || 'Root'}`
 
   if (currentlyPublic) {
     if (!confirm("Remove public access?")) return

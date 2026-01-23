@@ -30,6 +30,7 @@ func main() {
 	}
 
 	s3Handler := &s3.S3Handler{Storage: store}
+	store.StartLifecycleWorker()
 	adminHandler := &s3.AdminHandler{UserManager: um}
 
 	// Admin Routes
@@ -52,14 +53,16 @@ func main() {
 
 	// Bucket operations
 	s3.HEAD("/:bucket", s3Handler.HeadBucket)
-	s3.PUT("/:bucket", s3Handler.CreateBucket)
+	s3.PUT("/:bucket", s3Handler.PutBucket)
 	s3.DELETE("/:bucket", s3Handler.DeleteBucket)
 	s3.GET("/:bucket", s3Handler.ListObjects)
+	s3.POST("/:bucket", s3Handler.PostBucket)
 
 	// Object operations
 	s3.HEAD("/:bucket/*", s3Handler.HeadObject)
 	s3.GET("/:bucket/*", s3Handler.GetObject)
 	s3.PUT("/:bucket/*", s3Handler.PutObject)
+	s3.POST("/:bucket/*", s3Handler.PostObject)
 	s3.DELETE("/:bucket/*", s3Handler.DeleteObject)
 
 	// Start server
