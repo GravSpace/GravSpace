@@ -68,6 +68,66 @@ func (h *AdminHandler) SetBucketVersioning(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+func (h *AdminHandler) SetBucketObjectLock(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+	if err := h.Storage.SetBucketObjectLock(bucket, req.Enabled); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) SetObjectRetention(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.QueryParam("key")
+	versionID := c.QueryParam("versionId")
+
+	var req struct {
+		RetainUntilDate string `json:"retainUntilDate"` // ISO 8601 format
+		Mode            string `json:"mode"`            // COMPLIANCE or GOVERNANCE
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	retainUntil, err := time.Parse(time.RFC3339, req.RetainUntilDate)
+	if err != nil {
+		return c.String(http.StatusBadRequest, "Invalid retainUntilDate format")
+	}
+
+	if req.Mode != "COMPLIANCE" && req.Mode != "GOVERNANCE" {
+		return c.String(http.StatusBadRequest, "Mode must be COMPLIANCE or GOVERNANCE")
+	}
+
+	if err := h.Storage.SetObjectRetention(bucket, key, versionID, retainUntil, req.Mode); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) SetObjectLegalHold(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.QueryParam("key")
+	versionID := c.QueryParam("versionId")
+
+	var req struct {
+		Hold bool `json:"hold"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	if err := h.Storage.SetObjectLegalHold(bucket, key, versionID, req.Hold); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
 func (h *AdminHandler) ListObjects(c echo.Context) error {
 	bucket := c.Param("bucket")
 	prefix := c.QueryParam("prefix")

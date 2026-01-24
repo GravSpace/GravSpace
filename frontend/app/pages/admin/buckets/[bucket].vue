@@ -115,8 +115,11 @@
                                                 class="p-1.5 rounded bg-blue-500/10 text-blue-500 group-hover:bg-blue-500 group-hover:text-white transition-colors">
                                                 <File class="w-4 h-4" />
                                             </div>
-                                            <span class="truncate" :title="obj.Key">{{ obj.Key.split('/').pop()
-                                            }}</span>
+                                            <div class="flex items-center gap-1.5 min-w-0">
+                                                <span class="truncate" :title="obj.Key">{{ obj.Key.split('/').pop()
+                                                }}</span>
+                                                <Lock v-if="isLocked(obj)" class="w-3 h-3 text-amber-500 shrink-0" />
+                                            </div>
                                         </div>
                                     </TableCell>
                                     <TableCell class="text-muted-foreground text-xs font-mono tabular-nums">{{
@@ -157,6 +160,10 @@
                                                         <LinkIcon class="w-4 h-4 mr-2" />
                                                         Copy Secure Link
                                                     </DropdownMenuItem>
+                                                    <DropdownMenuItem @click="openLockDialog(obj)">
+                                                        <Lock class="w-4 h-4 mr-2" />
+                                                        Object Lock Details
+                                                    </DropdownMenuItem>
                                                     <DropdownMenuSeparator />
                                                     <DropdownMenuItem @click="deleteObject(obj.Key)"
                                                         class="text-destructive focus:bg-destructive/10">
@@ -190,7 +197,7 @@
 
                                             <div
                                                 class="relative pl-6 space-y-4 before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[2px] before:bg-slate-200 dark:before:bg-slate-800">
-                                                <div v-for="v in objectVersions[obj.Key]" :key="v.VersionId"
+                                                <div v-for="v in objectVersions[obj.Key]" :key="v.VersionID"
                                                     class="relative group/v">
                                                     <div class="absolute -left-[21px] top-1.5 h-[11px] w-[11px] rounded-full border-2 border-white dark:border-slate-950 transition-colors duration-300"
                                                         :class="v.IsLatest ? 'bg-primary scale-125' : 'bg-slate-400 group-hover/v:bg-primary'">
@@ -202,13 +209,17 @@
                                                             <div class="flex flex-col gap-0.5">
                                                                 <div class="flex items-center gap-2">
                                                                     <code
-                                                                        class="text-[11px] font-mono font-bold text-slate-900 dark:text-slate-100">{{ v.VersionId }}</code>
+                                                                        class="text-[11px] font-mono font-bold text-slate-900 dark:text-slate-100">{{ v.VersionID }}</code>
                                                                     <Badge v-if="v.IsLatest"
                                                                         class="text-[8px] h-3.5 bg-primary/10 text-primary border-primary/20 py-0 font-bold uppercase tracking-tighter">
                                                                         Current</Badge>
                                                                     <Badge v-if="v.VersionID === 'legacy'"
                                                                         variant="outline"
                                                                         class="text-[8px] h-3.5 py-0 italic">Legacy
+                                                                    </Badge>
+                                                                    <Badge v-if="isLocked(v)"
+                                                                        class="text-[8px] h-3.5 bg-amber-500/10 text-amber-600 border-amber-500/20 py-0 font-bold uppercase tracking-tighter gap-1">
+                                                                        <Lock class="w-2 h-2" /> locked
                                                                     </Badge>
                                                                 </div>
                                                                 <div
@@ -233,18 +244,24 @@
                                                             class="flex items-center gap-1 opacity-0 group-hover/v:opacity-100 transition-all">
                                                             <Button variant="outline" size="xs"
                                                                 class="h-7 text-[10px] font-bold"
-                                                                @click="previewObject = { key: obj.Key, versionId: v.VersionId }">Preview</Button>
+                                                                @click="previewObject = { key: obj.Key, versionId: v.VersionID }">Preview</Button>
                                                             <Button variant="outline" size="xs"
                                                                 class="h-7 text-[10px] font-bold"
-                                                                @click="downloadObject(obj.Key, v.VersionId)">Download</Button>
-                                                            <Button v-if="!v.IsLatest && v.VersionId !== 'legacy'"
+                                                                @click="downloadObject(obj.Key, v.VersionID)">Download</Button>
+                                                            <Button variant="outline" size="xs"
+                                                                class="h-7 text-[10px] font-bold"
+                                                                @mousedown="openLockDialog(v)">
+                                                                <Lock class="w-3 h-3" />
+                                                            </Button>
+                                                            <Button v-if="!v.IsLatest && v.VersionID !== 'legacy'"
                                                                 variant="ghost" size="icon"
                                                                 class="h-7 w-7 text-destructive hover:bg-destructive/10"
-                                                                @click="deleteObject(obj.Key, v.VersionId)">
+                                                                @click="deleteObject(obj.Key, v.VersionID)">
                                                                 <Trash2 class="w-3.5 h-3.5" />
                                                             </Button>
                                                         </div>
                                                     </div>
+
                                                 </div>
                                             </div>
                                         </div>
@@ -324,6 +341,73 @@
                 </div>
             </DialogContent>
         </Dialog>
+
+        <Dialog :open="showLockDialog" @update:open="showLockDialog = false">
+            <DialogContent class="sm:max-w-lg">
+                <DialogHeader>
+                    <div class="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                        <Lock class="w-5 h-5 text-primary" />
+                    </div>
+                    <DialogTitle>Object Lock Configuration</DialogTitle>
+                    <DialogDescription>
+                        Manage Write-Once-Read-Many protection for<br />
+                        <code class="text-xs font-mono break-all text-slate-900 dark:text-slate-100">{{ selectedLockObject?.Key }}</code>
+                        <div class="mt-1 text-[10px] uppercase font-bold text-muted-foreground tabular-nums">Version: {{ selectedLockObject?.VersionID }}</div>
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div class="space-y-6 py-6 border-y border-slate-100 dark:border-slate-800">
+                    <!-- Legal Hold -->
+                    <div class="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+                        <div class="flex flex-col gap-1">
+                            <div class="flex items-center gap-2">
+                                <ShieldAlert class="w-4 h-4 text-amber-500" />
+                                <span class="text-sm font-bold">Legal Hold</span>
+                            </div>
+                            <span class="text-[10px] text-muted-foreground max-w-[240px]">Prevents an object version from being deleted even if retention expires.</span>
+                        </div>
+                        <Switch v-model:modelValue="lockSettings.legalHold" />
+                    </div>
+
+                    <!-- Retention -->
+                    <div class="space-y-4">
+                        <div class="flex items-center gap-2 px-1">
+                            <Clock class="w-4 h-4 text-primary" />
+                            <span class="text-sm font-bold">Retention Period</span>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <Label class="text-[10px] uppercase font-bold text-muted-foreground">Mode</Label>
+                                <select v-model="lockSettings.mode" class="w-full h-9 rounded-md border border-slate-200 dark:border-slate-800 bg-background px-3 py-1 text-sm shadow-sm transition-colors cursor-pointer">
+                                    <option value="GOVERNANCE">Governance</option>
+                                    <option value="COMPLIANCE">Compliance</option>
+                                </select>
+                            </div>
+                            <div class="space-y-2">
+                                <Label class="text-[10px] uppercase font-bold text-muted-foreground">Retain Until</Label>
+                                <Input type="datetime-local" v-model="lockSettings.retainUntilDate" class="h-9" />
+                            </div>
+                        </div>
+
+                        <div v-if="lockSettings.mode === 'COMPLIANCE'" class="p-3 rounded-lg bg-destructive/5 border border-destructive/20 text-destructive text-[10px] font-medium leading-relaxed">
+                            <strong class="uppercase mr-1">Warning:</strong> In Compliance mode, the retention period cannot be shortened or removed by any user, including root.
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-center pt-2">
+                    <div class="flex items-center gap-2">
+                        <Badge v-if="isLocked(selectedLockObject)" variant="success" class="text-[9px] uppercase font-bold">Active Lock</Badge>
+                        <Badge v-else variant="secondary" class="text-[9px] uppercase font-bold">No Active Lock</Badge>
+                    </div>
+                    <div class="flex gap-3">
+                        <Button variant="outline" @click="showLockDialog = false">Cancel</Button>
+                        <Button @click="updateLockSettings">Save Changes</Button>
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
     </div>
 </template>
 
@@ -333,7 +417,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
     ChevronLeft, Database, Plus, MoreHorizontal, MoreVertical, FolderPlus, Upload,
     Eye, Download, History, LinkIcon, Trash2, Loader2, File, Folder, CornerLeftUp,
-    Inbox, ShieldCheck, ShieldOff, Clock
+    Inbox, ShieldCheck, ShieldOff, Clock, Lock, ShieldAlert
 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -351,6 +435,7 @@ import { Label } from '@/components/ui/label'
 import {
     Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbSeparator
 } from '@/components/ui/breadcrumb'
+import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 
 const API_BASE = 'http://localhost:8080'
@@ -377,6 +462,14 @@ const previewUrl = ref(null)
 const showCreateFolderDialog = ref(false)
 const newFolderName = ref('')
 const fileInput = ref(null)
+
+const showLockDialog = ref(false)
+const selectedLockObject = ref(null)
+const lockSettings = ref({
+    mode: 'GOVERNANCE',
+    retainUntilDate: '',
+    legalHold: false
+})
 
 async function authFetch(url, options = {}) {
     const credentials = authState.value
@@ -655,4 +748,61 @@ onMounted(() => {
     fetchObjects()
     fetchUsers()
 })
+function formatDateTime(date) {
+    if (!date) return '-'
+    return new Date(date).toLocaleString()
+}
+
+const isLocked = (obj) => {
+    if (!obj) return false
+    if (obj.LegalHold) return true
+    if (obj.RetainUntilDate) {
+        return new Date(obj.RetainUntilDate) > new Date()
+    }
+    return false
+}
+
+function openLockDialog(obj) {
+    selectedLockObject.value = obj
+    lockSettings.value = {
+        mode: obj.LockMode || 'GOVERNANCE',
+        retainUntilDate: obj.RetainUntilDate ? new Date(obj.RetainUntilDate).toISOString().slice(0, 16) : '',
+        legalHold: obj.LegalHold || false
+    }
+    showLockDialog.value = true
+}
+
+async function updateLockSettings() {
+    const bucket = bucketName.value
+    const key = selectedLockObject.value.Key
+    const versionId = selectedLockObject.value.VersionID
+
+    try {
+        // Update Legal Hold
+        await authFetch(`${API_BASE}/admin/buckets/${bucket}/legal-hold?key=${encodeURIComponent(key)}&versionId=${versionId}`, {
+            method: 'PUT',
+            body: { hold: lockSettings.value.legalHold }
+        })
+
+        // Update Retention if set
+        if (lockSettings.value.retainUntilDate) {
+            await authFetch(`${API_BASE}/admin/buckets/${bucket}/retention?key=${encodeURIComponent(key)}&versionId=${versionId}`, {
+                method: 'PUT',
+                body: {
+                    retainUntilDate: new Date(lockSettings.value.retainUntilDate).toISOString(),
+                    mode: lockSettings.value.mode
+                }
+            })
+        }
+
+        toast.success('Object lock settings updated successfully')
+        showLockDialog.value = false
+        fetchObjects()
+        if (objectVersions.value[key]) {
+            fetchVersions(key)
+        }
+    } catch (e) {
+        toast.error('Failed to update object lock settings')
+    }
+}
 </script>

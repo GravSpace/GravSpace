@@ -46,6 +46,10 @@
                                             <History class="w-4 h-4 mr-2" />
                                             Versioning Settings
                                         </DropdownMenuItem>
+                                        <DropdownMenuItem @click="openObjectLockDialog(bucket)">
+                                            <Lock class="w-4 h-4 mr-2" />
+                                            Object Lock Settings
+                                        </DropdownMenuItem>
                                         <DropdownMenuItem @click="togglePublic(bucket)">
                                             <component :is="isPublic(bucket) ? ShieldOff : ShieldCheck"
                                                 class="w-4 h-4 mr-2" />
@@ -143,7 +147,7 @@
                     <DialogTitle>Bucket Versioning</DialogTitle>
                     <DialogDescription>
                         Control version history for <strong class="text-slate-900 dark:text-slate-100">{{ selectedBucket
-                        }}</strong>
+                            }}</strong>
                     </DialogDescription>
                 </DialogHeader>
                 <div class="space-y-4 py-6">
@@ -154,10 +158,42 @@
                             <span class="text-[10px] text-muted-foreground">Store multiple versions of each
                                 object</span>
                         </div>
-                        <Switch v-model:modelValue="versioningEnabled" @update:model-value="(v) => updateVersioning(v)" />
+                        <Switch v-model:modelValue="versioningEnabled"
+                            @update:model-value="(v) => updateVersioning(v)" />
                     </div>
                     <div class="flex justify-end gap-3">
                         <Button variant="outline" @click="showVersioningDialog = false">Close</Button>
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
+
+        <Dialog :open="showObjectLockDialog" @update:open="showObjectLockDialog = false">
+            <DialogContent class="sm:max-w-md">
+                <DialogHeader>
+                    <div class="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                        <Lock class="w-5 h-5 text-primary" />
+                    </div>
+                    <DialogTitle>Object Lock Configuration</DialogTitle>
+                    <DialogDescription>
+                        Control write-once-read-many protection for <strong
+                            class="text-slate-900 dark:text-slate-100">{{ selectedBucket
+                            }}</strong>
+                    </DialogDescription>
+                </DialogHeader>
+                <div class="space-y-4 py-6">
+                    <div
+                        class="flex items-center justify-between p-4 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+                        <div class="flex flex-col gap-1">
+                            <span class="text-sm font-semibold">Enable Object Lock</span>
+                            <span class="text-[10px] text-muted-foreground">Prevent objects from being deleted or
+                                overwritten</span>
+                        </div>
+                        <Switch v-model:modelValue="objectLockEnabled"
+                            @update:model-value="(v) => updateObjectLock(v)" />
+                    </div>
+                    <div class="flex justify-end gap-3">
+                        <Button variant="outline" @click="showObjectLockDialog = false">Close</Button>
                     </div>
                 </div>
             </DialogContent>
@@ -170,7 +206,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
     Plus, Database, MoreVertical, ShieldCheck, ShieldOff,
-    Trash2, RefreshCw, Clock, ChevronRight, Loader2, History
+    Trash2, RefreshCw, Clock, ChevronRight, Loader2, History, Lock
 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -207,6 +243,8 @@ const newBucketName = ref('')
 const showVersioningDialog = ref(false)
 const selectedBucket = ref('')
 const versioningEnabled = ref(false)
+const showObjectLockDialog = ref(false)
+const objectLockEnabled = ref(false)
 
 async function authFetch(url, options = {}) {
     const credentials = authState.value
@@ -373,6 +411,40 @@ async function updateVersioning(versioning) {
         toast.error('Failed to update versioning setting.')
         // Revert the toggle
         versioningEnabled.value = !versioningEnabled.value
+    }
+}
+
+async function openObjectLockDialog(bucket) {
+    selectedBucket.value = bucket
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucket}/info`)
+        if (res.ok) {
+            const info = await res.json()
+            objectLockEnabled.value = info.ObjectLockEnabled || false
+        }
+    } catch (e) {
+        console.error('Failed to fetch bucket info', e)
+        objectLockEnabled.value = false
+    }
+    showObjectLockDialog.value = true
+}
+
+async function updateObjectLock(lockEnabled) {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${selectedBucket.value}/object-lock`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: lockEnabled })
+        })
+        if (res.ok) {
+            toast.success(`Object Lock ${objectLockEnabled.value ? 'enabled' : 'disabled'} for "${selectedBucket.value}".`)
+        } else {
+            throw new Error('Failed to update object lock')
+        }
+    } catch (e) {
+        toast.error('Failed to update object lock setting.')
+        // Revert the toggle
+        objectLockEnabled.value = !objectLockEnabled.value
     }
 }
 

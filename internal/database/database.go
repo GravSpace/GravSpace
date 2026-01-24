@@ -20,19 +20,23 @@ type BucketRow struct {
 	CreatedAt         time.Time
 	Owner             string
 	VersioningEnabled bool
+	ObjectLockEnabled bool
 }
 
 type ObjectRow struct {
-	ID             int64
-	Bucket         string
-	Key            string
-	VersionID      string
-	Size           int64
-	ETag           string
-	ContentType    string
-	ModifiedAt     time.Time
-	IsLatest       bool
-	EncryptionType string // SSE-S3 or empty
+	ID              int64
+	Bucket          string
+	Key             string
+	VersionID       string
+	Size            int64
+	ETag            *string
+	ContentType     *string
+	ModifiedAt      time.Time
+	IsLatest        bool
+	EncryptionType  *string    // SSE-S3 or empty
+	RetainUntilDate *time.Time // Object retention expiry date
+	LegalHold       bool       // Legal hold status
+	LockMode        *string    // COMPLIANCE or GOVERNANCE
 }
 
 type ObjectTag struct {
@@ -130,7 +134,8 @@ func (d *Database) initSchema() error {
 		name TEXT PRIMARY KEY,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		owner TEXT,
-		versioning_enabled BOOLEAN DEFAULT FALSE
+		versioning_enabled BOOLEAN DEFAULT FALSE,
+		object_lock_enabled BOOLEAN DEFAULT FALSE
 	);
 
 	CREATE TABLE IF NOT EXISTS objects (
@@ -144,6 +149,9 @@ func (d *Database) initSchema() error {
 		modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		is_latest BOOLEAN DEFAULT TRUE,
 		encryption_type TEXT,
+		retain_until_date TIMESTAMP,
+		legal_hold BOOLEAN DEFAULT FALSE,
+		lock_mode TEXT,
 		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE,
 		UNIQUE(bucket, key, version_id)
 	);
@@ -209,13 +217,62 @@ func (d *Database) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_multipart_bucket_key ON multipart_uploads(bucket, key);
 	`
 
-	_, err := d.db.Exec(schema)
-	if err != nil {
+	if _, err := d.db.Exec(schema); err != nil {
 		return err
 	}
 
+	// Migrations for existing tables
+	if err := d.addColumnIfNotExists("buckets", "object_lock_enabled", "BOOLEAN DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "retain_until_date", "TIMESTAMP"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "legal_hold", "BOOLEAN DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "lock_mode", "TEXT"); err != nil {
+		return err
+	}
 	// Migration: Add encryption_type if it doesn't exist
-	_, _ = d.db.Exec("ALTER TABLE objects ADD COLUMN encryption_type TEXT")
+	if err := d.addColumnIfNotExists("objects", "encryption_type", "TEXT"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *Database) addColumnIfNotExists(table, column, colType string) error {
+	query := fmt.Sprintf("PRAGMA table_info(%s)", table)
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull int
+		var dfltValue interface{}
+		var pk int
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		alterQuery := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colType)
+		if _, err := d.db.Exec(alterQuery); err != nil {
+			return fmt.Errorf("failed to add column %s to table %s: %w", column, table, err)
+		}
+		fmt.Printf("Added column %s to table %s\n", column, table)
+	}
 
 	return nil
 }
@@ -263,8 +320,8 @@ func (d *Database) BucketExists(name string) (bool, error) {
 
 func (d *Database) GetBucket(name string) (*BucketRow, error) {
 	var bucket BucketRow
-	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled FROM buckets WHERE name = ?", name).
-		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled)
+	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled FROM buckets WHERE name = ?", name).
+		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -275,6 +332,13 @@ func (d *Database) SetBucketVersioning(name string, enabled bool) error {
 	start := time.Now()
 	_, err := d.db.Exec("UPDATE buckets SET versioning_enabled = ? WHERE name = ?", enabled, name)
 	metrics.RecordDBQuery("SetBucketVersioning", time.Since(start))
+	return err
+}
+
+func (d *Database) SetBucketObjectLock(name string, enabled bool) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE buckets SET object_lock_enabled = ? WHERE name = ?", enabled, name)
+	metrics.RecordDBQuery("SetBucketObjectLock", time.Since(start))
 	return err
 }
 
@@ -290,9 +354,9 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	}
 
 	result, err := d.db.Exec(`
-		INSERT INTO objects (bucket, key, version_id, size, etag, content_type, is_latest, encryption_type)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, obj.Bucket, obj.Key, obj.VersionID, obj.Size, obj.ETag, obj.ContentType, obj.IsLatest, obj.EncryptionType)
+		INSERT INTO objects (bucket, key, version_id, size, etag, content_type, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, obj.Bucket, obj.Key, obj.VersionID, obj.Size, obj.ETag, obj.ContentType, obj.IsLatest, obj.EncryptionType, obj.RetainUntilDate, obj.LegalHold, obj.LockMode)
 
 	metrics.RecordDBQuery("CreateObject", time.Since(start))
 	if err != nil {
@@ -304,7 +368,7 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 
 func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) {
 	start := time.Now()
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type 
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
 	          FROM objects WHERE bucket = ? AND key = ?`
 
 	var obj ObjectRow
@@ -314,12 +378,14 @@ func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) 
 		query += " AND version_id = ?"
 		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType)
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode)
 	} else {
 		query += " AND is_latest = TRUE"
 		err = d.db.QueryRow(query, bucket, key).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType)
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode)
 	}
 	metrics.RecordDBQuery("GetObject", time.Since(start))
 
@@ -346,7 +412,7 @@ func (d *Database) DeleteObject(bucket, key, versionID string) error {
 }
 
 func (d *Database) ListObjects(bucket, prefix string, limit int) ([]*ObjectRow, error) {
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type 
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
 	          FROM objects WHERE bucket = ? AND is_latest = TRUE`
 
 	if prefix != "" {
@@ -374,7 +440,8 @@ func (d *Database) ListObjects(bucket, prefix string, limit int) ([]*ObjectRow, 
 	for rows.Next() {
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType); err != nil {
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -383,7 +450,26 @@ func (d *Database) ListObjects(bucket, prefix string, limit int) ([]*ObjectRow, 
 	return objects, rows.Err()
 }
 
+func (d *Database) SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error {
+	start := time.Now()
+	_, err := d.db.Exec(`UPDATE objects SET retain_until_date = ?, lock_mode = ? 
+	                      WHERE bucket = ? AND key = ? AND version_id = ?`,
+		retainUntil, mode, bucket, key, versionID)
+	metrics.RecordDBQuery("SetObjectRetention", time.Since(start))
+	return err
+}
+
+func (d *Database) SetObjectLegalHold(bucket, key, versionID string, hold bool) error {
+	start := time.Now()
+	_, err := d.db.Exec(`UPDATE objects SET legal_hold = ? 
+	                      WHERE bucket = ? AND key = ? AND version_id = ?`,
+		hold, bucket, key, versionID)
+	metrics.RecordDBQuery("SetObjectLegalHold", time.Since(start))
+	return err
+}
+
 // Tag operations
+
 func (d *Database) PutObjectTags(objectID int64, tags map[string]string) error {
 	tx, err := d.db.Begin()
 	if err != nil {

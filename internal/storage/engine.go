@@ -19,12 +19,15 @@ import (
 
 // Object represents a stored object version
 type Object struct {
-	Key            string
-	VersionID      string
-	Size           int64
-	IsLatest       bool
-	ModTime        time.Time
-	EncryptionType string
+	Key             string
+	VersionID       string
+	Size            int64
+	IsLatest        bool
+	ModTime         time.Time
+	EncryptionType  string
+	RetainUntilDate *time.Time
+	LegalHold       bool
+	LockMode        string
 }
 
 // CORSConfiguration represents the S3 CORS configuration
@@ -77,12 +80,15 @@ type Storage interface {
 	DeleteBucket(name string) error
 	GetBucketInfo(name string) (*database.BucketRow, error)
 	SetBucketVersioning(name string, enabled bool) error
+	SetBucketObjectLock(name string, enabled bool) error
 	PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error)
 	GetObject(bucket, key, versionID string) (io.ReadCloser, string, error)
 	StatObject(bucket, key, versionID string) (*Object, error)
 	DeleteObject(bucket, key, versionID string) error
 	ListObjects(bucket, prefix, delimiter string) ([]Object, []string, error)
 	ListVersions(bucket, key string) ([]Object, error)
+	SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error
+	SetObjectLegalHold(bucket, key, versionID string, hold bool) error
 
 	// Multipart Upload
 	InitiateMultipartUpload(bucket, key string) (string, error)
@@ -185,6 +191,27 @@ func (s *FileStorage) SetBucketVersioning(name string, enabled bool) error {
 	return s.DB.SetBucketVersioning(name, enabled)
 }
 
+func (s *FileStorage) SetBucketObjectLock(name string, enabled bool) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.SetBucketObjectLock(name, enabled)
+}
+
+func (s *FileStorage) SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.SetObjectRetention(bucket, key, versionID, retainUntil, mode)
+}
+
+func (s *FileStorage) SetObjectLegalHold(bucket, key, versionID string, hold bool) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.SetObjectLegalHold(bucket, key, versionID, hold)
+}
+
 func (s *FileStorage) ListBuckets() ([]string, error) {
 	// Try cache first
 	if cached, ok := s.Cache.Get(cache.BucketListKey()); ok {
@@ -249,6 +276,23 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 			return "", err
 		}
 		return "", nil
+	}
+
+	// Check if the existing object has a lock (before overwriting)
+	if s.DB != nil {
+		existingObj, _ := s.DB.GetObject(bucket, key, "")
+		if existingObj != nil {
+			// Check for legal hold
+			if existingObj.LegalHold {
+				return "", fmt.Errorf("object is under legal hold and cannot be overwritten")
+			}
+
+			// Check for retention period
+			if existingObj.RetainUntilDate != nil && time.Now().Before(*existingObj.RetainUntilDate) {
+				return "", fmt.Errorf("object is under %s retention until %s and cannot be overwritten",
+					existingObj.LockMode, existingObj.RetainUntilDate.Format(time.RFC3339))
+			}
+		}
 	}
 
 	// Check if versioning is enabled for this bucket
@@ -316,15 +360,16 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 
 	// Save metadata to database
 	if s.DB != nil {
+		contentType := "application/octet-stream"
 		objectRow := &database.ObjectRow{
 			Bucket:         bucket,
 			Key:            key,
 			VersionID:      versionID,
 			Size:           size,
-			ETag:           versionID,
-			ContentType:    "application/octet-stream",
+			ETag:           &versionID,
+			ContentType:    &contentType,
 			IsLatest:       true,
-			EncryptionType: encryptionType,
+			EncryptionType: &encryptionType,
 		}
 		s.DB.CreateObject(objectRow)
 		metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
@@ -366,7 +411,7 @@ func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, s
 	// Check if encrypted
 	if s.DB != nil {
 		obj, _ := s.DB.GetObject(bucket, key, versionID)
-		if obj != nil && obj.EncryptionType == "AES256" {
+		if obj != nil && obj.EncryptionType != nil && *obj.EncryptionType == "AES256" {
 			decryptedReader, err := crypto.DecryptStream(crypto.GetMasterKey(), reader)
 			if err != nil {
 				reader.Close()
@@ -410,8 +455,8 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 	encryptionType := ""
 	if s.DB != nil {
 		obj, _ := s.DB.GetObject(bucket, key, versionID)
-		if obj != nil {
-			encryptionType = obj.EncryptionType
+		if obj != nil && obj.EncryptionType != nil {
+			encryptionType = *obj.EncryptionType
 		}
 	}
 
@@ -430,9 +475,20 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
 
 	// Delete from database
 	if s.DB != nil {
-		// Get size for metrics before deleting
+		// Get object to check for locks before deleting
 		obj, _ := s.DB.GetObject(bucket, key, versionID)
 		if obj != nil {
+			// Check for legal hold
+			if obj.LegalHold {
+				return fmt.Errorf("object is under legal hold and cannot be deleted")
+			}
+
+			// Check for retention period
+			if obj.RetainUntilDate != nil && time.Now().Before(*obj.RetainUntilDate) {
+				return fmt.Errorf("object is under %s retention until %s and cannot be deleted",
+					obj.LockMode, obj.RetainUntilDate.Format(time.RFC3339))
+			}
+
 			metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
 			metrics.StorageBytes.WithLabelValues(bucket).Sub(float64(obj.Size))
 		}
@@ -478,13 +534,29 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter string) ([]Object, [
 				return nil
 			}
 
-			objects = append(objects, Object{
+			obj := Object{
 				Key:       rel,
 				VersionID: "legacy",
 				Size:      info.Size(),
 				IsLatest:  true,
 				ModTime:   info.ModTime(),
-			})
+			}
+
+			if s.DB != nil {
+				dbObj, _ := s.DB.GetObject(bucket, rel, "legacy")
+				if dbObj != nil {
+					obj.RetainUntilDate = dbObj.RetainUntilDate
+					obj.LegalHold = dbObj.LegalHold
+					if dbObj.LockMode != nil {
+						obj.LockMode = *dbObj.LockMode
+					}
+					if dbObj.EncryptionType != nil {
+						obj.EncryptionType = *dbObj.EncryptionType
+					}
+				}
+			}
+
+			objects = append(objects, obj)
 			return nil
 		}
 
@@ -532,13 +604,29 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter string) ([]Object, [
 			vid := string(data)
 			vinfo, _ := os.Stat(filepath.Join(path, vid))
 
-			objects = append(objects, Object{
+			obj := Object{
 				Key:       rel,
 				VersionID: vid,
 				Size:      vinfo.Size(),
 				IsLatest:  true,
 				ModTime:   vinfo.ModTime(),
-			})
+			}
+
+			if s.DB != nil {
+				dbObj, _ := s.DB.GetObject(bucket, rel, vid)
+				if dbObj != nil {
+					obj.RetainUntilDate = dbObj.RetainUntilDate
+					obj.LegalHold = dbObj.LegalHold
+					if dbObj.LockMode != nil {
+						obj.LockMode = *dbObj.LockMode
+					}
+					if dbObj.EncryptionType != nil {
+						obj.EncryptionType = *dbObj.EncryptionType
+					}
+				}
+			}
+
+			objects = append(objects, obj)
 			return filepath.SkipDir
 		}
 
@@ -579,13 +667,29 @@ func (s *FileStorage) ListVersions(bucket, key string) ([]Object, error) {
 	for _, entry := range entries {
 		if !entry.IsDir() && entry.Name() != "latest" {
 			info, _ := entry.Info()
-			versions = append(versions, Object{
+			obj := Object{
 				Key:       key,
 				VersionID: entry.Name(),
 				Size:      info.Size(),
 				IsLatest:  entry.Name() == latestID,
 				ModTime:   info.ModTime(),
-			})
+			}
+
+			if s.DB != nil {
+				dbObj, _ := s.DB.GetObject(bucket, key, entry.Name())
+				if dbObj != nil {
+					obj.RetainUntilDate = dbObj.RetainUntilDate
+					obj.LegalHold = dbObj.LegalHold
+					if dbObj.LockMode != nil {
+						obj.LockMode = *dbObj.LockMode
+					}
+					if dbObj.EncryptionType != nil {
+						obj.EncryptionType = *dbObj.EncryptionType
+					}
+				}
+			}
+
+			versions = append(versions, obj)
 		}
 	}
 

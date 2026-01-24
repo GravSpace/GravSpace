@@ -105,6 +105,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 			// Read latest version
 			versionData, err := os.ReadFile(latestPath)
 			if err != nil {
+				fmt.Printf("Sync error reading latest for %s: %v\n", relPath, err)
 				errors++
 				return nil
 			}
@@ -114,27 +115,36 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 			versionPath := filepath.Join(path, versionID)
 			versionInfo, err := os.Stat(versionPath)
 			if err != nil {
+				fmt.Printf("Sync error stating version %s for %s: %v\n", versionID, relPath, err)
 				errors++
 				return nil
 			}
 
 			// Check if object exists in database
-			dbObj, _ := sw.storage.DB.GetObject(bucketName, relPath, versionID)
+			dbObj, err := sw.storage.DB.GetObject(bucketName, relPath, versionID)
+			if err != nil {
+				fmt.Printf("Sync error checking object %s in DB: %v\n", relPath, err)
+				errors++
+				return nil
+			}
+
 			if dbObj == nil {
 				// Object not in database, add it
+				contentType := "application/octet-stream"
 				objectRow := &database.ObjectRow{
 					Bucket:      bucketName,
 					Key:         relPath,
 					VersionID:   versionID,
 					Size:        versionInfo.Size(),
-					ETag:        versionID,
-					ContentType: "application/octet-stream",
+					ETag:        &versionID,
+					ContentType: &contentType,
 					IsLatest:    true,
 				}
 				_, err := sw.storage.DB.CreateObject(objectRow)
 				if err == nil {
 					synced++
 				} else {
+					fmt.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
 					errors++
 				}
 			}
