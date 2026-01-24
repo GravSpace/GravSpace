@@ -120,6 +120,23 @@ export function useAuth() {
             throw new Error('Session expired')
         }
 
+        // Enhanced access denied handling
+        if (res.status === 403) {
+            try {
+                const errorData = await res.clone().json()
+                const { toast } = await import('vue-sonner')
+                toast.error('Access Denied', {
+                    description: errorData.error || errorData.message || 'You do not have sufficient permissions to perform this action. Contact your administrator for access.'
+                })
+            } catch (e) {
+                // If JSON parsing fails, show generic message
+                const { toast } = await import('vue-sonner')
+                toast.error('Access Denied', {
+                    description: 'Insufficient permissions. Contact your administrator.'
+                })
+            }
+        }
+
         return res
     }
 

@@ -242,7 +242,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/composables/useAuth'
 
 const API_BASE = 'http://localhost:8080'
-const { authState } = useAuth()
+const { authFetch } = useAuth()
 
 const policies = ref([])
 const showPolicyModal = ref(false)
@@ -258,25 +258,16 @@ const newPolicyJson = ref(JSON.stringify({
     }]
 }, null, 2))
 
-async function authFetch(url, options = {}) {
-    const credentials = authState.value
-    const headers = {
-        'Authorization': `Bearer ${credentials.token}`
-    }
-    if (options.body && typeof options.body === 'string') {
-        headers['Content-Type'] = 'application/json'
-    }
-
-    return fetch(url, {
-        ...options,
-        headers: { ...headers, ...options.headers }
-    })
-}
-
 async function fetchPolicies() {
-    // Note: Backend currently doesn't have a global policies endpoint
-    // This is a placeholder for future implementation
-    console.log('Fetching policies...')
+    try {
+        const res = await authFetch(`${API_BASE}/admin/policies`)
+        if (res.ok) {
+            policies.value = await res.json()
+        }
+    } catch (e) {
+        console.error('Failed to fetch policies', e)
+        toast.error('Failed to synchronize policy templates.')
+    }
 }
 
 async function createPolicy() {
@@ -284,33 +275,39 @@ async function createPolicy() {
         const policy = JSON.parse(newPolicyJson.value)
         const payload = { ...policy, name: policyName.value }
 
-        // This endpoint might not exist yet in the backend
         const res = await authFetch(`${API_BASE}/admin/policies`, {
             method: 'POST',
-            body: JSON.stringify(payload)
+            body: payload
         })
 
         if (res.ok) {
             showPolicyModal.value = false
+            const createdName = policyName.value
             policyName.value = ''
-            toast.success(`Policy "${policyName.value}" created successfully.`)
+            toast.success(`Policy "${createdName}" created successfully.`)
             await fetchPolicies()
         } else {
-            toast.error('Failed to create policy template.')
+            const err = await res.text()
+            toast.error(`Failed to create policy template: ${err}`)
         }
     } catch (e) {
-        toast.error("Invalid JSON: Please ensure the policy document is valid.")
+        toast.error(`Sync error: ${e.message}`)
     }
 }
 
 async function deletePolicy(name) {
     if (!confirm(`Permanently delete policy "${name}"? This action cannot be undone.`)) return
     try {
-        await authFetch(`${API_BASE}/admin/policies/${name}`, { method: 'DELETE' })
-        toast.success(`Policy "${name}" removed successfully.`)
-        await fetchPolicies()
+        const res = await authFetch(`${API_BASE}/admin/policies/${name}`, { method: 'DELETE' })
+        if (res.ok) {
+            toast.success(`Policy "${name}" removed successfully.`)
+            await fetchPolicies()
+        } else {
+            const err = await res.text()
+            toast.error(`Failed to delete policy: ${err}`)
+        }
     } catch (e) {
-        toast.error('Failed to delete policy.')
+        toast.error('Failed to communicate with identity service.')
     }
 }
 

@@ -36,15 +36,17 @@ type User struct {
 }
 
 type UserManager struct {
-	DB    *database.Database
-	Users map[string]*User // Cache for performance, but sync with DB
-	mu    sync.RWMutex
+	DB       *database.Database
+	Users    map[string]*User  // Cache for performance, but sync with DB
+	Policies map[string]Policy // Global policy templates
+	mu       sync.RWMutex
 }
 
 func NewUserManager(db *database.Database) (*UserManager, error) {
 	um := &UserManager{
-		Users: make(map[string]*User),
-		DB:    db,
+		Users:    make(map[string]*User),
+		Policies: make(map[string]Policy),
+		DB:       db,
 	}
 
 	if db != nil {
@@ -112,6 +114,60 @@ func (um *UserManager) LoadFromDB() error {
 		um.DB.UpsertUser("anonymous", "")
 	}
 
+	// Load global policies
+	globalPolicies, err := um.DB.ListGlobalPolicies()
+	if err != nil {
+		return err
+	}
+	for name, data := range globalPolicies {
+		var policy Policy
+		if err := json.Unmarshal([]byte(data), &policy); err == nil {
+			policy.Name = name // Ensure name matches the key
+			um.Policies[name] = policy
+		}
+	}
+
+	return nil
+}
+
+func (um *UserManager) CreatePolicyTemplate(name string, policy Policy) error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	policy.Name = name
+	data, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+
+	if err := um.DB.UpsertGlobalPolicy(name, string(data)); err != nil {
+		return err
+	}
+
+	um.Policies[name] = policy
+	return nil
+}
+
+func (um *UserManager) ListPolicyTemplates() []Policy {
+	um.mu.RLock()
+	defer um.mu.RUnlock()
+
+	var list []Policy
+	for _, p := range um.Policies {
+		list = append(list, p)
+	}
+	return list
+}
+
+func (um *UserManager) DeletePolicyTemplate(name string) error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	if err := um.DB.DeleteGlobalPolicy(name); err != nil {
+		return err
+	}
+
+	delete(um.Policies, name)
 	return nil
 }
 
@@ -238,6 +294,39 @@ func (um *UserManager) RemovePolicy(username, policyName string) error {
 
 	if um.DB != nil {
 		return um.DB.DeleteUserPolicy(username, policyName)
+	}
+	return nil
+}
+
+func (um *UserManager) AttachPolicyTemplate(username, templateName string) error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	// Get the global policy template
+	template, ok := um.Policies[templateName]
+	if !ok {
+		return os.ErrNotExist
+	}
+
+	user, ok := um.Users[username]
+	if !ok {
+		return os.ErrNotExist
+	}
+
+	// Check if policy already attached
+	for _, p := range user.Policies {
+		if p.Name == templateName {
+			return os.ErrExist
+		}
+	}
+
+	// Add the template to user's policies
+	user.Policies = append(user.Policies, template)
+
+	// Persist to database
+	if um.DB != nil {
+		pJSON, _ := json.Marshal(template)
+		return um.DB.UpsertUserPolicy(username, template.Name, string(pJSON))
 	}
 	return nil
 }

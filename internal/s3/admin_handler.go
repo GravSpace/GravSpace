@@ -5,6 +5,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -305,6 +306,28 @@ func (h *AdminHandler) RemovePolicy(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+func (h *AdminHandler) AttachPolicyTemplate(c echo.Context) error {
+	username := c.Param("username")
+	var req struct {
+		TemplateName string `json:"templateName"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, echo.Map{"error": "Invalid request"})
+	}
+
+	if err := h.UserManager.AttachPolicyTemplate(username, req.TemplateName); err != nil {
+		if err == os.ErrNotExist {
+			return c.JSON(http.StatusNotFound, echo.Map{"error": "User or policy template not found"})
+		}
+		if err == os.ErrExist {
+			return c.JSON(http.StatusConflict, echo.Map{"error": "Policy already attached to user"})
+		}
+		return c.JSON(http.StatusInternalServerError, echo.Map{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{"message": "Policy template attached successfully"})
+}
+
 func (h *AdminHandler) GetSystemStats(c echo.Context) error {
 	// Dummy stats for now
 	stats := map[string]interface{}{
@@ -365,4 +388,27 @@ func (h *AdminHandler) GeneratePresignURL(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"url": presignedURL,
 	})
+}
+
+func (h *AdminHandler) ListPolicies(c echo.Context) error {
+	return c.JSON(http.StatusOK, h.UserManager.ListPolicyTemplates())
+}
+
+func (h *AdminHandler) CreatePolicy(c echo.Context) error {
+	var policy auth.Policy
+	if err := c.Bind(&policy); err != nil {
+		return err
+	}
+	if err := h.UserManager.CreatePolicyTemplate(policy.Name, policy); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusCreated)
+}
+
+func (h *AdminHandler) DeletePolicy(c echo.Context) error {
+	name := c.Param("name")
+	if err := h.UserManager.DeletePolicyTemplate(name); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
 }

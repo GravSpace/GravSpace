@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/metrics"
@@ -85,26 +86,54 @@ type PolicyRecord struct {
 //
 // Environment variables:
 //
-//	TURSO_DATABASE_URL - Turso database URL
-//	TURSO_AUTH_TOKEN - Turso authentication token
+//	DATABASE_URL or TURSO_DATABASE_URL - Database URL (e.g. libsql://... for Turso or file://... for local)
+//	DATABASE_AUTH_TOKEN or TURSO_AUTH_TOKEN - Database authentication token
 func NewDatabase(dbPath string) (*Database, error) {
-	// Check for Turso environment variables
-	tursoURL := os.Getenv("TURSO_DATABASE_URL")
-	tursoToken := os.Getenv("TURSO_AUTH_TOKEN")
+	// Check for environment variables
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		dbURL = os.Getenv("TURSO_DATABASE_URL")
+	}
+
+	dbToken := os.Getenv("DATABASE_AUTH_TOKEN")
+	if dbToken == "" {
+		dbToken = os.Getenv("TURSO_AUTH_TOKEN")
+	}
 
 	var db *sql.DB
 	var err error
 
-	if tursoURL != "" && tursoToken != "" {
-		// Use Turso remote database
-		connStr := fmt.Sprintf("%s?authToken=%s", tursoURL, tursoToken)
-		db, err = sql.Open("turso", connStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to connect to Turso remote: %w", err)
+	if dbURL != "" {
+		// If it's a remote URL (starts with libsql:// or https://)
+		if strings.HasPrefix(dbURL, "libsql://") || strings.HasPrefix(dbURL, "https://") {
+			connStr := dbURL
+			if dbToken != "" && !strings.Contains(dbURL, "authToken=") {
+				connStr = fmt.Sprintf("%s?authToken=%s", dbURL, dbToken)
+			}
+			db, err = sql.Open("turso", connStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to connect to remote database: %w", err)
+			}
+			fmt.Printf("Connected to remote database: %s\n", dbURL)
+		} else if strings.HasPrefix(dbURL, "file:") {
+			// Local SQLite via DATABASE_URL
+			dbPath = strings.TrimPrefix(dbURL, "file:")
+			db, err = sql.Open("sqlite", dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open local database from URL: %w", err)
+			}
+			fmt.Printf("Connected to local database via URL: %s\n", dbPath)
+		} else {
+			// Fallback to legacy Turso handling if it's just a hostname/URL without protocol
+			connStr := fmt.Sprintf("%s?authToken=%s", dbURL, dbToken)
+			db, err = sql.Open("turso", connStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to connect to remote database: %w", err)
+			}
+			fmt.Printf("Connected to remote database: %s\n", dbURL)
 		}
-		fmt.Println("Connected to Turso remote database")
 	} else {
-		// Use local SQLite
+		// Use local SQLite fallback
 		if dbPath == "" {
 			dbPath = "./data/metadata.db"
 		}
@@ -112,7 +141,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to open local database: %w", err)
 		}
-		fmt.Println("Connected to local SQLite database")
+		fmt.Printf("Connected to local SQLite database: %s\n", dbPath)
 	}
 
 	// Note: Turso/libSQL driver may not support certain SQLite PRAGMAs directly via Exec.
@@ -210,6 +239,12 @@ func (d *Database) initSchema() error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE,
 		UNIQUE(username, name)
+	);
+
+	CREATE TABLE IF NOT EXISTS global_policies (
+		name TEXT PRIMARY KEY,
+		policy_data TEXT NOT NULL, -- JSON
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key ON objects(bucket, key);
@@ -603,6 +638,38 @@ func (d *Database) DeleteUser(username string) error {
 func (d *Database) CreateAccessKey(username, keyID, secret string) error {
 	_, err := d.db.Exec("INSERT INTO access_keys (username, access_key_id, secret_access_key) VALUES (?, ?, ?)",
 		username, keyID, secret)
+	return err
+}
+
+// Global Policy operations
+func (d *Database) UpsertGlobalPolicy(name, data string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO global_policies (name, policy_data) VALUES (?, ?)
+		ON CONFLICT(name) DO UPDATE SET policy_data = excluded.policy_data
+	`, name, data)
+	return err
+}
+
+func (d *Database) ListGlobalPolicies() (map[string]string, error) {
+	rows, err := d.db.Query("SELECT name, policy_data FROM global_policies")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	policies := make(map[string]string)
+	for rows.Next() {
+		var name, data string
+		if err := rows.Scan(&name, &data); err != nil {
+			return nil, err
+		}
+		policies[name] = data
+	}
+	return policies, nil
+}
+
+func (d *Database) DeleteGlobalPolicy(name string) error {
+	_, err := d.db.Exec("DELETE FROM global_policies WHERE name = ?", name)
 	return err
 }
 

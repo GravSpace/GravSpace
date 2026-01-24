@@ -3,7 +3,10 @@ package main
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
+
+	"os"
 
 	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/auth"
@@ -21,11 +24,26 @@ import (
 func main() {
 	e := echo.New()
 
+	// Environment variables
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "secret" // Fallback for dev, should be set in prod
+		log.Println("Warning: JWT_SECRET not set, using default 'secret'")
+	}
+
 	// Middleware
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
+	e.Use(middleware.Secure())
+
+	corsOrigins := os.Getenv("CORS_ORIGINS")
+	allowedOrigins := []string{"*"}
+	if corsOrigins != "" {
+		allowedOrigins = strings.Split(corsOrigins, ",")
+	}
+
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins:  []string{"*"},
+		AllowOrigins:  allowedOrigins,
 		AllowHeaders:  []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization, "x-amz-date", "x-amz-content-sha256", "x-amz-server-side-encryption"},
 		AllowMethods:  []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodPost, http.MethodDelete, http.MethodOptions},
 		ExposeHeaders: []string{"x-amz-version-id", "x-amz-server-side-encryption", "ETag", "Content-Length", "Last-Modified"},
@@ -96,7 +114,7 @@ func main() {
 			"exp":      time.Now().Add(time.Hour * 72).Unix(),
 		})
 
-		t, err := token.SignedString([]byte("secret")) // Use a proper secret in production
+		t, err := token.SignedString([]byte(jwtSecret))
 		if err != nil {
 			return err
 		}
@@ -109,10 +127,12 @@ func main() {
 
 	// Admin Routes
 	admin := e.Group("/admin")
-	// Add JWT middleware here once implemented or use Echo's default
-	admin.Use(middleware.JWT([]byte("secret")))
+	admin.Use(middleware.JWT([]byte(jwtSecret)))
 
-	admin.GET("/stats", adminHandler.GetSystemStats)
+	admin.Use(middleware.JWT([]byte(jwtSecret)))
+
+	// General Admin Routes (accessible by any logged-in user with appropriate policy if S3-based,
+	// but currently Console access uses JWT which we want to restrict for IAM)
 	admin.GET("/buckets", adminHandler.ListBuckets)
 	admin.PUT("/buckets/:bucket", adminHandler.CreateBucket)
 	admin.DELETE("/buckets/:bucket", adminHandler.DeleteBucket)
@@ -126,15 +146,26 @@ func main() {
 	admin.GET("/buckets/:bucket/download/*", adminHandler.DownloadObject)
 	admin.PUT("/buckets/:bucket/objects/*", adminHandler.PutObject)
 	admin.DELETE("/buckets/:bucket/objects/*", adminHandler.DeleteObject)
-	admin.GET("/users", adminHandler.ListUsers)
-	admin.POST("/users", adminHandler.CreateUser)
-	admin.DELETE("/users/:username", adminHandler.DeleteUser)
-	admin.POST("/users/:username/password", adminHandler.UpdatePassword)
-	admin.POST("/users/:username/keys", adminHandler.GenerateKey)
-	admin.DELETE("/users/:username/keys/:id", adminHandler.DeleteKey)
-	admin.POST("/users/:username/policies", adminHandler.AddPolicy)
-	admin.DELETE("/users/:username/policies/:name", adminHandler.RemovePolicy)
-	admin.GET("/presign", adminHandler.GeneratePresignURL)
+
+	// Restricted Admin Routes (IAM & System)
+	iam := admin.Group("")
+	iam.Use(auth.AdminOnlyMiddleware)
+
+	iam.GET("/stats", adminHandler.GetSystemStats)
+	iam.GET("/users", adminHandler.ListUsers)
+	iam.POST("/users", adminHandler.CreateUser)
+	iam.DELETE("/users/:username", adminHandler.DeleteUser)
+	iam.POST("/users/:username/password", adminHandler.UpdatePassword)
+	iam.POST("/users/:username/keys", adminHandler.GenerateKey)
+	iam.DELETE("/users/:username/keys/:id", adminHandler.DeleteKey)
+	iam.POST("/users/:username/policies", adminHandler.AddPolicy)
+	iam.POST("/users/:username/policies/attach", adminHandler.AttachPolicyTemplate)
+	iam.DELETE("/users/:username/policies/:name", adminHandler.RemovePolicy)
+	iam.GET("/presign", adminHandler.GeneratePresignURL)
+
+	iam.GET("/policies", adminHandler.ListPolicies)
+	iam.POST("/policies", adminHandler.CreatePolicy)
+	iam.DELETE("/policies/:name", adminHandler.DeletePolicy)
 
 	// S3 API Routes (Protected)
 	s3 := e.Group("")

@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -57,7 +57,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 		return
 	}
 
-	fmt.Println("Starting filesystem sync...")
+	log.Println("Starting filesystem sync...")
 	startTime := time.Now()
 
 	synced := 0
@@ -66,7 +66,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 	// Walk through all buckets
 	buckets, err := os.ReadDir(sw.storage.Root)
 	if err != nil {
-		fmt.Printf("Sync error: %v\n", err)
+		log.Printf("Sync error reading root: %v\n", err)
 		return
 	}
 
@@ -105,7 +105,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 			// Read latest version
 			versionData, err := os.ReadFile(latestPath)
 			if err != nil {
-				fmt.Printf("Sync error reading latest for %s: %v\n", relPath, err)
+				log.Printf("Sync error reading latest for %s: %v\n", relPath, err)
 				errors++
 				return nil
 			}
@@ -115,7 +115,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 			versionPath := filepath.Join(path, versionID)
 			versionInfo, err := os.Stat(versionPath)
 			if err != nil {
-				fmt.Printf("Sync error stating version %s for %s: %v\n", versionID, relPath, err)
+				log.Printf("Sync error stating version %s for %s: %v\n", versionID, relPath, err)
 				errors++
 				return nil
 			}
@@ -123,7 +123,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 			// Check if object exists in database
 			dbObj, err := sw.storage.DB.GetObject(bucketName, relPath, versionID)
 			if err != nil {
-				fmt.Printf("Sync error checking object %s in DB: %v\n", relPath, err)
+				log.Printf("Sync error checking object %s in DB: %v\n", relPath, err)
 				errors++
 				return nil
 			}
@@ -144,7 +144,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 				if err == nil {
 					synced++
 				} else {
-					fmt.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
+					log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
 					errors++
 				}
 			}
@@ -153,10 +153,10 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 		})
 
 		if err != nil {
-			fmt.Printf("Error syncing bucket %s: %v\n", bucketName, err)
+			log.Printf("Error syncing bucket %s: %v\n", bucketName, err)
 		}
 	}
 
 	duration := time.Since(startTime)
-	fmt.Printf("Filesystem sync completed: %d objects synced, %d errors in %v\n", synced, errors, duration)
+	log.Printf("Filesystem sync completed: %d objects synced, %d errors in %v\n", synced, errors, duration)
 }

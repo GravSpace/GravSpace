@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/GravSpace/GravSpace/internal/audit"
+	"github.com/golang-jwt/jwt"
 	"github.com/labstack/echo/v4"
 )
 
@@ -166,6 +167,20 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 			c.Set("user", user)
 			return next(c)
 		}
+	}
+}
+
+func AdminOnlyMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		user := c.Get("user").(*jwt.Token)
+		claims := user.Claims.(jwt.MapClaims)
+		username := claims["username"].(string)
+
+		if username != "admin" {
+			return c.JSON(http.StatusForbidden, echo.Map{"error": "Admin access required"})
+		}
+
+		return next(c)
 	}
 }
 

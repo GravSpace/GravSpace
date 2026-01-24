@@ -233,7 +233,49 @@
                     </DialogDescription>
                 </DialogHeader>
                 <div class="space-y-4 py-4">
-                    <div class="space-y-2">
+                    <!-- Mode Selector -->
+                    <div class="flex gap-2 p-1 bg-muted rounded-lg">
+                        <button @click="attachmentMode = 'template'"
+                            :class="attachmentMode === 'template' ? 'bg-background shadow-sm' : 'hover:bg-background/50'"
+                            class="flex-1 px-3 py-2 rounded-md text-xs font-bold uppercase tracking-wider transition-all">
+                            <div class="flex items-center justify-center gap-2">
+                                <Shield class="w-3.5 h-3.5" />
+                                Global Template
+                            </div>
+                        </button>
+                        <button @click="attachmentMode = 'inline'"
+                            :class="attachmentMode === 'inline' ? 'bg-background shadow-sm' : 'hover:bg-background/50'"
+                            class="flex-1 px-3 py-2 rounded-md text-xs font-bold uppercase tracking-wider transition-all">
+                            <div class="flex items-center justify-center gap-2">
+                                <FileCode class="w-3.5 h-3.5" />
+                                Inline Policy
+                            </div>
+                        </button>
+                    </div>
+
+                    <!-- Template Mode -->
+                    <div v-if="attachmentMode === 'template'" class="space-y-2">
+                        <Label class="text-xs font-bold uppercase tracking-wider opacity-70">Select Policy
+                            Template</Label>
+                        <select v-model="selectedTemplate"
+                            class="w-full h-10 rounded-md border border-slate-200 dark:border-slate-800 bg-background px-3 py-2 text-sm shadow-sm transition-colors cursor-pointer focus:ring-2 focus:ring-primary">
+                            <option value="" disabled>Choose a template...</option>
+                            <option v-for="template in policyTemplates" :key="template.name" :value="template.name">
+                                {{ template.name }}
+                            </option>
+                        </select>
+                        <div v-if="selectedTemplate"
+                            class="mt-3 p-3 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                            <div class="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                                Preview</div>
+                            <pre
+                                class="text-[10px] font-mono text-slate-600 dark:text-slate-400 overflow-auto max-h-32">{{
+                                    JSON.stringify(policyTemplates.find(t => t.name === selectedTemplate), null, 2) }}</pre>
+                        </div>
+                    </div>
+
+                    <!-- Inline Mode -->
+                    <div v-if="attachmentMode === 'inline'" class="space-y-2">
                         <div class="flex items-center justify-between">
                             <Label class="text-xs font-bold uppercase tracking-wider opacity-70">JSON Document (IAM
                                 Standard)</Label>
@@ -251,9 +293,11 @@
                             </div>
                         </div>
                     </div>
+
                     <div class="flex justify-end gap-3 pt-2">
                         <Button variant="outline" @click="showPolicyModal = false">Discard</Button>
-                        <Button @click="attachPolicy" class="bg-indigo-600 hover:bg-indigo-700">
+                        <Button @click="attachPolicy" :disabled="attachmentMode === 'template' && !selectedTemplate"
+                            class="bg-indigo-600 hover:bg-indigo-700">
                             Sync Permissions
                         </Button>
                     </div>
@@ -297,7 +341,7 @@
 import { ref, onMounted } from 'vue'
 import {
     Plus, MoreHorizontal, ShieldCheck, UserPlus, Trash, RefreshCw, KeyIcon,
-    Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2
+    Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2, FileCode
 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -329,6 +373,9 @@ const selectedUserForPassword = ref('')
 const newPassword = ref('')
 const showPolicyModal = ref(false)
 const selectedUserForPolicy = ref(null)
+const attachmentMode = ref('template')
+const policyTemplates = ref([])
+const selectedTemplate = ref('')
 const newPolicyJson = ref(JSON.stringify({
     name: "ReadOnlyAccess",
     version: "2012-10-17",
@@ -351,6 +398,17 @@ async function fetchUsers() {
         toast.error('Identity sync failed.')
     } finally {
         loading.value = false
+    }
+}
+
+async function fetchPolicyTemplates() {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/policies`)
+        if (res.ok) {
+            policyTemplates.value = await res.json()
+        }
+    } catch (e) {
+        console.error('Failed to fetch policy templates')
     }
 }
 
@@ -431,7 +489,7 @@ async function updatePassword() {
     try {
         const res = await authFetch(`${API_BASE}/admin/users/${selectedUserForPassword.value}/password`, {
             method: 'POST',
-            body: JSON.stringify({ password: newPassword.value })
+            body: { password: newPassword.value }
         })
         if (res.ok) {
             toast.success('Credentials updated successfully.')
@@ -447,23 +505,42 @@ async function updatePassword() {
 
 function openPolicyModal(username) {
     selectedUserForPolicy.value = username
+    attachmentMode.value = 'template'
+    selectedTemplate.value = ''
     showPolicyModal.value = true
 }
 
 async function attachPolicy() {
     try {
-        const policy = JSON.parse(newPolicyJson.value)
-        const res = await authFetch(`${API_BASE}/admin/users/${selectedUserForPolicy.value}/policies`, {
-            method: 'POST',
-            body: JSON.stringify(policy)
-        })
-        if (res.ok) {
-            showPolicyModal.value = false
-            toast.success('Governance policies synchronized.')
-            await fetchUsers()
+        if (attachmentMode.value === 'template') {
+            // Attach global template
+            const res = await authFetch(`${API_BASE}/admin/users/${selectedUserForPolicy.value}/policies/attach`, {
+                method: 'POST',
+                body: { templateName: selectedTemplate.value }
+            })
+            if (res.ok) {
+                showPolicyModal.value = false
+                toast.success('Policy template attached successfully.')
+                await fetchUsers()
+            } else {
+                const errorData = await res.json()
+                throw new Error(errorData.error || 'Failed to attach template')
+            }
         } else {
-            const err = await res.text()
-            throw new Error(err)
+            // Attach inline policy
+            const policy = JSON.parse(newPolicyJson.value)
+            const res = await authFetch(`${API_BASE}/admin/users/${selectedUserForPolicy.value}/policies`, {
+                method: 'POST',
+                body: policy
+            })
+            if (res.ok) {
+                showPolicyModal.value = false
+                toast.success('Inline policy synchronized.')
+                await fetchUsers()
+            } else {
+                const err = await res.text()
+                throw new Error(err)
+            }
         }
     } catch (e) {
         toast.error(`Sync error: ${e.message}`)
@@ -499,6 +576,7 @@ function formatJson() {
 
 onMounted(() => {
     fetchUsers()
+    fetchPolicyTemplates()
 })
 </script>
 
