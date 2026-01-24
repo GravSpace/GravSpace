@@ -1,4 +1,5 @@
 import { ref, readonly, watch, onMounted } from 'vue'
+import { useRouter } from '#app'
 
 interface AuthState {
     accessKeyId: string
@@ -91,10 +92,42 @@ function getCredentials() {
 }
 
 export function useAuth() {
+    const router = useRouter()
+
+    async function authFetch(url: string, options: any = {}) {
+        if (!authState.value.isAuthenticated) {
+            router.push('/login')
+            throw new Error('Not authenticated')
+        }
+
+        const headers: any = {
+            'Authorization': `Bearer ${authState.value.token}`
+        }
+
+        if (options.body && !(options.body instanceof File) && !(options.body instanceof FormData) && typeof options.body === 'object') {
+            headers['Content-Type'] = 'application/json'
+            options.body = JSON.stringify(options.body)
+        }
+
+        const res = await fetch(url, {
+            ...options,
+            headers: { ...headers, ...options.headers }
+        })
+
+        if (res.status === 401) {
+            logout()
+            router.push('/login')
+            throw new Error('Session expired')
+        }
+
+        return res
+    }
+
     return {
         authState: readonly(authState),
         login,
         logout,
-        getCredentials
+        getCredentials,
+        authFetch
     }
 }

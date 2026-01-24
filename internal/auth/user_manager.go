@@ -164,6 +164,29 @@ func (um *UserManager) GenerateKey(username string) *AccessKey {
 	return &key
 }
 
+func (um *UserManager) DeleteKey(username, keyID string) error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	user, ok := um.Users[username]
+	if !ok {
+		return os.ErrNotExist
+	}
+
+	var next []AccessKey
+	for _, k := range user.AccessKeys {
+		if k.AccessKeyID != keyID {
+			next = append(next, k)
+		}
+	}
+	user.AccessKeys = next
+
+	if um.DB != nil {
+		return um.DB.DeleteAccessKey(keyID)
+	}
+	return nil
+}
+
 func (um *UserManager) GetUserByKey(keyID string) (*User, string) {
 	um.mu.RLock()
 	defer um.mu.RUnlock()

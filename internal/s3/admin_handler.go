@@ -275,6 +275,15 @@ func (h *AdminHandler) GenerateKey(c echo.Context) error {
 	return c.JSON(http.StatusOK, key)
 }
 
+func (h *AdminHandler) DeleteKey(c echo.Context) error {
+	username := c.Param("username")
+	keyID := c.Param("id")
+	if err := h.UserManager.DeleteKey(username, keyID); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
 func (h *AdminHandler) AddPolicy(c echo.Context) error {
 	username := c.Param("username")
 	var policy auth.Policy

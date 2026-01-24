@@ -351,20 +351,25 @@
                     <DialogTitle>Object Lock Configuration</DialogTitle>
                     <DialogDescription>
                         Manage Write-Once-Read-Many protection for<br />
-                        <code class="text-xs font-mono break-all text-slate-900 dark:text-slate-100">{{ selectedLockObject?.Key }}</code>
-                        <div class="mt-1 text-[10px] uppercase font-bold text-muted-foreground tabular-nums">Version: {{ selectedLockObject?.VersionID }}</div>
+                        <code class="text-xs font-mono break-all text-slate-900 dark:text-slate-100">{{ selectedLockObject?.Key
+                        }}</code>
+                        <div class="mt-1 text-[10px] uppercase font-bold text-muted-foreground tabular-nums">Version: {{
+                            selectedLockObject?.VersionID }}</div>
                     </DialogDescription>
                 </DialogHeader>
 
                 <div class="space-y-6 py-6 border-y border-slate-100 dark:border-slate-800">
                     <!-- Legal Hold -->
-                    <div class="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
+                    <div
+                        class="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">
                         <div class="flex flex-col gap-1">
                             <div class="flex items-center gap-2">
                                 <ShieldAlert class="w-4 h-4 text-amber-500" />
                                 <span class="text-sm font-bold">Legal Hold</span>
                             </div>
-                            <span class="text-[10px] text-muted-foreground max-w-[240px]">Prevents an object version from being deleted even if retention expires.</span>
+                            <span class="text-[10px] text-muted-foreground max-w-[240px]">Prevents an object version
+                                from being
+                                deleted even if retention expires.</span>
                         </div>
                         <Switch v-model:modelValue="lockSettings.legalHold" />
                     </div>
@@ -375,30 +380,37 @@
                             <Clock class="w-4 h-4 text-primary" />
                             <span class="text-sm font-bold">Retention Period</span>
                         </div>
-                        
+
                         <div class="grid grid-cols-2 gap-4">
                             <div class="space-y-2">
                                 <Label class="text-[10px] uppercase font-bold text-muted-foreground">Mode</Label>
-                                <select v-model="lockSettings.mode" class="w-full h-9 rounded-md border border-slate-200 dark:border-slate-800 bg-background px-3 py-1 text-sm shadow-sm transition-colors cursor-pointer">
+                                <select v-model="lockSettings.mode"
+                                    class="w-full h-9 rounded-md border border-slate-200 dark:border-slate-800 bg-background px-3 py-1 text-sm shadow-sm transition-colors cursor-pointer">
                                     <option value="GOVERNANCE">Governance</option>
                                     <option value="COMPLIANCE">Compliance</option>
                                 </select>
                             </div>
                             <div class="space-y-2">
-                                <Label class="text-[10px] uppercase font-bold text-muted-foreground">Retain Until</Label>
+                                <Label class="text-[10px] uppercase font-bold text-muted-foreground">Retain
+                                    Until</Label>
                                 <Input type="datetime-local" v-model="lockSettings.retainUntilDate" class="h-9" />
                             </div>
                         </div>
 
-                        <div v-if="lockSettings.mode === 'COMPLIANCE'" class="p-3 rounded-lg bg-destructive/5 border border-destructive/20 text-destructive text-[10px] font-medium leading-relaxed">
-                            <strong class="uppercase mr-1">Warning:</strong> In Compliance mode, the retention period cannot be shortened or removed by any user, including root.
+                        <div v-if="lockSettings.mode === 'COMPLIANCE'"
+                            class="p-3 rounded-lg bg-destructive/5 border border-destructive/20 text-destructive text-[10px] font-medium leading-relaxed">
+                            <strong class="uppercase mr-1">Warning:</strong> In Compliance mode, the retention period
+                            cannot be
+                            shortened or removed by any user, including root.
                         </div>
                     </div>
                 </div>
 
                 <div class="flex justify-between items-center pt-2">
                     <div class="flex items-center gap-2">
-                        <Badge v-if="isLocked(selectedLockObject)" variant="success" class="text-[9px] uppercase font-bold">Active Lock</Badge>
+                        <Badge v-if="isLocked(selectedLockObject)" variant="success"
+                            class="text-[9px] uppercase font-bold">
+                            Active Lock</Badge>
                         <Badge v-else variant="secondary" class="text-[9px] uppercase font-bold">No Active Lock</Badge>
                     </div>
                     <div class="flex gap-3">
@@ -439,7 +451,7 @@ import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 
 const API_BASE = 'http://localhost:8080'
-const { authState } = useAuth()
+const { authState, authFetch } = useAuth()
 const route = useRoute()
 const router = useRouter()
 
@@ -471,26 +483,6 @@ const lockSettings = ref({
     legalHold: false
 })
 
-async function authFetch(url, options = {}) {
-    const credentials = authState.value
-    if (!credentials.isAuthenticated) {
-        throw new Error('Not authenticated')
-    }
-
-    const headers = {
-        'Authorization': `Bearer ${credentials.token}`
-    }
-
-    if (options.body && options.body instanceof File === false && typeof options.body === 'object') {
-        headers['Content-Type'] = 'application/json'
-        options.body = JSON.stringify(options.body)
-    }
-
-    return fetch(url, {
-        ...options,
-        headers: { ...headers, ...options.headers }
-    })
-}
 
 async function fetchObjects() {
     if (!bucketName.value) return

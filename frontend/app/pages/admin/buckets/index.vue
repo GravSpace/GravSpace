@@ -147,7 +147,7 @@
                     <DialogTitle>Bucket Versioning</DialogTitle>
                     <DialogDescription>
                         Control version history for <strong class="text-slate-900 dark:text-slate-100">{{ selectedBucket
-                            }}</strong>
+                        }}</strong>
                     </DialogDescription>
                 </DialogHeader>
                 <div class="space-y-4 py-6">
@@ -232,7 +232,7 @@ import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 
 const API_BASE = 'http://localhost:8080'
-const { authState } = useAuth()
+const { authState, authFetch } = useAuth()
 const router = useRouter()
 
 const buckets = ref([])
@@ -246,26 +246,6 @@ const versioningEnabled = ref(false)
 const showObjectLockDialog = ref(false)
 const objectLockEnabled = ref(false)
 
-async function authFetch(url, options = {}) {
-    const credentials = authState.value
-    if (!credentials.isAuthenticated) {
-        router.push('/login')
-        throw new Error('Not authenticated')
-    }
-
-    const headers = {
-        'Authorization': `Bearer ${credentials.token}`
-    }
-
-    if (options.body && typeof options.body === 'string') {
-        headers['Content-Type'] = 'application/json'
-    }
-
-    return fetch(url, {
-        ...options,
-        headers: { ...headers, ...options.headers }
-    })
-}
 
 async function fetchBuckets() {
     loading.value = true

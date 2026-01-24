@@ -45,7 +45,7 @@
                                         <div class="flex flex-col min-w-0">
                                             <div class="flex items-center gap-2">
                                                 <span class="font-bold text-sm tracking-tight truncate">{{ username
-                                                    }}</span>
+                                                }}</span>
                                                 <Badge v-if="username === 'admin'" variant="default"
                                                     class="text-[8px] h-3.5 bg-indigo-500 hover:bg-indigo-500 py-0 uppercase tracking-widest leading-none">
                                                     Root</Badge>
@@ -74,11 +74,18 @@
                                                     <code
                                                         class="text-[10px] font-mono font-bold truncate">{{ key.accessKeyId }}</code>
                                                 </div>
-                                                <Button variant="ghost" size="icon"
-                                                    class="h-6 w-6 shrink-0 hover:bg-muted"
-                                                    @click="copyToClipboard(key.accessKeyId, 'Key ID')">
-                                                    <Copy class="w-3 h-3" />
-                                                </Button>
+                                                <div class="flex items-center gap-1">
+                                                    <Button variant="ghost" size="icon"
+                                                        class="h-6 w-6 shrink-0 hover:bg-muted"
+                                                        @click="copyToClipboard(key.accessKeyId, 'Key ID')">
+                                                        <Copy class="w-3 h-3" />
+                                                    </Button>
+                                                    <Button v-if="username !== 'admin'" variant="ghost" size="icon"
+                                                        class="h-6 w-6 shrink-0 text-destructive hover:bg-destructive/10"
+                                                        @click="deleteKey(username, key.accessKeyId)">
+                                                        <Trash class="w-3 h-3" />
+                                                    </Button>
+                                                </div>
                                             </div>
                                             <div
                                                 class="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800 pt-2 overflow-hidden">
@@ -122,7 +129,7 @@
                                             <Lock class="w-3 h-3 text-indigo-500" />
                                             <span
                                                 class="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 capitalize">{{
-                                                p.name }}</span>
+                                                    p.name }}</span>
                                             <button v-if="username !== 'admin' && username !== 'anonymous'"
                                                 @click="removePolicy(username, p.name)"
                                                 class="ml-1 text-indigo-400 hover:text-destructive transition-colors opacity-0 group-hover/badge:opacity-100">
@@ -222,7 +229,7 @@
                     <DialogTitle>Forge Permission Policy</DialogTitle>
                     <DialogDescription>
                         Attached to <strong class="text-slate-900 dark:text-slate-100 italic">{{ selectedUserForPolicy
-                            }}</strong>
+                        }}</strong>
                     </DialogDescription>
                 </DialogHeader>
                 <div class="space-y-4 py-4">
@@ -309,7 +316,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/composables/useAuth'
 
 const API_BASE = 'http://localhost:8080'
-const { authState } = useAuth()
+const { authState, authFetch } = useAuth()
+const router = useRouter()
 
 const users = ref({})
 const loading = ref(false)
@@ -331,24 +339,6 @@ const newPolicyJson = ref(JSON.stringify({
     }]
 }, null, 2))
 
-async function authFetch(url, options = {}) {
-    const credentials = authState.value
-    if (!credentials.isAuthenticated) {
-        throw new Error('Not authenticated')
-    }
-
-    const headers = {
-        'Authorization': `Bearer ${credentials.token}`
-    }
-    if (options.body && typeof options.body === 'string') {
-        headers['Content-Type'] = 'application/json'
-    }
-
-    return fetch(url, {
-        ...options,
-        headers: { ...headers, ...options.headers }
-    })
-}
 
 async function fetchUsers() {
     loading.value = true
@@ -411,6 +401,19 @@ async function generateKey(username) {
         }
     } catch (e) {
         toast.error('Identity forge failed.')
+    }
+}
+
+async function deleteKey(username, keyId) {
+    if (!confirm(`Revoke and destroy access key "${keyId}"? Current sessions using this key will be terminated.`)) return
+    try {
+        const res = await authFetch(`${API_BASE}/admin/users/${username}/keys/${keyId}`, { method: 'DELETE' })
+        if (res.ok) {
+            toast.success('Access key revoked.')
+            await fetchUsers()
+        }
+    } catch (e) {
+        toast.error('Key destruction failed.')
     }
 }
 

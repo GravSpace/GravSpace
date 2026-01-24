@@ -49,7 +49,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -58,11 +58,17 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/composables/useAuth'
 
 const router = useRouter()
-const { login } = useAuth()
+const { login, authState } = useAuth()
 
 const accessKeyId = ref('')
 const secretAccessKey = ref('')
 const isLoading = ref(false)
+
+onMounted(() => {
+    if (authState.value.isAuthenticated) {
+        router.push('/')
+    }
+})
 
 async function handleLogin() {
     if (accessKeyId.value && secretAccessKey.value) {

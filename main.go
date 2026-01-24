@@ -131,6 +131,7 @@ func main() {
 	admin.DELETE("/users/:username", adminHandler.DeleteUser)
 	admin.POST("/users/:username/password", adminHandler.UpdatePassword)
 	admin.POST("/users/:username/keys", adminHandler.GenerateKey)
+	admin.DELETE("/users/:username/keys/:id", adminHandler.DeleteKey)
 	admin.POST("/users/:username/policies", adminHandler.AddPolicy)
 	admin.DELETE("/users/:username/policies/:name", adminHandler.RemovePolicy)
 	admin.GET("/presign", adminHandler.GeneratePresignURL)
