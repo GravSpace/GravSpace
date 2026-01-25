@@ -317,7 +317,7 @@
 
                     <div
                         class="absolute bottom-0 left-0 right-0 p-6 bg-linear-to-t from-black via-black/80 to-transparent">
-                        <div class="flex items-center justify-between text-white">
+                        <div class="flex flex-col items-center justify-between text-white">
                             <div class="flex flex-col max-w-[70%]">
                                 <span class="text-[10px] font-bold text-primary tracking-widest uppercase mb-1">Preview
                                     Mode</span>
@@ -450,7 +450,8 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 
-const API_BASE = 'http://localhost:8080'
+const config = useRuntimeConfig()
+const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
 const route = useRoute()
 const router = useRouter()

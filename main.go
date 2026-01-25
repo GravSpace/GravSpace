@@ -77,7 +77,7 @@ func main() {
 	e.Use(metrics.Middleware())
 
 	// Initialize Database
-	db, err := database.NewDatabase("./data/metadata.db")
+	db, err := database.NewDatabase("./db/metadata.db")
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
@@ -91,6 +91,10 @@ func main() {
 	um, err := auth.NewUserManager(db)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if err := um.Initialize(); err != nil {
+		log.Printf("Warning: Failed to initialize users: %v", err)
 	}
 
 	s3Handler := &s3.S3Handler{Storage: store}

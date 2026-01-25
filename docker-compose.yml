@@ -1,4 +1,4 @@
-version: '3.8'
+
 
 services:
   # Backend Service
@@ -9,7 +9,7 @@ services:
     container_name: gravspace-core
     restart: unless-stopped
     ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - "${PUBLISH_IP:-0.0.0.0}:${BACKEND_PORT:-8080}:8080"
     environment:
       # Required
       - JWT_SECRET=${JWT_SECRET}
@@ -19,6 +19,10 @@ services:
       - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
       - DATABASE_AUTH_TOKEN=${DATABASE_AUTH_TOKEN:-}
       - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
+      # Initial Admin (Optional)
+      - INITIAL_ADMIN_PASSWORD=${INITIAL_ADMIN_PASSWORD:-}
+      - INITIAL_ADMIN_ACCESS_KEY=${INITIAL_ADMIN_ACCESS_KEY:-}
+      - INITIAL_ADMIN_SECRET_KEY=${INITIAL_ADMIN_SECRET_KEY:-}
       # Encryption (Optional)
       - SSE_MASTER_KEY=${SSE_MASTER_KEY:-}
       # Worker Intervals (Optional)
@@ -31,11 +35,11 @@ services:
     networks:
       - gravspace-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health/live"]
+      test: ["CMD", "healthcheck"]
       interval: 30s
       timeout: 3s
       retries: 3
-      start_period: 5s
+      start_period: 15s
 
   # Frontend Service
   frontend:
@@ -45,7 +49,7 @@ services:
     container_name: gravspace-ui
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${PUBLISH_IP:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
     environment:
       - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-http://localhost:8080}
       - NODE_ENV=production

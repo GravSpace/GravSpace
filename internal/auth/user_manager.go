@@ -58,6 +58,86 @@ func NewUserManager(db *database.Database) (*UserManager, error) {
 	return um, nil
 }
 
+// Initialize seeds the database with an initial admin user and anonymous user
+func (um *UserManager) Initialize() error {
+	um.mu.Lock()
+	defer um.mu.Unlock()
+
+	// 1. Seed admin user
+	adminPassword := os.Getenv("INITIAL_ADMIN_PASSWORD")
+	if adminPassword == "" {
+		adminPassword = "admin" // Default for initial setup
+	}
+
+	if _, ok := um.Users["admin"]; !ok {
+		hash, _ := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		if err := um.DB.UpsertUser("admin", string(hash)); err != nil {
+			return err
+		}
+		um.Users["admin"] = &User{Username: "admin"}
+
+		// Generate initial admin keys if requested
+		adminKeyID := os.Getenv("INITIAL_ADMIN_ACCESS_KEY")
+		adminSecret := os.Getenv("INITIAL_ADMIN_SECRET_KEY")
+		if adminKeyID != "" && adminSecret != "" {
+			if err := um.DB.CreateAccessKey("admin", adminKeyID, adminSecret); err != nil {
+				return err
+			}
+			um.Users["admin"].AccessKeys = append(um.Users["admin"].AccessKeys, AccessKey{
+				AccessKeyID:     adminKeyID,
+				SecretAccessKey: adminSecret,
+			})
+		}
+	}
+
+	// 2. Seed AdministratorAccess policy
+	policyName := "AdministratorAccess"
+	if _, ok := um.Policies[policyName]; !ok {
+		adminPolicy := Policy{
+			Name:    policyName,
+			Version: "2012-10-17",
+			Statement: []Statement{
+				{
+					Effect:   "Allow",
+					Action:   []string{"*"},
+					Resource: []string{"*"},
+				},
+			},
+		}
+		data, _ := json.Marshal(adminPolicy)
+		if err := um.DB.UpsertGlobalPolicy(policyName, string(data)); err == nil {
+			um.Policies[policyName] = adminPolicy
+		}
+	}
+
+	// 3. Attach policy to admin
+	if user, ok := um.Users["admin"]; ok {
+		hasPolicy := false
+		for _, p := range user.Policies {
+			if p.Name == policyName {
+				hasPolicy = true
+				break
+			}
+		}
+		if !hasPolicy {
+			policy := um.Policies[policyName]
+			user.Policies = append(user.Policies, policy)
+			pJSON, _ := json.Marshal(policy)
+			um.DB.UpsertUserPolicy("admin", policy.Name, string(pJSON))
+		}
+	}
+
+	// 4. Seed anonymous user
+	if _, ok := um.Users["anonymous"]; !ok {
+		if err := um.DB.UpsertUser("anonymous", ""); err != nil {
+			return err
+		}
+		um.Users["anonymous"] = &User{Username: "anonymous"}
+	}
+
+	return nil
+}
+
 func (um *UserManager) LoadFromDB() error {
 	um.mu.Lock()
 	defer um.mu.Unlock()
@@ -152,7 +232,7 @@ func (um *UserManager) ListPolicyTemplates() []Policy {
 	um.mu.RLock()
 	defer um.mu.RUnlock()
 
-	var list []Policy
+	list := []Policy{}
 	for _, p := range um.Policies {
 		list = append(list, p)
 	}

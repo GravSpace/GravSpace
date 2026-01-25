@@ -20,6 +20,10 @@ services:
       - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
       - DATABASE_AUTH_TOKEN=${DATABASE_AUTH_TOKEN:-}
       - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
+      # Initial Admin (Optional)
+      - INITIAL_ADMIN_PASSWORD=${INITIAL_ADMIN_PASSWORD:-}
+      - INITIAL_ADMIN_ACCESS_KEY=${INITIAL_ADMIN_ACCESS_KEY:-}
+      - INITIAL_ADMIN_SECRET_KEY=${INITIAL_ADMIN_SECRET_KEY:-}
       # Encryption (Optional)
       - SSE_MASTER_KEY=${SSE_MASTER_KEY:-}
       # Worker Intervals (Optional)
