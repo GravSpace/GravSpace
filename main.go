@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -21,8 +23,32 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Version information (set via ldflags during build)
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
+	GitCommit = "unknown"
+)
+
 func main() {
+	// Parse command line flags
+	versionFlag := flag.Bool("version", false, "Print version information")
+	flag.BoolVar(versionFlag, "v", false, "Print version information (shorthand)")
+	flag.Parse()
+
+	// Handle version flag
+	if *versionFlag {
+		fmt.Printf("GravSpace v%s\n", Version)
+		fmt.Printf("Build Time: %s\n", BuildTime)
+		fmt.Printf("Git Commit: %s\n", GitCommit)
+		fmt.Printf("Go Version: %s\n", "1.24")
+		os.Exit(0)
+	}
+
 	e := echo.New()
+
+	// Log startup information
+	log.Printf("Starting GravSpace v%s", Version)
 
 	// Environment variables
 	jwtSecret := os.Getenv("JWT_SECRET")

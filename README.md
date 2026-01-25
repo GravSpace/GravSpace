@@ -11,11 +11,48 @@ High Performance S3 Compatible Object Storage focused on speed and simplicity.
 - **MIME Type Detection**: Direct in-browser display for images and documents.
 
 ## Table of Contents
+- [Quick Install](#quick-install)
 - [Getting Started](#getting-started)
 - [Docker Deployment](#docker-deployment)
 - [Environment Variables](#environment-variables)
 - [S3 CLI Usage](#s3-cli-usage)
 - [Production Deployment](#production-deployment)
+
+## Quick Install
+
+### Binary Installation (Recommended for Production)
+
+Install GravSpace binary with a single command:
+
+```bash
+# Linux/macOS - Auto-detect platform
+curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
+
+# Or specify version
+VERSION=1.0.0 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
+
+# Or download manually from releases
+# Visit: https://github.com/gravspace/gravspace/releases
+```
+
+**Supported Platforms:**
+- Linux: amd64, arm64, armv7
+- macOS: amd64 (Intel), arm64 (Apple Silicon)
+- Windows: amd64, arm64
+
+**Verify Installation:**
+```bash
+gravspace --version
+```
+
+**Run Server:**
+```bash
+# With default settings
+gravspace
+
+# Server will start on :8080
+# Access dashboard at http://localhost:8080
+```
 
 ## Getting Started
 
