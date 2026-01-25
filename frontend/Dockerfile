@@ -7,14 +7,26 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install dependencies with QEMU/ARM64 compatibility fixes
+# - Increase Node.js memory limit for ARM64 emulation
+# - Use single socket to avoid race conditions
+# - Disable strict SSL for potential certificate issues in QEMU
+# - Use legacy peer deps to avoid dependency conflicts
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV npm_config_fetch_retries=5
+ENV npm_config_fetch_retry_mintimeout=20000
+ENV npm_config_fetch_retry_maxtimeout=120000
+
+RUN npm ci --prefer-offline --no-audit --legacy-peer-deps --maxsockets=1 2>&1 || \
+    (echo "First attempt failed, retrying with cache clean..." && \
+     npm cache clean --force && \
+     npm ci --prefer-offline --no-audit --legacy-peer-deps --maxsockets=1)
 
 # Copy source code
 COPY . .
 
-# Build the application
-RUN npm run build
+# Build the application with increased memory
+RUN NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
 # Runtime stage
 FROM node:20-alpine
