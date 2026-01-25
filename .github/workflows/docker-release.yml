@@ -51,8 +51,6 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "major=$(echo $VERSION | cut -d. -f1)" >> $GITHUB_OUTPUT
-          echo "minor=$(echo $VERSION | cut -d. -f1-2)" >> $GITHUB_OUTPUT
 
       - name: Build and push ${{ matrix.name }} Docker image
         uses: docker/build-push-action@v5
@@ -64,8 +62,6 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ matrix.image }}:latest
             ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.major }}
-            ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.minor }}
           labels: |
             org.opencontainers.image.title=GravSpace ${{ matrix.name }}
             org.opencontainers.image.description=High Performance S3 Compatible Object Storage

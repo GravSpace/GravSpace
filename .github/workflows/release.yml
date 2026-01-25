@@ -1,6 +1,9 @@
 name: Release Binaries
 
 on:
+  push:
+    tags:
+      - 'v*.*.*'
   release:
     types: [published]
   workflow_dispatch:
@@ -55,7 +58,9 @@ jobs:
       - name: Get version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          elif [ "${{ github.event_name }}" = "release" ]; then
             VERSION=${GITHUB_REF#refs/tags/v}
           else
             VERSION="dev-$(git rev-parse --short HEAD)"
@@ -101,27 +106,15 @@ jobs:
             sha256sum "${{ env.ASSET_PATH }}" > "${{ env.ASSET_PATH }}.sha256"
           fi
 
-      - name: Upload Release Asset
-        if: github.event_name == 'release'
-        uses: actions/upload-release-asset@v1
+      - name: Upload Release Assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.ASSET_PATH }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ${{ env.ASSET_PATH }}
-          asset_name: ${{ env.ASSET_NAME }}
-          asset_content_type: application/octet-stream
-
-      - name: Upload Checksum
-        if: github.event_name == 'release'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ${{ env.ASSET_PATH }}.sha256
-          asset_name: ${{ env.ASSET_NAME }}.sha256
-          asset_content_type: text/plain
 
       - name: Upload artifacts (for workflow_dispatch)
         if: github.event_name == 'workflow_dispatch'
@@ -135,7 +128,7 @@ jobs:
   create-install-script:
     name: Create Install Script
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/')
     
     steps:
       - name: Checkout code
@@ -147,82 +140,9 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Create install script
-        run: |
-          cat > install.sh << 'EOF'
-          #!/bin/bash
-          set -e
-
-          # GravSpace Installer
-          VERSION="${VERSION:-latest}"
-          INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-          REPO="gravspace/gravspace"
-
-          # Detect OS and architecture
-          OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-          ARCH="$(uname -m)"
-
-          case "$OS" in
-            linux) OS="linux" ;;
-            darwin) OS="darwin" ;;
-            *) echo "Unsupported OS: $OS"; exit 1 ;;
-          esac
-
-          case "$ARCH" in
-            x86_64) ARCH="amd64" ;;
-            aarch64|arm64) ARCH="arm64" ;;
-            armv7l) ARCH="armv7" ;;
-            *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
-          esac
-
-          PLATFORM="${OS}-${ARCH}"
-          
-          # Get latest version if not specified
-          if [ "$VERSION" = "latest" ]; then
-            VERSION=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
-          fi
-
-          DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/gravspace-${VERSION}-${PLATFORM}.tar.gz"
-          CHECKSUM_URL="${DOWNLOAD_URL}.sha256"
-
-          echo "Installing GravSpace v${VERSION} for ${PLATFORM}..."
-
-          # Download binary
-          TMP_DIR=$(mktemp -d)
-          cd "$TMP_DIR"
-          
-          echo "Downloading from ${DOWNLOAD_URL}..."
-          curl -sL "$DOWNLOAD_URL" -o gravspace.tar.gz
-          curl -sL "$CHECKSUM_URL" -o gravspace.tar.gz.sha256
-
-          # Verify checksum
-          echo "Verifying checksum..."
-          sha256sum -c gravspace.tar.gz.sha256
-
-          # Extract
-          tar xzf gravspace.tar.gz
-
-          # Install
-          echo "Installing to ${INSTALL_DIR}..."
-          sudo mv gravspace-${PLATFORM} "${INSTALL_DIR}/gravspace"
-          sudo chmod +x "${INSTALL_DIR}/gravspace"
-
-          # Cleanup
-          cd -
-          rm -rf "$TMP_DIR"
-
-          echo "✓ GravSpace v${VERSION} installed successfully!"
-          echo "Run 'gravspace --version' to verify installation"
-          EOF
-
-          chmod +x install.sh
-
       - name: Upload install script
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./install.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: ./install.sh
-          asset_name: install.sh
-          asset_content_type: text/plain
