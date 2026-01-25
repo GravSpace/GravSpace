@@ -67,7 +67,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.major }}
             ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.minor }}
           labels: |
-            org.opencontainers.image.title=GravityStore ${{ matrix.name }}
+            org.opencontainers.image.title=GravSpace ${{ matrix.name }}
             org.opencontainers.image.description=High Performance S3 Compatible Object Storage
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

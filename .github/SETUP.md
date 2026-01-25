@@ -26,7 +26,7 @@ The workflows will automatically run and build your Docker images!
 By default, images are private. To make them public:
 
 1. Go to your GitHub profile → **Packages**
-2. Find `gravspace-backend` and `gravspace-frontend`
+2. Find `gravspace-core` and `gravspace-ui`
 3. For each package:
    - Click **Package settings**
    - Scroll to **Danger Zone**
@@ -57,7 +57,7 @@ This will create images with tags:
 
 ### Automatic Builds
 
-- ✅ Every push to `main` → `latest` tag
+- ✅ Every push to `main` or `master` → `latest` tag
 - ✅ Every tag push (e.g., `v1.0.0`) → version tags
 - ✅ Every PR → build only (no push)
 - ✅ Multi-platform: `linux/amd64`, `linux/arm64`

@@ -13,8 +13,8 @@ The repository is configured with GitHub Actions to automatically build and push
 ## Image Names
 
 Images are published to:
-- **Backend**: `ghcr.io/gravspace/gravspace-backend`
-- **Frontend**: `ghcr.io/gravspace/gravspace-frontend`
+- **Backend**: `ghcr.io/gravspace/gravspace-core`
+- **Frontend**: `ghcr.io/gravspace/gravspace-ui`
 
 ## Image Tags
 
@@ -23,7 +23,7 @@ Images are published to:
 The workflow automatically creates the following tags:
 
 1. **Branch-based tags**:
-   - `main` → `latest`
+   - `main` or `master` → `latest`
    - `develop` → `develop`
 
 2. **Version tags** (from git tags):
@@ -52,7 +52,7 @@ By default, images are private. To make them public:
 
 1. Go to your GitHub profile
 2. Click on **Packages**
-3. Find your package (e.g., `gravspace-backend`)
+3. Find your package (e.g., `gravspace-core`)
 4. Click **Package settings**
 5. Scroll to **Danger Zone**
 6. Click **Change visibility** → **Public**
@@ -79,12 +79,12 @@ Or use GitHub's release interface:
 
 ```bash
 # Pull latest images
-docker pull ghcr.io/gravspace/gravspace-backend:latest
-docker pull ghcr.io/gravspace/gravspace-frontend:latest
+docker pull ghcr.io/gravspace/gravspace-core:latest
+docker pull ghcr.io/gravspace/gravspace-ui:latest
 
 # Pull specific version
-docker pull ghcr.io/gravspace/gravspace-backend:1.0.0
-docker pull ghcr.io/gravspace/gravspace-frontend:1.0.0
+docker pull ghcr.io/gravspace/gravspace-core:1.0.0
+docker pull ghcr.io/gravspace/gravspace-ui:1.0.0
 ```
 
 ### Authentication (for private images)

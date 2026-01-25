@@ -25,8 +25,10 @@ FROM alpine:latest
 # Install runtime dependencies
 RUN apk --no-cache add ca-certificates tzdata
 
-# Create non-root user
-RUN addgroup -g 1000 appuser && \
+# Create non-root user (remove if exists to avoid conflicts)
+RUN deluser --remove-home appuser 2>/dev/null || true && \
+    delgroup appuser 2>/dev/null || true && \
+    addgroup -g 1000 appuser && \
     adduser -D -u 1000 -G appuser appuser
 
 # Set working directory
