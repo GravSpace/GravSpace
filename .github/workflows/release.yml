@@ -37,13 +37,10 @@ jobs:
           - goos: darwin
             goarch: arm64
             platform: darwin-arm64
-          # Windows
+          # Windows (AMD64 only - ARM64 has SQLite purego issues)
           - goos: windows
             goarch: amd64
             platform: windows-amd64
-          - goos: windows
-            goarch: arm64
-            platform: windows-arm64
 
     steps:
       - name: Checkout code

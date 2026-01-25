@@ -48,11 +48,8 @@ wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1
 
 **Windows:**
 ```powershell
-# AMD64
+# AMD64 only (ARM64 not supported due to SQLite compatibility)
 Invoke-WebRequest -Uri "https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-windows-amd64.zip" -OutFile "gravspace.zip"
-
-# ARM64
-Invoke-WebRequest -Uri "https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-windows-arm64.zip" -OutFile "gravspace.zip"
 ```
 
 #### 2. Verify Checksum (Optional but Recommended)
