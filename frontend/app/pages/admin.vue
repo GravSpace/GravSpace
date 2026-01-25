@@ -4,8 +4,8 @@
         <aside class="w-64 border-r bg-card flex flex-col">
             <div class="p-6 flex items-center gap-3">
                 <div
-                    class="bg-primary text-primary-foreground w-8 h-8 flex items-center justify-center rounded-md font-bold">
-                    ▲
+                    class="bg-gradient-to-br from-indigo-500 to-purple-600 w-10 h-10 flex items-center justify-center rounded-lg p-1.5">
+                    <img src="/logo.png" alt="GravityStore" class="w-full h-full object-contain" />
                 </div>
                 <span class="text-xl font-bold tracking-tight">GravityStore</span>
             </div>

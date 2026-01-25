@@ -15,10 +15,8 @@
         <div class="w-full max-w-sm px-6 z-10 scale-95 md:scale-100">
             <div class="text-center mb-8">
                 <div
-                    class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-xl shadow-indigo-500/20 mb-4 transition-transform hover:scale-105 duration-300">
-                    <div class="text-white">
-                        <Box class="w-8 h-8" />
-                    </div>
+                    class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-xl shadow-indigo-500/20 mb-4 transition-transform hover:scale-105 duration-300 p-2">
+                    <img src="/logo.png" alt="GravityStore Logo" class="w-full h-full object-contain" />
                 </div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">GravityStore</h1>
                 <p class="text-slate-500 text-xs mt-1">Enterprise S3 Management Suite</p>
@@ -112,7 +110,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { useAuth } from '@/composables/useAuth'
-import { Box, ChevronRight, Loader2, Info } from 'lucide-vue-next'
+import { ChevronRight, Loader2, Info } from 'lucide-vue-next'
 
 const router = useRouter()
 const { login, authState } = useAuth()
