@@ -31,10 +31,11 @@ esac
 case "$ARCH" in
   x86_64) ARCH="amd64" ;;
   aarch64|arm64) ARCH="arm64" ;;
-  armv7l) ARCH="armv7" ;;
   *) 
     echo "❌ Unsupported architecture: $ARCH"
-    echo "Supported: amd64, arm64, armv7"
+    echo "Supported: amd64, arm64"
+    echo ""
+    echo "Note: ARMv7 is not supported due to SQLite compatibility"
     exit 1
     ;;
 esac

@@ -30,11 +30,8 @@ Visit the [Releases page](https://github.com/gravspace/gravspace/releases) and d
 # AMD64 (x86_64)
 wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-linux-amd64.tar.gz
 
-# ARM64
+# ARM64 (aarch64)
 wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-linux-arm64.tar.gz
-
-# ARMv7
-wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-linux-armv7.tar.gz
 ```
 
 **macOS:**

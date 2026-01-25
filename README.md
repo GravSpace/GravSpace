@@ -36,7 +36,7 @@ VERSION=1.0.0 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/ma
 ```
 
 **Supported Platforms:**
-- Linux: amd64, arm64, armv7
+- Linux: amd64, arm64 (ARMv7 not supported due to SQLite compatibility)
 - macOS: amd64 (Intel), arm64 (Apple Silicon)
 - Windows: amd64 only (ARM64 not supported due to SQLite compatibility)
 

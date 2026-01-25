@@ -19,17 +19,13 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux
+          # Linux (AMD64 and ARM64 only - ARMv7 has SQLite purego issues)
           - goos: linux
             goarch: amd64
             platform: linux-amd64
           - goos: linux
             goarch: arm64
             platform: linux-arm64
-          - goos: linux
-            goarch: arm
-            goarm: 7
-            platform: linux-armv7
           # macOS
           - goos: darwin
             goarch: amd64
