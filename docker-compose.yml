@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # Backend Service
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gravspace-core
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    environment:
+      # Required
+      - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      # Database (Optional - defaults to local SQLite)
+      - DATABASE_URL=${DATABASE_URL:-}
+      - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
+      - DATABASE_AUTH_TOKEN=${DATABASE_AUTH_TOKEN:-}
+      - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
+      # Encryption (Optional)
+      - SSE_MASTER_KEY=${SSE_MASTER_KEY:-}
+      # Worker Intervals (Optional)
+      - SYNC_WORKER_INTERVAL=${SYNC_WORKER_INTERVAL:-5m}
+      - LIFECYCLE_WORKER_INTERVAL=${LIFECYCLE_WORKER_INTERVAL:-1h}
+    volumes:
+      - storage_data:/app/data
+      - storage_db:/app/db
+      - storage_logs:/app/logs
+    networks:
+      - gravspace-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: gravspace-ui
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-http://localhost:8080}
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - gravspace-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+networks:
+  gravspace-network:
+    driver: bridge
+
+volumes:
+  storage_data:
+    driver: local
+  storage_db:
+    driver: local
+  storage_logs:
+    driver: local
+

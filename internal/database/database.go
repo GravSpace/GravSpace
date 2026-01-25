@@ -135,7 +135,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 	} else {
 		// Use local SQLite fallback
 		if dbPath == "" {
-			dbPath = "./data/metadata.db"
+			dbPath = "./db/metadata.db"
 		}
 		db, err = sql.Open("sqlite", dbPath)
 		if err != nil {

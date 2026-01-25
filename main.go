@@ -73,7 +73,7 @@ func main() {
 	healthChecker := health.NewHealthChecker()
 
 	// Initialize Audit Logger
-	auditLogger, err := audit.NewAuditLogger("./data/audit.log")
+	auditLogger, err := audit.NewAuditLogger("./logs/audit.log")
 	if err != nil {
 		log.Printf("Warning: Failed to initialize audit logger: %v", err)
 		auditLogger = nil // Continue without audit logging

@@ -7,7 +7,7 @@
                         class="bg-primary text-primary-foreground w-8 h-8 flex items-center justify-center rounded-md font-bold">
                         ▲
                     </div>
-                    GravityStore Login
+                    GravSpace Login
                 </DialogTitle>
                 <DialogDescription>
                     Enter your S3 credentials to access the storage system.

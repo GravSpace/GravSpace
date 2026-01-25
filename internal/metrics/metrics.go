@@ -11,14 +11,14 @@ var (
 	// Request Metrics
 	RequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "gravitystore_requests_total",
+			Name: "gravspace_requests_total",
 			Help: "Total number of HTTP requests",
 		},
 		[]string{"method", "status", "path"},
 	)
 	RequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "gravitystore_request_duration_seconds",
+			Name:    "gravspace_request_duration_seconds",
 			Help:    "Duration of HTTP requests",
 			Buckets: prometheus.DefBuckets,
 		},
@@ -26,7 +26,7 @@ var (
 	)
 	RequestSize = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "gravitystore_request_size_bytes",
+			Name:    "gravspace_request_size_bytes",
 			Help:    "Size of HTTP requests",
 			Buckets: prometheus.ExponentialBuckets(100, 10, 8),
 		},
@@ -34,7 +34,7 @@ var (
 	)
 	ResponseSize = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "gravitystore_response_size_bytes",
+			Name:    "gravspace_response_size_bytes",
 			Help:    "Size of HTTP responses",
 			Buckets: prometheus.ExponentialBuckets(100, 10, 8),
 		},
@@ -44,20 +44,20 @@ var (
 	// Storage Metrics
 	BucketsTotal = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "gravitystore_buckets_total",
+			Name: "gravspace_buckets_total",
 			Help: "Total number of buckets",
 		},
 	)
 	ObjectsTotal = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "gravitystore_objects_total",
+			Name: "gravspace_objects_total",
 			Help: "Total number of objects in a bucket",
 		},
 		[]string{"bucket"},
 	)
 	StorageBytes = promauto.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "gravitystore_storage_bytes",
+			Name: "gravspace_storage_bytes",
 			Help: "Total storage used in bytes per bucket",
 		},
 		[]string{"bucket"},
@@ -66,14 +66,14 @@ var (
 	// Cache Metrics
 	CacheHits = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "gravitystore_cache_hits_total",
+			Name: "gravspace_cache_hits_total",
 			Help: "Total number of cache hits",
 		},
 		[]string{"type"},
 	)
 	CacheMisses = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "gravitystore_cache_misses_total",
+			Name: "gravspace_cache_misses_total",
 			Help: "Total number of cache misses",
 		},
 		[]string{"type"},
@@ -82,14 +82,14 @@ var (
 	// Database Metrics
 	DBQueriesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "gravitystore_db_queries_total",
+			Name: "gravspace_db_queries_total",
 			Help: "Total number of database queries",
 		},
 		[]string{"operation"},
 	)
 	DBQueryDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
-			Name:    "gravitystore_db_query_duration_seconds",
+			Name:    "gravspace_db_query_duration_seconds",
 			Help:    "Duration of database queries",
 			Buckets: prometheus.DefBuckets,
 		},

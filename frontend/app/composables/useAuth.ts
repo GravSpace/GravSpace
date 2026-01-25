@@ -19,7 +19,7 @@ const authState = ref<AuthState>({
 
 // Load from sessionStorage on mount
 if (typeof window !== 'undefined') {
-    const stored = sessionStorage.getItem('gravitystore_auth')
+    const stored = sessionStorage.getItem('gravspace_auth')
     if (stored) {
         try {
             const parsed = JSON.parse(stored)
@@ -34,9 +34,9 @@ if (typeof window !== 'undefined') {
 if (typeof window !== 'undefined') {
     watch(authState, (newState) => {
         if (newState.isAuthenticated) {
-            sessionStorage.setItem('gravitystore_auth', JSON.stringify(newState))
+            sessionStorage.setItem('gravspace_auth', JSON.stringify(newState))
         } else {
-            sessionStorage.removeItem('gravitystore_auth')
+            sessionStorage.removeItem('gravspace_auth')
         }
     }, { deep: true })
 }
@@ -77,7 +77,7 @@ function logout() {
         isAuthenticated: false
     }
     if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('gravitystore_auth')
+        sessionStorage.removeItem('gravspace_auth')
     }
 }
 

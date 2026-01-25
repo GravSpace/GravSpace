@@ -5,9 +5,9 @@
             <div class="p-6 flex items-center gap-3">
                 <div
                     class="bg-gradient-to-br from-indigo-500 to-purple-600 w-10 h-10 flex items-center justify-center rounded-lg p-1.5">
-                    <img src="/logo.png" alt="GravityStore" class="w-full h-full object-contain" />
+                    <img src="/logo.png" alt="GravSpace" class="w-full h-full object-contain" />
                 </div>
-                <span class="text-xl font-bold tracking-tight">GravityStore</span>
+                <span class="text-xl font-bold tracking-tight">GravSpace</span>
             </div>
             <nav class="flex-1 px-4 space-y-1">
                 <NuxtLink v-for="item in navItems" :key="item.path" :to="item.path"
