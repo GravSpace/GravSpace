@@ -37,7 +37,7 @@
                         <Database class="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div class="text-2xl font-bold">{{ buckets.length }}</div>
+                        <div class="text-2xl font-bold">{{ buckets?.length || 0 }}</div>
                         <p class="text-xs text-muted-foreground">Storage containers</p>
                     </CardContent>
                 </Card>
@@ -71,7 +71,8 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from '@/composables/useAuth'
 
 const { authState } = useAuth()
-const API_BASE = 'http://localhost:8080'
+const config = useRuntimeConfig()
+const API_BASE = config.public.apiBase
 
 const stats = ref({})
 const buckets = ref([])

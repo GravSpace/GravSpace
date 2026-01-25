@@ -270,7 +270,7 @@
                                 Preview</div>
                             <pre
                                 class="text-[10px] font-mono text-slate-600 dark:text-slate-400 overflow-auto max-h-32">{{
-                                    JSON.stringify(policyTemplates.find(t => t.name === selectedTemplate), null, 2) }}</pre>
+                                    JSON.stringify(policyTemplates.find(t => t.name === selectedTemplate), null, 2)}}</pre>
                         </div>
                     </div>
 
@@ -341,7 +341,7 @@
 import { ref, onMounted } from 'vue'
 import {
     Plus, MoreHorizontal, ShieldCheck, UserPlus, Trash, RefreshCw, KeyIcon,
-    Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2, FileCode
+    Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2, FileCode, UserMinus
 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -359,7 +359,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/composables/useAuth'
 
-const API_BASE = 'http://localhost:8080'
+const config = useRuntimeConfig()
+const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
 const router = useRouter()
 

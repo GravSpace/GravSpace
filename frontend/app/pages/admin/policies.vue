@@ -24,43 +24,6 @@
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        <!-- System Default Policy -->
-                        <TableRow class="group hover:bg-muted/30 transition-colors border-l-4 border-l-blue-500">
-                            <TableCell class="py-4">
-                                <div class="flex items-center gap-3">
-                                    <div class="p-1.5 rounded bg-blue-500/10 text-blue-500">
-                                        <ShieldCheck class="w-4 h-4" />
-                                    </div>
-                                    <div class="flex flex-col">
-                                        <span class="font-mono text-sm font-bold">AdministratorAccess</span>
-                                        <span class="text-[10px] text-muted-foreground">Full system privileges</span>
-                                    </div>
-                                </div>
-                            </TableCell>
-                            <TableCell class="py-4">
-                                <div class="flex flex-wrap gap-1">
-                                    <Badge variant="outline"
-                                        class="text-[9px] h-4 bg-green-500/10 text-green-600 border-green-500/20 font-bold">
-                                        s3:*</Badge>
-                                    <Badge variant="outline"
-                                        class="text-[9px] h-4 bg-green-500/10 text-green-600 border-green-500/20 font-bold">
-                                        iam:*</Badge>
-                                    <Badge variant="outline"
-                                        class="text-[9px] h-4 bg-green-500/10 text-green-600 border-green-500/20 font-bold">
-                                        admin:*</Badge>
-                                </div>
-                            </TableCell>
-                            <TableCell>
-                                <Badge
-                                    class="text-[8px] h-3.5 bg-blue-500/10 text-blue-500 border-blue-500/20 py-0 uppercase tracking-wider">
-                                    System</Badge>
-                            </TableCell>
-                            <TableCell class="text-right px-6">
-                                <Badge variant="outline"
-                                    class="text-[8px] font-bold uppercase tracking-tighter opacity-40 border-slate-300 pointer-events-none">
-                                    Protected</Badge>
-                            </TableCell>
-                        </TableRow>
 
                         <!-- Custom Policies -->
                         <template v-for="policy in policies" :key="policy.name">
@@ -135,7 +98,7 @@
                             </TableRow>
                         </template>
 
-                        <TableRow v-if="policies.length === 0">
+                        <TableRow v-if="!policies || policies.length === 0">
                             <TableCell colspan="4" class="h-32 text-center text-muted-foreground italic text-sm">
                                 <div class="flex flex-col items-center gap-2">
                                     <Shield class="w-6 h-6 opacity-20" />
@@ -241,7 +204,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/composables/useAuth'
 
-const API_BASE = 'http://localhost:8080'
+const config = useRuntimeConfig()
+const API_BASE = config.public.apiBase
 const { authFetch } = useAuth()
 
 const policies = ref([])

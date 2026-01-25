@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"path/filepath"
+
 	"github.com/GravSpace/GravSpace/internal/metrics"
 	_ "github.com/tursodatabase/turso-go" // Turso driver (works for remote)
 	_ "modernc.org/sqlite"                // SQLite driver (for local)
@@ -78,7 +80,7 @@ type PolicyRecord struct {
 //
 // For local SQLite:
 //
-//	dbPath = "file:./data/metadata.db"
+//	dbPath = "file:./db/metadata.db"
 //
 // For Turso:
 //
@@ -137,6 +139,15 @@ func NewDatabase(dbPath string) (*Database, error) {
 		if dbPath == "" {
 			dbPath = "./db/metadata.db"
 		}
+
+		// Ensure the directory exists
+		dir := filepath.Dir(dbPath)
+		if dir != "." && dir != "/" {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return nil, fmt.Errorf("failed to create database directory: %w", err)
+			}
+		}
+
 		db, err = sql.Open("sqlite", dbPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open local database: %w", err)
@@ -336,7 +347,7 @@ func (d *Database) ListBuckets() ([]string, error) {
 	}
 	defer rows.Close()
 
-	var buckets []string
+	buckets := []string{}
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -618,7 +629,7 @@ func (d *Database) ListUsers() ([]string, error) {
 	}
 	defer rows.Close()
 
-	var users []string
+	users := []string{}
 	for rows.Next() {
 		var u string
 		if err := rows.Scan(&u); err != nil {
@@ -727,7 +738,7 @@ func (d *Database) GetUserPolicies(username string) ([]PolicyRecord, error) {
 	}
 	defer rows.Close()
 
-	var policies []PolicyRecord
+	policies := []PolicyRecord{}
 	for rows.Next() {
 		var p PolicyRecord
 		if err := rows.Scan(&p.ID, &p.Username, &p.Name, &p.Data, &p.CreatedAt); err != nil {

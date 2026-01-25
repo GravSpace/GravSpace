@@ -289,8 +289,12 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 
 			// Check for retention period
 			if existingObj.RetainUntilDate != nil && time.Now().Before(*existingObj.RetainUntilDate) {
+				lockMode := ""
+				if existingObj.LockMode != nil {
+					lockMode = *existingObj.LockMode
+				}
 				return "", fmt.Errorf("object is under %s retention until %s and cannot be overwritten",
-					existingObj.LockMode, existingObj.RetainUntilDate.Format(time.RFC3339))
+					lockMode, existingObj.RetainUntilDate.Format(time.RFC3339))
 			}
 		}
 	}
@@ -485,8 +489,12 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
 
 			// Check for retention period
 			if obj.RetainUntilDate != nil && time.Now().Before(*obj.RetainUntilDate) {
+				lockMode := ""
+				if obj.LockMode != nil {
+					lockMode = *obj.LockMode
+				}
 				return fmt.Errorf("object is under %s retention until %s and cannot be deleted",
-					obj.LockMode, obj.RetainUntilDate.Format(time.RFC3339))
+					lockMode, obj.RetainUntilDate.Format(time.RFC3339))
 			}
 
 			metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
@@ -508,8 +516,8 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
 
 func (s *FileStorage) ListObjects(bucket, prefix, delimiter string) ([]Object, []string, error) {
 	bucketDir := filepath.Join(s.Root, bucket)
-	var objects []Object
-	var commonPrefixes []string
+	objects := []Object{}
+	commonPrefixes := []string{}
 	seenPrefixes := make(map[string]bool)
 
 	err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
@@ -663,7 +671,7 @@ func (s *FileStorage) ListVersions(bucket, key string) ([]Object, error) {
 	latestData, _ := os.ReadFile(filepath.Join(objectDir, "latest"))
 	latestID := string(latestData)
 
-	var versions []Object
+	versions := []Object{}
 	for _, entry := range entries {
 		if !entry.IsDir() && entry.Name() != "latest" {
 			info, _ := entry.Info()

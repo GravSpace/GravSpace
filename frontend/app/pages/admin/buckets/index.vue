@@ -18,12 +18,12 @@
         </header>
 
         <main class="flex-1 overflow-auto p-6">
-            <div v-if="loading && buckets.length === 0"
+            <div v-if="loading && (!buckets || buckets.length === 0)"
                 class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 <Card v-for="i in 8" :key="i" class="h-32 animate-pulse bg-muted/50" />
             </div>
 
-            <div v-else-if="buckets.length > 0"
+            <div v-else-if="buckets && buckets.length > 0"
                 class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                 <TransitionGroup name="list">
                     <Card v-for="bucket in buckets" :key="bucket"
@@ -147,7 +147,7 @@
                     <DialogTitle>Bucket Versioning</DialogTitle>
                     <DialogDescription>
                         Control version history for <strong class="text-slate-900 dark:text-slate-100">{{ selectedBucket
-                        }}</strong>
+                            }}</strong>
                     </DialogDescription>
                 </DialogHeader>
                 <div class="space-y-4 py-6">
@@ -231,7 +231,8 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 
-const API_BASE = 'http://localhost:8080'
+const config = useRuntimeConfig()
+const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
 const router = useRouter()
 

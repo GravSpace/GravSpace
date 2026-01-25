@@ -41,58 +41,60 @@ if (typeof window !== 'undefined') {
     }, { deep: true })
 }
 
-async function login(accessKeyId: string, secretAccessKey: string) {
-    try {
-        const response = await fetch('http://localhost:8080/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: accessKeyId, password: secretAccessKey })
-        })
-
-        if (!response.ok) {
-            throw new Error('Login failed')
-        }
-
-        const data = await response.json()
-        authState.value = {
-            accessKeyId,
-            secretAccessKey,
-            token: data.token,
-            username: data.username,
-            isAuthenticated: true
-        }
-        return true
-    } catch (err) {
-        console.error('Login error:', err)
-        return false
-    }
-}
-
-function logout() {
-    authState.value = {
-        accessKeyId: '',
-        secretAccessKey: '',
-        token: '',
-        username: '',
-        isAuthenticated: false
-    }
-    if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('gravspace_auth')
-    }
-}
-
-function getCredentials() {
-    if (!authState.value.isAuthenticated) {
-        return null
-    }
-    return {
-        accessKeyId: authState.value.accessKeyId,
-        secretAccessKey: authState.value.secretAccessKey
-    }
-}
-
 export function useAuth() {
     const router = useRouter()
+    const config = useRuntimeConfig()
+    const apiBase = config.public.apiBase
+
+    async function login(accessKeyId: string, secretAccessKey: string) {
+        try {
+            const response = await fetch(`${apiBase}/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: accessKeyId, password: secretAccessKey })
+            })
+
+            if (!response.ok) {
+                throw new Error('Login failed')
+            }
+
+            const data = await response.json()
+            authState.value = {
+                accessKeyId,
+                secretAccessKey,
+                token: data.token,
+                username: data.username,
+                isAuthenticated: true
+            }
+            return true
+        } catch (err) {
+            console.error('Login error:', err)
+            return false
+        }
+    }
+
+    function logout() {
+        authState.value = {
+            accessKeyId: '',
+            secretAccessKey: '',
+            token: '',
+            username: '',
+            isAuthenticated: false
+        }
+        if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('gravspace_auth')
+        }
+    }
+
+    function getCredentials() {
+        if (!authState.value.isAuthenticated) {
+            return null
+        }
+        return {
+            accessKeyId: authState.value.accessKeyId,
+            secretAccessKey: authState.value.secretAccessKey
+        }
+    }
 
     async function authFetch(url: string, options: any = {}) {
         if (!authState.value.isAuthenticated) {
