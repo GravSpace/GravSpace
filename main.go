@@ -23,6 +23,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // Version information (set via ldflags during build)
@@ -115,8 +117,12 @@ func main() {
 	healthChecker := health.NewHealthChecker()
 
 	// Initialize Analytics Worker
-	analyticsWorker := storage.NewAnalyticsWorker(db, store)
+	analyticsWorker := storage.NewAnalyticsWorker(db, store, store.Jobs)
 	analyticsWorker.Start()
+
+	// Initialize Trash Worker (Soft Delete Cleanup)
+	trashWorker := storage.NewTrashWorker(db, store)
+	trashWorker.Start()
 
 	// Initialize Audit Logger
 	auditLogger, err := audit.NewAuditLogger("./logs/audit.log", db)
@@ -173,10 +179,14 @@ func main() {
 
 	// Admin Routes
 	admin := e.Group("/admin")
-	admin.Use(middleware.JWT([]byte(jwtSecret)))
+	admin.Use(middleware.JWTWithConfig(middleware.JWTConfig{
+		SigningKey:  []byte(jwtSecret),
+		TokenLookup: "header:Authorization,query:token",
+	}))
 
 	// General Admin Routes (accessible by any logged-in user with appropriate policy if S3-based,
 	// but currently Console access uses JWT which we want to restrict for IAM)
+	admin.POST("/auth/verify", adminHandler.VerifyAdminPassword)
 	admin.GET("/buckets", adminHandler.ListBuckets)
 	admin.PUT("/buckets/:bucket", adminHandler.CreateBucket)
 	admin.DELETE("/buckets/:bucket", adminHandler.DeleteBucket)
@@ -191,11 +201,22 @@ func main() {
 	admin.GET("/buckets/:bucket/download/*", adminHandler.DownloadObject)
 	admin.PUT("/buckets/:bucket/objects/*", adminHandler.PutObject)
 	admin.DELETE("/buckets/:bucket/objects/*", adminHandler.DeleteObject)
+	admin.POST("/buckets/:bucket/objects/share", adminHandler.ShareObject)
 	admin.GET("/buckets/:bucket/tags/*", adminHandler.GetObjectTagging)
 	admin.PUT("/buckets/:bucket/tags/*", adminHandler.PutObjectTagging)
 	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
 	admin.POST("/buckets/:bucket/webhooks", adminHandler.CreateWebhook)
 	admin.DELETE("/buckets/:bucket/webhooks/:id", adminHandler.DeleteWebhook)
+	admin.GET("/buckets/:bucket/website", adminHandler.GetBucketWebsite)
+	admin.PUT("/buckets/:bucket/website", adminHandler.SetBucketWebsite)
+	admin.DELETE("/buckets/:bucket/website", adminHandler.DeleteBucketWebsite)
+	admin.PUT("/buckets/:bucket/soft-delete", adminHandler.SetBucketSoftDelete)
+	admin.GET("/trash", adminHandler.ListTrash)
+	admin.POST("/trash/restore", adminHandler.RestoreObject)
+	admin.POST("/trash/restore-bulk", adminHandler.BulkRestoreObjects)
+	admin.DELETE("/trash", adminHandler.DeleteTrashObject)
+	admin.DELETE("/trash-bulk", adminHandler.BulkDeleteTrashObjects)
+	admin.DELETE("/trash/empty", adminHandler.EmptyTrash)
 
 	// Restricted Admin Routes (IAM & System)
 	iam := admin.Group("")
@@ -205,6 +226,8 @@ func main() {
 	iam.GET("/audit-logs", adminHandler.GetAuditLogs)
 	iam.GET("/analytics/storage", adminHandler.GetStorageAnalytics)
 	iam.GET("/analytics/requests", adminHandler.GetActionAnalytics)
+	iam.GET("/settings", adminHandler.GetSystemSettings)
+	iam.POST("/settings", adminHandler.UpdateSystemSettings)
 	iam.GET("/users", adminHandler.ListUsers)
 	iam.POST("/users", adminHandler.CreateUser)
 	iam.DELETE("/users/:username", adminHandler.DeleteUser)
@@ -241,6 +264,14 @@ func main() {
 	s3.POST("/:bucket/*", s3Handler.PostObject)
 	s3.DELETE("/:bucket/*", s3Handler.DeleteObject)
 
-	// Start server
-	e.Logger.Fatal(e.Start(":8080"))
+	// Website Static Hosting (Public access handled within handler)
+	e.GET("/website/:bucket/*", s3Handler.ServeWebsite)
+	e.GET("/website/:bucket", s3Handler.ServeWebsite)
+
+	// Start server with HTTP/2 support
+	h2s := &http2.Server{}
+	e.Logger.Fatal(e.StartServer(&http.Server{
+		Addr:    ":8080",
+		Handler: h2c.NewHandler(e, h2s),
+	}))
 }

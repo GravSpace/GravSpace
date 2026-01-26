@@ -5,10 +5,11 @@ export interface TransferItem {
     name: string
     bucket: string
     progress: number
-    status: 'uploading' | 'downloading' | 'completed' | 'error'
+    status: 'uploading' | 'downloading' | 'completed' | 'error' | 'cancelled'
     type: 'upload' | 'download'
     error?: string
     size: number
+    abort?: () => void
 }
 
 const transfers = ref<TransferItem[]>([])
@@ -20,6 +21,13 @@ export const useTransfers = () => {
             progress: 0,
             status: item.type === 'upload' ? 'uploading' : 'downloading'
         })
+    }
+
+    const setAbort = (id: string, abort: () => void) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item) {
+            item.abort = abort
+        }
     }
 
     const updateProgress = (id: string, progress: number) => {
@@ -43,12 +51,18 @@ export const useTransfers = () => {
     const removeTransfer = (id: string) => {
         const index = transfers.value.findIndex(u => u.id === id)
         if (index !== -1) {
-            transfers.value.splice(index, 1)
+            const item = transfers.value[index]
+            if (item && (item.status === 'uploading' || item.status === 'downloading') && item.abort) {
+                item.abort()
+                item.status = 'cancelled'
+            } else {
+                transfers.value.splice(index, 1)
+            }
         }
     }
 
     const clearCompleted = () => {
-        transfers.value = transfers.value.filter(u => u.status !== 'completed')
+        transfers.value = transfers.value.filter(u => u.status !== 'completed' && u.status !== 'cancelled')
     }
 
     const activeTransfersCount = computed(() =>
@@ -58,6 +72,7 @@ export const useTransfers = () => {
     return {
         transfers,
         addTransfer,
+        setAbort,
         updateProgress,
         setError,
         removeTransfer,

@@ -15,7 +15,7 @@
         <div class="w-full max-w-sm px-6 z-10 scale-95 md:scale-100">
             <div class="text-center mb-8">
                 <div
-                    class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-xl shadow-indigo-500/20 mb-4 transition-transform hover:scale-105 duration-300 p-2">
+                    class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-linear-to-br from-indigo-500 to-purple-600 shadow-xl shadow-indigo-500/20 mb-4 transition-transform hover:scale-105 duration-300 p-2">
                     <img src="/logo.png" alt="GravSpace Logo" class="w-full h-full object-contain" />
                 </div>
                 <h1 class="text-2xl font-bold text-white tracking-tight">GravSpace</h1>
@@ -114,6 +114,11 @@ import { ChevronRight, Loader2, Info } from 'lucide-vue-next'
 
 const router = useRouter()
 const { login, authState } = useAuth()
+
+useSeoMeta({
+    title: 'Sign In | GravSpace',
+    description: 'Access your administrative credentials for GravSpace Enterprise S3 Management Suite.',
+})
 
 const accessKeyId = ref('')
 const secretAccessKey = ref('')

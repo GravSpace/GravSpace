@@ -129,6 +129,14 @@ func BucketListKey() string {
 	return "buckets:list"
 }
 
+func BucketInfoKey(bucket string) string {
+	return "bucket:info:" + bucket
+}
+
+func BucketLockKey(bucket string) string {
+	return "bucket:lock:" + bucket
+}
+
 func ObjectListKey(bucket, prefix string) string {
 	return "objects:" + bucket + ":" + prefix
 }
@@ -139,6 +147,10 @@ func BucketCORSKey(bucket string) string {
 
 func BucketLifecycleKey(bucket string) string {
 	return "lifecycle:" + bucket
+}
+
+func BucketWebsiteKey(bucket string) string {
+	return "website:" + bucket
 }
 
 func ObjectMetadataKey(bucket, key, versionID string) string {

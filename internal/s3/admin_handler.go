@@ -3,12 +3,14 @@ package s3
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/auth"
@@ -582,4 +584,299 @@ func (h *AdminHandler) GetActionAnalytics(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, trends)
+}
+
+func (h *AdminHandler) GetBucketWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	config, err := h.Storage.GetBucketWebsite(bucket)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if config == nil {
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "Website configuration not found"})
+	}
+	return c.JSON(http.StatusOK, config)
+}
+
+func (h *AdminHandler) SetBucketWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var config storage.WebsiteConfiguration
+	if err := c.Bind(&config); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid website configuration")
+	}
+
+	if err := h.Storage.PutBucketWebsite(bucket, config); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) DeleteBucketWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	if err := h.Storage.DeleteBucketWebsite(bucket); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) SetBucketSoftDelete(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		Enabled       bool `json:"enabled"`
+		RetentionDays int  `json:"retention_days"`
+	}
+	if err := c.Bind(&req); err != nil {
+		log.Printf("Soft delete bind error: %v", err)
+		return c.String(http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+	}
+	if err := h.Storage.SetBucketSoftDelete(bucket, req.Enabled, req.RetentionDays); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) ListTrash(c echo.Context) error {
+	bucket := c.QueryParam("bucket")
+	search := c.QueryParam("search")
+	objects, err := h.Storage.ListTrash(bucket, search)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, objects)
+}
+
+func (h *AdminHandler) EmptyTrash(c echo.Context) error {
+	bucket := c.QueryParam("bucket")
+	if err := h.Storage.EmptyTrash(bucket); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) RestoreObject(c echo.Context) error {
+	var req struct {
+		Bucket    string `json:"bucket"`
+		Key       string `json:"key"`
+		VersionID string `json:"versionId"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+	if err := h.Storage.RestoreObject(req.Bucket, req.Key, req.VersionID); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) DeleteTrashObject(c echo.Context) error {
+	bucket := c.QueryParam("bucket")
+	key := c.QueryParam("key")
+	versionID := c.QueryParam("versionId")
+
+	if bucket == "" || key == "" {
+		return c.String(http.StatusBadRequest, "Missing bucket or key")
+	}
+
+	// Permanent deletion from trash
+	if err := h.Storage.DeleteTrashObject(bucket, key, versionID); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) BulkRestoreObjects(c echo.Context) error {
+	var req struct {
+		Items []struct {
+			Bucket    string `json:"bucket"`
+			Key       string `json:"key"`
+			VersionID string `json:"versionId"`
+		} `json:"items"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	for _, item := range req.Items {
+		h.Storage.RestoreObject(item.Bucket, item.Key, item.VersionID)
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) BulkDeleteTrashObjects(c echo.Context) error {
+	var req struct {
+		Items []struct {
+			Bucket    string `json:"bucket"`
+			Key       string `json:"key"`
+			VersionID string `json:"versionId"`
+		} `json:"items"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	for _, item := range req.Items {
+		h.Storage.DeleteTrashObject(item.Bucket, item.Key, item.VersionID)
+	}
+
+	// Notify if significant number of items deleted
+	if len(req.Items) > 0 {
+		if fs, ok := h.Storage.(*storage.FileStorage); ok && fs.Notifier != nil {
+			fs.Notifier.SendAlert("Start Bulk Deletion", fmt.Sprintf("Admin initiated permanent deletion of %d items from trash.", len(req.Items)))
+		}
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) ShareObject(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		Key           string `json:"key"`
+		VersionID     string `json:"versionId"`
+		ExpirySeconds int    `json:"expirySeconds"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	if req.ExpirySeconds <= 0 {
+		req.ExpirySeconds = 3600 // Default 1 hour
+	}
+
+	presignedURL, err := h.GeneratePresignedURL(bucket, req.Key, req.VersionID, time.Duration(req.ExpirySeconds)*time.Second)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"url": presignedURL,
+	})
+}
+
+func (h *AdminHandler) VerifyAdminPassword(c echo.Context) error {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	username, ok := c.Get("username").(string)
+	if !ok {
+		return c.String(http.StatusUnauthorized, "User context missing")
+	}
+
+	valid, err := h.UserManager.VerifyPassword(username, req.Password)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if !valid {
+		return c.String(http.StatusUnauthorized, "Invalid password")
+	}
+
+	return c.JSON(http.StatusOK, map[string]bool{"valid": true})
+}
+
+func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expiry time.Duration) (string, error) {
+	keys, err := h.UserManager.GetAccessKeys("admin")
+	if err != nil || len(keys) == 0 {
+		// Fallback to "admin" if current user keys not found - simple hack for feature
+		return "", fmt.Errorf("no access keys available for signing (admin)")
+	}
+	accessKey := keys[0].AccessKeyID
+	secretKey := keys[0].SecretAccessKey
+
+	region := "us-east-1"
+	date := time.Now().UTC()
+	algorithm := "AWS4-HMAC-SHA256"
+	service := "s3"
+
+	host := "localhost:8080"
+	if h := os.Getenv("SERVER_HOST"); h != "" {
+		host = h
+	}
+
+	// URL components often need to be encoded
+	encodedKey := ""
+	parts := strings.Split(key, "/")
+	for i, part := range parts {
+		if i > 0 {
+			encodedKey += "/"
+		}
+		encodedKey += url.PathEscape(part)
+	}
+
+	endpoint := fmt.Sprintf("http://%s/%s/%s", host, bucket, encodedKey)
+
+	query := url.Values{}
+	query.Set("X-Amz-Algorithm", algorithm)
+	query.Set("X-Amz-Credential", fmt.Sprintf("%s/%s/%s/%s/aws4_request", accessKey, date.Format("20060102"), region, service))
+	query.Set("X-Amz-Date", date.Format("20060102T150405Z"))
+	query.Set("X-Amz-Expires", strconv.Itoa(int(expiry.Seconds())))
+	query.Set("X-Amz-SignedHeaders", "host")
+	if versionID != "" && versionID != "simple" && versionID != "folder" {
+		query.Set("versionId", versionID)
+		endpoint += "?versionId=" + versionID
+	}
+
+	canonicalURI := fmt.Sprintf("/%s/%s", bucket, encodedKey)
+
+	// Encode and fix spaces for canonical query
+	canonicalQuery := strings.ReplaceAll(query.Encode(), "+", "%20")
+
+	canonicalHeaders := fmt.Sprintf("host:%s\n", host)
+	signedHeaders := "host"
+	payloadHash := "UNSIGNED-PAYLOAD"
+
+	canonicalRequest := fmt.Sprintf("GET\n%s\n%s\n%s\n%s\n%s", canonicalURI, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash)
+
+	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", date.Format("20060102"), region, service)
+	stringToSign := fmt.Sprintf("%s\n%s\n%s\n%s", algorithm, date.Format("20060102T150405Z"), credentialScope, auth.Sha256Hex(canonicalRequest))
+
+	signature := auth.CalculateSignature(secretKey, date.Format("20060102"), region, service, stringToSign)
+
+	finalURL := fmt.Sprintf("%s?%s&X-Amz-Signature=%s", endpoint, canonicalQuery, signature)
+	// If versionID was added to endpoint manually above, we need to be careful not to duplicate ? or &
+	// Actually, endpoint has ?versionId=...
+	if strings.Contains(endpoint, "?") {
+		finalURL = fmt.Sprintf("%s&%s&X-Amz-Signature=%s", endpoint, canonicalQuery, signature)
+	}
+
+	return finalURL, nil
+}
+
+func (h *AdminHandler) GetSystemSettings(c echo.Context) error {
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		return c.String(http.StatusInternalServerError, "Storage type not supported")
+	}
+
+	slackWebhook, err := fs.DB.GetSystemSetting("slack_webhook_url")
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"slack_webhook_url": slackWebhook,
+	})
+}
+
+func (h *AdminHandler) UpdateSystemSettings(c echo.Context) error {
+	var req struct {
+		SlackWebhookURL string `json:"slack_webhook_url"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		return c.String(http.StatusInternalServerError, "Storage type not supported")
+	}
+
+	if err := fs.DB.SetSystemSetting("slack_webhook_url", req.SlackWebhookURL); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.NoContent(http.StatusOK)
 }

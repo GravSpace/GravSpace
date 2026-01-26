@@ -4,7 +4,7 @@
         <aside class="w-64 border-r bg-card flex flex-col">
             <div class="p-6 flex items-center gap-3">
                 <div
-                    class="bg-gradient-to-br from-indigo-500 to-purple-600 w-10 h-10 flex items-center justify-center rounded-lg p-1.5">
+                    class="bg-linear-to-br from-indigo-500 to-purple-600 w-10 h-10 flex items-center justify-center rounded-lg p-1.5">
                     <img src="/logo.png" alt="GravSpace" class="w-full h-full object-contain" />
                 </div>
                 <span class="text-xl font-bold tracking-tight">GravSpace</span>
@@ -70,7 +70,7 @@
 </template>
 
 <script setup>
-import { LayoutDashboard, Database, User as UserIcon, Shield, Settings, HelpCircle, Sun, UploadCloud, ScrollText, TrendingUp } from 'lucide-vue-next'
+import { LayoutDashboard, Database, User as UserIcon, Shield, Settings, HelpCircle, Sun, UploadCloud, ScrollText, TrendingUp, Trash2 } from 'lucide-vue-next'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Toaster } from '@/components/ui/sonner'
@@ -90,7 +90,7 @@ const navItems = [
     { path: '/admin/users', label: 'IAM Engine', icon: UserIcon },
     { path: '/admin/policies', label: 'Security Policies', icon: Shield },
     { path: '/admin/audit', label: 'Audit Logs', icon: ScrollText },
-    { path: '/admin/analytics', label: 'Analytics', icon: TrendingUp },
+    { path: '/admin/trash', label: 'Recycle Bin', icon: Trash2 },
 ]
 
 function handleLogout() {

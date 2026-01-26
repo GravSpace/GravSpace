@@ -34,10 +34,18 @@
                             <h3 class="text-sm font-bold text-slate-100 truncate pr-4" :title="transfer.name">
                                 {{ transfer.name }}
                             </h3>
-                            <button @click="removeTransfer(transfer.id)"
-                                class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-white/10 text-slate-500 hover:text-white transition-all">
-                                <X class="w-3.5 h-3.5" />
-                            </button>
+                            <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                                <button v-if="transfer.status === 'uploading' || transfer.status === 'downloading'"
+                                    @click="removeTransfer(transfer.id)"
+                                    class="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-all"
+                                    title="Cancel Transfer">
+                                    <X class="w-3.5 h-3.5" />
+                                </button>
+                                <button @click="removeTransfer(transfer.id)" v-else
+                                    class="p-1 rounded hover:bg-white/10 text-slate-500 hover:text-white transition-all">
+                                    <X class="w-3.5 h-3.5" />
+                                </button>
+                            </div>
                         </div>
                         <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">
                             {{ transfer.type }}: <span class="text-slate-400">{{ transfer.bucket }}</span>
@@ -50,6 +58,7 @@
                                     :style="{ width: `${transfer.progress}%` }" :class="{
                                         'bg-emerald-500 shadow-emerald-500/30': transfer.status === 'completed',
                                         'bg-rose-500 shadow-rose-500/30': transfer.status === 'error',
+                                        'bg-slate-500 shadow-slate-500/30': transfer.status === 'cancelled',
                                         'bg-blue-400': transfer.type === 'download' && transfer.status === 'downloading'
                                     }" />
                             </div>
@@ -60,6 +69,10 @@
 
                         <p v-if="transfer.error" class="text-[10px] text-rose-400 mt-1 font-medium truncate">
                             {{ transfer.error }}
+                        </p>
+                        <p v-else-if="transfer.status === 'cancelled'"
+                            class="text-[10px] text-slate-400 mt-1 font-medium italic">
+                            Transfer cancelled
                         </p>
                     </div>
                 </div>

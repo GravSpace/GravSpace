@@ -16,6 +16,11 @@ import { useAuth } from '@/composables/useAuth'
 const router = useRouter()
 const { authState } = useAuth()
 
+useSeoMeta({
+    title: 'GravSpace | Enterprise S3 Management',
+    description: 'Redirecting to your secure storage dashboard.',
+})
+
 onMounted(() => {
     if (authState.value.isAuthenticated) {
         router.push('/admin/dashboard')

@@ -269,6 +269,11 @@ const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
 const router = useRouter()
 
+useSeoMeta({
+    title: 'Buckets Explorer | GravSpace',
+    description: 'Browse and manage your cloud storage containers.',
+})
+
 const buckets = ref([])
 const users = ref({})
 const loading = ref(false)
@@ -334,19 +339,18 @@ async function createBucket() {
 }
 
 async function deleteBucket(name) {
-    if (!confirm(`Are you sure you want to permanently delete bucket "${name}"? This action cannot be undone.`)) return
-
-    try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${name}`, { method: 'DELETE' })
-        if (res.ok) {
-            toast.success(`Bucket "${name}" has been decommissioned.`)
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${name}`, { method: 'DELETE' })
+            if (!res.ok) throw new Error('Failed to delete bucket')
             await fetchBuckets()
-        } else {
-            throw new Error('Delete failed')
+        },
+        {
+            loading: `Deleting bucket "${name}"...`,
+            success: `Bucket "${name}" has been decommissioned`,
+            error: (err) => `Failed to delete bucket: ${err.message}`
         }
-    } catch (e) {
-        toast.error(`Error: Could not remove bucket "${name}".`)
-    }
+    )
 }
 
 function isPublic(bucket) {
