@@ -118,6 +118,10 @@ func main() {
 	analyticsWorker := storage.NewAnalyticsWorker(db, store)
 	analyticsWorker.Start()
 
+	// Initialize Trash Worker (Soft Delete Cleanup)
+	trashWorker := storage.NewTrashWorker(db, store)
+	trashWorker.Start()
+
 	// Initialize Audit Logger
 	auditLogger, err := audit.NewAuditLogger("./logs/audit.log", db)
 	if err != nil {
@@ -177,6 +181,7 @@ func main() {
 
 	// General Admin Routes (accessible by any logged-in user with appropriate policy if S3-based,
 	// but currently Console access uses JWT which we want to restrict for IAM)
+	admin.POST("/auth/verify", adminHandler.VerifyAdminPassword)
 	admin.GET("/buckets", adminHandler.ListBuckets)
 	admin.PUT("/buckets/:bucket", adminHandler.CreateBucket)
 	admin.DELETE("/buckets/:bucket", adminHandler.DeleteBucket)
@@ -191,6 +196,7 @@ func main() {
 	admin.GET("/buckets/:bucket/download/*", adminHandler.DownloadObject)
 	admin.PUT("/buckets/:bucket/objects/*", adminHandler.PutObject)
 	admin.DELETE("/buckets/:bucket/objects/*", adminHandler.DeleteObject)
+	admin.POST("/buckets/:bucket/objects/share", adminHandler.ShareObject)
 	admin.GET("/buckets/:bucket/tags/*", adminHandler.GetObjectTagging)
 	admin.PUT("/buckets/:bucket/tags/*", adminHandler.PutObjectTagging)
 	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
@@ -199,6 +205,13 @@ func main() {
 	admin.GET("/buckets/:bucket/website", adminHandler.GetBucketWebsite)
 	admin.PUT("/buckets/:bucket/website", adminHandler.SetBucketWebsite)
 	admin.DELETE("/buckets/:bucket/website", adminHandler.DeleteBucketWebsite)
+	admin.PUT("/buckets/:bucket/soft-delete", adminHandler.SetBucketSoftDelete)
+	admin.GET("/trash", adminHandler.ListTrash)
+	admin.POST("/trash/restore", adminHandler.RestoreObject)
+	admin.POST("/trash/restore-bulk", adminHandler.BulkRestoreObjects)
+	admin.DELETE("/trash", adminHandler.DeleteTrashObject)
+	admin.DELETE("/trash-bulk", adminHandler.BulkDeleteTrashObjects)
+	admin.DELETE("/trash/empty", adminHandler.EmptyTrash)
 
 	// Restricted Admin Routes (IAM & System)
 	iam := admin.Group("")
@@ -208,6 +221,8 @@ func main() {
 	iam.GET("/audit-logs", adminHandler.GetAuditLogs)
 	iam.GET("/analytics/storage", adminHandler.GetStorageAnalytics)
 	iam.GET("/analytics/requests", adminHandler.GetActionAnalytics)
+	iam.GET("/settings", adminHandler.GetSystemSettings)
+	iam.POST("/settings", adminHandler.UpdateSystemSettings)
 	iam.GET("/users", adminHandler.ListUsers)
 	iam.POST("/users", adminHandler.CreateUser)
 	iam.DELETE("/users/:username", adminHandler.DeleteUser)

@@ -11,7 +11,8 @@ import (
 
 	"github.com/GravSpace/GravSpace/internal/metrics"
 	_ "github.com/tursodatabase/turso-go" // Turso driver (works for remote)
-	_ "modernc.org/sqlite"                // SQLite driver (for local)
+	"golang.org/x/crypto/bcrypt"
+	_ "modernc.org/sqlite" // SQLite driver (for local)
 )
 
 type Database struct {
@@ -26,6 +27,8 @@ type BucketRow struct {
 	ObjectLockEnabled    bool
 	DefaultRetentionMode string
 	DefaultRetentionDays int
+	SoftDeleteEnabled    bool
+	SoftDeleteRetention  int // in days
 }
 
 type ObjectRow struct {
@@ -42,6 +45,7 @@ type ObjectRow struct {
 	RetainUntilDate *time.Time // Object retention expiry date
 	LegalHold       bool       // Legal hold status
 	LockMode        *string    // COMPLIANCE or GOVERNANCE
+	DeletedAt       *time.Time
 }
 
 type ObjectTag struct {
@@ -186,13 +190,23 @@ func NewDatabase(dbPath string) (*Database, error) {
 		}
 		fmt.Printf("Connected to local SQLite database: %s\n", dbPath)
 
-		// Enable WAL mode for local SQLite
+		// Enable WAL mode for local SQLite (better concurrency)
 		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 			fmt.Printf("Warning: failed to enable WAL mode: %v\n", err)
 		}
+		// Set synchronous to NORMAL for better performance
 		if _, err := db.Exec("PRAGMA synchronous=NORMAL;"); err != nil {
 			fmt.Printf("Warning: failed to set synchronous=NORMAL: %v\n", err)
 		}
+		// Set busy timeout to 5 seconds to handle concurrent access
+		if _, err := db.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+			fmt.Printf("Warning: failed to set busy_timeout: %v\n", err)
+		}
+
+		// Configure connection pool to reduce contention
+		db.SetMaxOpenConns(1) // SQLite works best with single writer
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(0)
 	}
 
 	// Note: Turso/libSQL driver may not support certain SQLite PRAGMAs directly via Exec.
@@ -217,7 +231,9 @@ func (d *Database) initSchema() error {
 		versioning_enabled BOOLEAN DEFAULT FALSE,
 		object_lock_enabled BOOLEAN DEFAULT FALSE,
 		default_retention_mode TEXT,
-		default_retention_days INTEGER
+		default_retention_days INTEGER,
+		soft_delete_enabled BOOLEAN DEFAULT FALSE,
+		soft_delete_retention INTEGER DEFAULT 30
 	);
 
 	CREATE TABLE IF NOT EXISTS objects (
@@ -234,6 +250,7 @@ func (d *Database) initSchema() error {
 		retain_until_date TIMESTAMP,
 		legal_hold BOOLEAN DEFAULT FALSE,
 		lock_mode TEXT,
+		deleted_at TIMESTAMP,
 		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE,
 		UNIQUE(bucket, key, version_id)
 	);
@@ -339,6 +356,12 @@ func (d *Database) initSchema() error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS system_settings (
+		key TEXT PRIMARY KEY,
+		value TEXT,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key ON objects(bucket, key);
 	CREATE INDEX IF NOT EXISTS idx_objects_latest ON objects(bucket, is_latest) WHERE is_latest = TRUE;
 	CREATE INDEX IF NOT EXISTS idx_multipart_bucket_key ON multipart_uploads(bucket, key);
@@ -373,6 +396,20 @@ func (d *Database) initSchema() error {
 	}
 	if err := d.addColumnIfNotExists("bucket_configs", "website_config", "TEXT"); err != nil {
 		return err
+	}
+	if err := d.addColumnIfNotExists("buckets", "soft_delete_enabled", "BOOLEAN DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("buckets", "soft_delete_retention", "INTEGER DEFAULT 30"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "deleted_at", "TIMESTAMP"); err != nil {
+		return err
+	}
+
+	// Create indexes that might depend on migrated columns
+	if _, err := d.db.Exec("CREATE INDEX IF NOT EXISTS idx_objects_deleted_at ON objects(deleted_at) WHERE deleted_at IS NOT NULL;"); err != nil {
+		fmt.Printf("Warning: failed to create idx_objects_deleted_at: %v\n", err)
 	}
 
 	return nil
@@ -458,8 +495,8 @@ func (d *Database) GetBucket(name string) (*BucketRow, error) {
 	var bucket BucketRow
 	var mode sql.NullString
 	var days sql.NullInt64
-	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled, default_retention_mode, default_retention_days FROM buckets WHERE name = ?", name).
-		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled, &mode, &days)
+	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled, default_retention_mode, default_retention_days, soft_delete_enabled, soft_delete_retention FROM buckets WHERE name = ?", name).
+		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled, &mode, &days, &bucket.SoftDeleteEnabled, &bucket.SoftDeleteRetention)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -496,9 +533,9 @@ func (d *Database) SetBucketDefaultRetention(name string, mode string, days int)
 // Object operations
 func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	start := time.Now()
-	// Mark previous versions as not latest
+	// Mark previous versions as not latest (exclude current version_id)
 	if obj.IsLatest {
-		_, err := d.db.Exec("UPDATE objects SET is_latest = FALSE WHERE bucket = ? AND key = ?", obj.Bucket, obj.Key)
+		_, err := d.db.Exec("UPDATE objects SET is_latest = FALSE WHERE bucket = ? AND key = ? AND version_id != ?", obj.Bucket, obj.Key, obj.VersionID)
 		if err != nil {
 			return 0, err
 		}
@@ -519,7 +556,40 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 
 func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) {
 	start := time.Now()
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	          FROM objects WHERE bucket = ? AND key = ? AND deleted_at IS NULL`
+
+	var obj ObjectRow
+	var err error
+
+	if versionID != "" {
+		query += " AND version_id = ?"
+		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
+			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
+	} else {
+		query += " AND is_latest = TRUE"
+		err = d.db.QueryRow(query, bucket, key).Scan(
+			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
+	}
+	metrics.RecordDBQuery("GetObject", time.Since(start))
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &obj, nil
+}
+
+func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*ObjectRow, error) {
+	start := time.Now()
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
 	          FROM objects WHERE bucket = ? AND key = ?`
 
 	var obj ObjectRow
@@ -530,15 +600,15 @@ func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) 
 		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode)
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
 	} else {
 		query += " AND is_latest = TRUE"
 		err = d.db.QueryRow(query, bucket, key).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode)
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
 	}
-	metrics.RecordDBQuery("GetObject", time.Since(start))
+	metrics.RecordDBQuery("GetObjectIncludeDeleted", time.Since(start))
 
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -570,6 +640,80 @@ func (d *Database) DeleteObject(bucket, key, versionID string) error {
 	return err
 }
 
+func (d *Database) SoftDeleteObject(bucket, key, versionID string) error {
+	start := time.Now()
+	now := time.Now()
+	if versionID != "" {
+		_, err := d.db.Exec("UPDATE objects SET deleted_at = ?, is_latest = FALSE WHERE bucket = ? AND key = ? AND version_id = ?", now, bucket, key, versionID)
+		metrics.RecordDBQuery("SoftDeleteObject", time.Since(start))
+		return err
+	}
+	_, err := d.db.Exec("UPDATE objects SET deleted_at = ?, is_latest = FALSE WHERE bucket = ? AND key = ? AND is_latest = TRUE", now, bucket, key)
+	metrics.RecordDBQuery("SoftDeleteObject", time.Since(start))
+	return err
+}
+
+func (d *Database) RestoreObject(bucket, key, versionID string) error {
+	start := time.Now()
+	// When restoring, we also need to decide if it becomes the latest version again
+	// For simplicity, we'll mark the restored version as latest if no other version is current
+	_, err := d.db.Exec("UPDATE objects SET deleted_at = NULL, is_latest = TRUE WHERE bucket = ? AND key = ? AND version_id = ?", bucket, key, versionID)
+	if err == nil {
+		// Mark others as not latest
+		d.db.Exec("UPDATE objects SET is_latest = FALSE WHERE bucket = ? AND key = ? AND version_id != ?", bucket, key, versionID)
+	}
+	metrics.RecordDBQuery("RestoreObject", time.Since(start))
+	return err
+}
+
+func (d *Database) ListTrashObjects(bucket, search string) ([]*ObjectRow, error) {
+	start := time.Now()
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	          FROM objects WHERE deleted_at IS NOT NULL`
+	args := []interface{}{}
+	if bucket != "" {
+		query += " AND bucket = ?"
+		args = append(args, bucket)
+	}
+	if search != "" {
+		query += " AND key LIKE ?"
+		args = append(args, "%"+search+"%")
+	}
+	query += " ORDER BY deleted_at DESC"
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []*ObjectRow
+	for rows.Next() {
+		var obj ObjectRow
+		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
+			return nil, err
+		}
+		objects = append(objects, &obj)
+	}
+	metrics.RecordDBQuery("ListTrashObjects", time.Since(start))
+	return objects, rows.Err()
+}
+
+func (d *Database) EmptyTrash(bucket string) error {
+	start := time.Now()
+	query := "DELETE FROM objects WHERE deleted_at IS NOT NULL"
+	args := []interface{}{}
+	if bucket != "" {
+		query += " AND bucket = ?"
+		args = append(args, bucket)
+	}
+	_, err := d.db.Exec(query, args...)
+	metrics.RecordDBQuery("EmptyTrash", time.Since(start))
+	return err
+}
+
 func (d *Database) DeletePrefix(bucket, prefix string) error {
 	start := time.Now()
 	_, err := d.db.Exec("DELETE FROM objects WHERE bucket = ? AND key LIKE ?", bucket, prefix+"%")
@@ -577,9 +721,24 @@ func (d *Database) DeletePrefix(bucket, prefix string) error {
 	return err
 }
 
+func (d *Database) SoftDeletePrefix(bucket, prefix string) error {
+	start := time.Now()
+	now := time.Now()
+	_, err := d.db.Exec("UPDATE objects SET deleted_at = ?, is_latest = FALSE WHERE bucket = ? AND key LIKE ? AND deleted_at IS NULL", now, bucket, prefix+"%")
+	metrics.RecordDBQuery("SoftDeletePrefix", time.Since(start))
+	return err
+}
+
+func (d *Database) RestorePrefix(bucket, prefix string) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE objects SET deleted_at = NULL, is_latest = TRUE WHERE bucket = ? AND key LIKE ? AND deleted_at IS NOT NULL", bucket, prefix+"%")
+	metrics.RecordDBQuery("RestorePrefix", time.Since(start))
+	return err
+}
+
 func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*ObjectRow, error) {
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
-	          FROM objects WHERE bucket = ? AND is_latest = TRUE`
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	          FROM objects WHERE bucket = ? AND is_latest = TRUE AND deleted_at IS NULL`
 
 	args := []interface{}{bucket}
 
@@ -607,7 +766,7 @@ func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*Obj
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -631,6 +790,13 @@ func (d *Database) SetObjectLegalHold(bucket, key, versionID string, hold bool) 
 	                      WHERE bucket = ? AND key = ? AND version_id = ?`,
 		hold, bucket, key, versionID)
 	metrics.RecordDBQuery("SetObjectLegalHold", time.Since(start))
+	return err
+}
+
+func (d *Database) SetBucketSoftDelete(name string, enabled bool, retentionDays int) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE buckets SET soft_delete_enabled = ?, soft_delete_retention = ? WHERE name = ?", enabled, retentionDays, name)
+	metrics.RecordDBQuery("SetBucketSoftDelete", time.Since(start))
 	return err
 }
 
@@ -880,6 +1046,23 @@ func (d *Database) GetAccessKeys(username string) ([]AccessKeyRecord, error) {
 	return keys, nil
 }
 
+func (d *Database) VerifyPassword(username, password string) (bool, error) {
+	var hash string
+	err := d.db.QueryRow("SELECT password_hash FROM users WHERE username = ?", username).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	if err == nil {
+		return true, nil
+	}
+	return false, nil
+}
+
 func (d *Database) GetUserByAccessKey(keyID string) (*UserRecord, string, error) {
 	var user UserRecord
 	var secret string
@@ -936,9 +1119,9 @@ func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]
 	start := time.Now()
 	// Calculate cutoff time in Go to allow index usage on modified_at column
 	cutoff := time.Now().AddDate(0, 0, -days)
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode 
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
 	          FROM objects 
-	          WHERE bucket = ? AND is_latest = 1 AND modified_at < ?`
+	          WHERE bucket = ? AND is_latest = 1 AND modified_at < ? AND deleted_at IS NULL`
 
 	args := []interface{}{bucket, cutoff}
 	if prefix != "" {
@@ -957,7 +1140,7 @@ func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -971,7 +1154,7 @@ func (d *Database) Close() error {
 }
 
 func (d *Database) ListAllObjects() ([]*ObjectRow, error) {
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
 	          FROM objects`
 	rows, err := d.db.Query(query)
 	if err != nil {
@@ -984,7 +1167,7 @@ func (d *Database) ListAllObjects() ([]*ObjectRow, error) {
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -1075,6 +1258,16 @@ func (d *Database) CreateStorageSnapshot(bucket string, size int64) error {
 	return err
 }
 
+func (d *Database) HasSnapshotForToday(bucket string) (bool, error) {
+	start := time.Now()
+	var count int
+	// Check if a snapshot exists for this bucket with today's date (UTC)
+	err := d.db.QueryRow(`SELECT count(*) FROM storage_snapshots 
+	                      WHERE bucket = ? AND date(timestamp) = date('now')`, bucket).Scan(&count)
+	metrics.RecordDBQuery("HasSnapshotForToday", time.Since(start))
+	return count > 0, err
+}
+
 func (d *Database) GetStorageHistory(days int) ([]*StorageSnapshotRecord, error) {
 	start := time.Now()
 	rows, err := d.db.Query(`SELECT id, timestamp, bucket, size 
@@ -1126,4 +1319,25 @@ func (d *Database) GetActionTrends(days int) (map[string][]map[string]interface{
 		})
 	}
 	return trends, nil
+}
+
+func (d *Database) GetSystemSetting(key string) (string, error) {
+	start := time.Now()
+	var value string
+	err := d.db.QueryRow("SELECT value FROM system_settings WHERE key = ?", key).Scan(&value)
+	metrics.RecordDBQuery("GetSystemSetting", time.Since(start))
+	if err == sql.ErrNoRows {
+		return "", nil // Return empty string if not found
+	}
+	return value, err
+}
+
+func (d *Database) SetSystemSetting(key, value string) error {
+	start := time.Now()
+	_, err := d.db.Exec(`INSERT INTO system_settings (key, value, updated_at) 
+	                      VALUES (?, ?, CURRENT_TIMESTAMP)
+	                      ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP`,
+		key, value, value)
+	metrics.RecordDBQuery("SetSystemSetting", time.Since(start))
+	return err
 }

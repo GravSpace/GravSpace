@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,6 +17,7 @@ import (
 	"github.com/GravSpace/GravSpace/internal/crypto"
 	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/metrics"
+	"github.com/GravSpace/GravSpace/internal/notification" // Added this import
 	"github.com/GravSpace/GravSpace/internal/notifications"
 )
 
@@ -139,6 +141,13 @@ type Storage interface {
 	GetBucketWebsite(bucket string) (*WebsiteConfiguration, error)
 	DeleteBucketWebsite(bucket string) error
 
+	// Soft Delete & Recycle Bin
+	SetBucketSoftDelete(bucket string, enabled bool, retentionDays int) error
+	ListTrash(bucket, search string) ([]*database.ObjectRow, error)
+	EmptyTrash(bucket string) error
+	RestoreObject(bucket, key, versionID string) error
+	DeleteTrashObject(bucket, key, versionID string) error
+
 	// Stats
 	StartLifecycleWorker()
 	GetGlobalStats() (count int, size int64, err error)
@@ -150,6 +159,8 @@ type FileStorage struct {
 	Root          string
 	DB            *database.Database
 	Cache         cache.Cache
+	Notifier      *notification.NotificationService
+	mu            sync.Mutex // For synchronizing access if needed
 	SyncWorker    *SyncWorker
 	Notifications *notifications.Dispatcher
 }
@@ -176,9 +187,11 @@ func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 
 	// Create storage instance
 	s := &FileStorage{
-		Root:  root,
-		DB:    db,
-		Cache: c,
+		Root:          root,
+		DB:            db,
+		Cache:         c,
+		Notifier:      notification.NewNotificationService(db),
+		Notifications: notifications.NewDispatcher(db, 5), // 5 workers
 	}
 
 	// Initialize and start sync worker (every 5 minutes by default)
@@ -207,7 +220,9 @@ func (s *FileStorage) CreateBucket(name string) error {
 	}
 
 	// Invalidate bucket list cache
-	s.Cache.Delete(cache.BucketListKey())
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketListKey())
+	}
 
 	return nil
 }
@@ -282,11 +297,13 @@ func (s *FileStorage) SetBucketDefaultRetention(bucket, mode string, days int) e
 func (s *FileStorage) ListBuckets() ([]string, error) {
 	// Try cache first
 	var buckets []string
-	if ok := s.Cache.Get(cache.BucketListKey(), &buckets); ok {
-		metrics.RecordCacheHit("bucket_list")
-		return buckets, nil
+	if s.Cache != nil {
+		if ok := s.Cache.Get(cache.BucketListKey(), &buckets); ok {
+			metrics.RecordCacheHit("bucket_list")
+			return buckets, nil
+		}
+		metrics.RecordCacheMiss("bucket_list")
 	}
-	metrics.RecordCacheMiss("bucket_list")
 
 	// Try database
 	if s.DB != nil {
@@ -294,7 +311,9 @@ func (s *FileStorage) ListBuckets() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		s.Cache.Set(cache.BucketListKey(), dbBuckets, 15*time.Minute)
+		if s.Cache != nil {
+			s.Cache.Set(cache.BucketListKey(), dbBuckets, 15*time.Minute)
+		}
 		return dbBuckets, nil
 	}
 
@@ -311,7 +330,9 @@ func (s *FileStorage) ListBuckets() ([]string, error) {
 	}
 
 	// Cache the result
-	s.Cache.Set(cache.BucketListKey(), results, 5*time.Minute)
+	if s.Cache != nil {
+		s.Cache.Set(cache.BucketListKey(), results, 5*time.Minute)
+	}
 	return results, nil
 }
 
@@ -327,20 +348,34 @@ func (s *FileStorage) DeleteBucket(name string) error {
 	}
 
 	// Invalidate caches
-	s.Cache.Delete(cache.BucketListKey())
-	s.Cache.Delete(cache.BucketCORSKey(name))
-	s.Cache.Delete(cache.BucketLifecycleKey(name))
-	s.Cache.Delete(cache.BucketWebsiteKey(name)) // Invalidate website cache
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketListKey())
+		s.Cache.Delete(cache.BucketCORSKey(name))
+		s.Cache.Delete(cache.BucketLifecycleKey(name))
+		s.Cache.Delete(cache.BucketWebsiteKey(name)) // Invalidate website cache
+	}
 
 	return nil
 }
 
 func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error) {
-	// If key is a folder placeholder (ends in /), just create the directory
+	// If key is a folder placeholder (ends in /), create directory and add to DB
 	if strings.HasSuffix(key, "/") {
 		objectDir := filepath.Join(s.Root, bucket, key)
 		if err := os.MkdirAll(objectDir, 0755); err != nil {
 			return "", err
+		}
+		if s.DB != nil {
+			contentType := "application/x-directory"
+			objectRow := &database.ObjectRow{
+				Bucket:      bucket,
+				Key:         key,
+				VersionID:   "folder",
+				Size:        0,
+				IsLatest:    true,
+				ContentType: &contentType,
+			}
+			s.DB.CreateObject(objectRow)
 		}
 		return "", nil
 	}
@@ -480,8 +515,16 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}
 
-	// Invalidate object list cache for this bucket
-	s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+	// Invalidate object list cache for this bucket and all parent prefixes
+	if s.Cache != nil {
+		s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+		// Invalidate cache for all parent directories
+		parts := strings.Split(key, "/")
+		for i := 1; i < len(parts); i++ {
+			prefix := strings.Join(parts[:i], "/") + "/"
+			s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
+		}
+	}
 
 	return versionID, nil
 }
@@ -568,13 +611,26 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 }
 
 func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernance bool) error {
-	objectDir := filepath.Join(s.Root, bucket, key)
+
+	// Check if soft delete is enabled for this bucket
+	softDeleteEnabled := false
+	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil {
+			softDeleteEnabled = bucketInfo.SoftDeleteEnabled
+		}
+	}
 
 	// Delete from database
 	if s.DB != nil {
 		if strings.HasSuffix(key, "/") && versionID == "" {
 			// Folder deletion: delete prefix recursively from DB
-			err := s.DB.DeletePrefix(bucket, key)
+			var err error
+			if softDeleteEnabled {
+				err = s.DB.SoftDeletePrefix(bucket, key)
+			} else {
+				err = s.DB.DeletePrefix(bucket, key)
+			}
 			if err != nil {
 				return err
 			}
@@ -605,8 +661,21 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 
 				metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
 				metrics.StorageBytes.WithLabelValues(bucket).Sub(float64(obj.Size))
+
+				if softDeleteEnabled {
+					s.DB.SoftDeleteObject(bucket, key, obj.VersionID)
+				} else {
+					s.DB.DeleteObject(bucket, key, obj.VersionID)
+				}
+
+				// Update versionID for the rest of the function (filesystem move/delete)
+				versionID = obj.VersionID
+			} else {
+				// Object might already be in trash or doesn't exist
+				if !softDeleteEnabled {
+					s.DB.DeleteObject(bucket, key, versionID)
+				}
 			}
-			s.DB.DeleteObject(bucket, key, versionID)
 
 			// Trigger Webhook for file deletion
 			if s.Notifications != nil {
@@ -614,7 +683,7 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 					Bucket:    bucket,
 					Key:       key,
 					VersionID: versionID,
-					Size:      obj.Size,
+					Size:      0, // Might not be available if obj is nil
 					ETag:      versionID,
 					EventName: "ObjectRemoved:Delete",
 				})
@@ -622,18 +691,179 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 		}
 	}
 
-	// Invalidate cache
-	s.Cache.Delete(cache.ObjectListKey(bucket, ""))
-	s.Cache.Delete(cache.ObjectMetadataKey(bucket, key, versionID))
+	// Invalidate cache for this bucket and all parent prefixes
+	if s.Cache != nil {
+		s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+		s.Cache.Delete(cache.ObjectMetadataKey(bucket, key, versionID))
+		// Invalidate cache for all parent directories
+		parts := strings.Split(key, "/")
+		for i := 1; i < len(parts); i++ {
+			prefix := strings.Join(parts[:i], "/") + "/"
+			s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
+		}
+	}
+
+	srcPath := filepath.Join(s.Root, bucket, key)
+	trashPath := filepath.Join(s.Root, ".trash", bucket, key)
+
+	if versionID == "folder" {
+		// Folder placeholders are just the directory itself
+	} else if versionID != "" && versionID != "simple" {
+		srcPath = filepath.Join(srcPath, versionID)
+		trashPath = filepath.Join(trashPath, versionID)
+	} else if versionID == "simple" {
+		trashPath = filepath.Join(trashPath, "simple")
+	}
+
+	if softDeleteEnabled {
+		if err := os.MkdirAll(filepath.Dir(trashPath), 0755); err != nil {
+			return err
+		}
+		return os.Rename(srcPath, trashPath)
+	}
 
 	if versionID == "" {
-		// Delete everything for this key if no version specified
-		return os.RemoveAll(objectDir)
+		// Delete everything for this key if no version specified (recursive)
+		return os.RemoveAll(srcPath)
 	}
-	return os.Remove(filepath.Join(objectDir, versionID))
+	return os.Remove(srcPath)
+}
+
+func (s *FileStorage) RestoreObject(bucket, key, versionID string) error {
+	srcPath := filepath.Join(s.Root, ".trash", bucket, key)
+	dstPath := filepath.Join(s.Root, bucket, key)
+
+	if versionID == "folder" {
+		// Folder placeholders are just the directory itself
+	} else if versionID != "" && versionID != "simple" {
+		srcPath = filepath.Join(srcPath, versionID)
+		dstPath = filepath.Join(dstPath, versionID)
+	} else if versionID == "simple" {
+		srcPath = filepath.Join(srcPath, "simple")
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return err
+	}
+
+	if err := os.Rename(srcPath, dstPath); err != nil {
+		return err
+	}
+
+	if s.DB != nil {
+		var err error
+		if strings.HasSuffix(key, "/") && versionID == "folder" {
+			err = s.DB.RestorePrefix(bucket, key)
+		} else {
+			err = s.DB.RestoreObject(bucket, key, versionID)
+		}
+		if err != nil {
+			return err
+		}
+		// Logic to update metrics (approximate)
+		obj, _ := s.DB.GetObject(bucket, key, versionID)
+		if obj != nil {
+			metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
+			metrics.StorageBytes.WithLabelValues(bucket).Add(float64(obj.Size))
+		}
+	}
+
+	// Invalidate cache
+	if s.Cache != nil {
+		s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+	}
+	return nil
+}
+
+func (s *FileStorage) SetBucketSoftDelete(bucket string, enabled bool, retentionDays int) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.SetBucketSoftDelete(bucket, enabled, retentionDays)
+}
+
+func (s *FileStorage) ListTrash(bucket, search string) ([]*database.ObjectRow, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+	return s.DB.ListTrashObjects(bucket, search)
+}
+
+func (s *FileStorage) EmptyTrash(bucket string) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+
+	// 1. Get all objects in trash (manually handle filesystem deletion)
+	objects, err := s.DB.ListTrashObjects(bucket, "")
+	if err != nil {
+		return err
+	}
+
+	for _, obj := range objects {
+		// Calculate physical path in the .trash directory
+		var physicalPath string
+		var objectDir string
+		if obj.VersionID == "folder" {
+			physicalPath = filepath.Join(s.Root, ".trash", obj.Bucket, obj.Key)
+			objectDir = physicalPath
+		} else if obj.VersionID == "simple" {
+			objectDir = filepath.Join(s.Root, ".trash", obj.Bucket, obj.Key)
+			physicalPath = filepath.Join(objectDir, "simple")
+		} else { // Actual version ID
+			objectDir = filepath.Join(s.Root, ".trash", obj.Bucket, obj.Key)
+			physicalPath = filepath.Join(objectDir, obj.VersionID)
+		}
+
+		// Delete version file from filesystem
+		os.RemoveAll(physicalPath)
+
+		// Delete parent directory if it's empty (this handles clearing the object directory)
+		if objectDir != "" {
+			os.Remove(objectDir)
+		}
+	}
+
+	// 2. Purge records from database
+	return s.DB.EmptyTrash(bucket)
+}
+
+func (s *FileStorage) DeleteTrashObject(bucket, key, versionID string) error {
+	trashPath := filepath.Join(s.Root, ".trash", bucket, key)
+
+	if versionID == "folder" {
+		// Folder placeholders are just the directory itself
+	} else if versionID != "" && versionID != "simple" {
+		trashPath = filepath.Join(trashPath, versionID)
+	} else if versionID == "simple" {
+		trashPath = filepath.Join(trashPath, "simple")
+	}
+
+	if s.DB != nil {
+		if err := s.DB.DeleteObject(bucket, key, versionID); err != nil {
+			log.Printf("Error deleting object from DB: %v", err)
+		}
+	}
+
+	if versionID == "" {
+		return os.RemoveAll(trashPath)
+	}
+	return os.Remove(trashPath)
 }
 
 func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]Object, []string, error) {
+	// Try cache first (only if no search query)
+	if search == "" && s.Cache != nil {
+		cacheKey := cache.ObjectListKey(bucket, prefix)
+		var cached struct {
+			Objects        []Object
+			CommonPrefixes []string
+		}
+		if s.Cache.Get(cacheKey, &cached) {
+			return cached.Objects, cached.CommonPrefixes, nil
+		}
+	}
+
 	// Try database first if available - it's much faster
 	if s.DB != nil {
 		// Use a high limit for now or implement pagination
@@ -679,6 +909,16 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]O
 				}
 				objects = append(objects, obj)
 			}
+
+			// Cache the results (only if no search query)
+			if search == "" && s.Cache != nil {
+				cacheKey := cache.ObjectListKey(bucket, prefix)
+				s.Cache.Set(cacheKey, struct {
+					Objects        []Object
+					CommonPrefixes []string
+				}{objects, commonPrefixes}, 5*time.Minute)
+			}
+
 			return objects, commonPrefixes, nil
 		}
 	}
@@ -1090,7 +1330,9 @@ func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error
 	}
 
 	// Invalidate cache
-	s.Cache.Delete(cache.BucketCORSKey(bucket))
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketCORSKey(bucket))
+	}
 
 	return os.WriteFile(path, data, 0644)
 }
@@ -1098,11 +1340,13 @@ func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error
 func (s *FileStorage) GetBucketCors(bucket string) (*CORSConfiguration, error) {
 	// Try cache first
 	var cached CORSConfiguration
-	if ok := s.Cache.Get(cache.BucketCORSKey(bucket), &cached); ok {
-		metrics.RecordCacheHit("bucket_cors")
-		return &cached, nil
+	if s.Cache != nil {
+		if ok := s.Cache.Get(cache.BucketCORSKey(bucket), &cached); ok {
+			metrics.RecordCacheHit("bucket_cors")
+			return &cached, nil
+		}
+		metrics.RecordCacheMiss("bucket_cors")
 	}
-	metrics.RecordCacheMiss("bucket_cors")
 
 	path := filepath.Join(s.Root, bucket, "cors.json")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -1118,14 +1362,18 @@ func (s *FileStorage) GetBucketCors(bucket string) (*CORSConfiguration, error) {
 	}
 
 	// Cache for 30 minutes
-	s.Cache.Set(cache.BucketCORSKey(bucket), &cors, 30*time.Minute)
+	if s.Cache != nil {
+		s.Cache.Set(cache.BucketCORSKey(bucket), &cors, 30*time.Minute)
+	}
 
 	return &cors, nil
 }
 
 func (s *FileStorage) DeleteBucketCors(bucket string) error {
 	// Invalidate cache
-	s.Cache.Delete(cache.BucketCORSKey(bucket))
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketCORSKey(bucket))
+	}
 
 	path := filepath.Join(s.Root, bucket, "cors.json")
 	return os.Remove(path)
@@ -1141,7 +1389,9 @@ func (s *FileStorage) PutBucketLifecycle(bucket string, lifecycle LifecycleConfi
 	}
 
 	// Invalidate cache
-	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketLifecycleKey(bucket))
+	}
 
 	return s.DB.PutBucketLifecycle(bucket, string(data))
 }
@@ -1152,11 +1402,13 @@ func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration
 	}
 	// Try cache first
 	var cached LifecycleConfiguration
-	if ok := s.Cache.Get(cache.BucketLifecycleKey(bucket), &cached); ok {
-		metrics.RecordCacheHit("bucket_lifecycle")
-		return &cached, nil
+	if s.Cache != nil {
+		if ok := s.Cache.Get(cache.BucketLifecycleKey(bucket), &cached); ok {
+			metrics.RecordCacheHit("bucket_lifecycle")
+			return &cached, nil
+		}
+		metrics.RecordCacheMiss("bucket_lifecycle")
 	}
-	metrics.RecordCacheMiss("bucket_lifecycle")
 
 	data, err := s.DB.GetBucketLifecycle(bucket)
 	if err != nil {
@@ -1171,7 +1423,9 @@ func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration
 	}
 
 	// Cache for 30 minutes
-	s.Cache.Set(cache.BucketLifecycleKey(bucket), &lifecycle, 30*time.Minute)
+	if s.Cache != nil {
+		s.Cache.Set(cache.BucketLifecycleKey(bucket), &lifecycle, 30*time.Minute)
+	}
 
 	return &lifecycle, nil
 }
@@ -1181,7 +1435,9 @@ func (s *FileStorage) DeleteBucketLifecycle(bucket string) error {
 		return fmt.Errorf("database not available")
 	}
 	// Invalidate cache
-	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketLifecycleKey(bucket))
+	}
 
 	return s.DB.DeleteBucketLifecycle(bucket)
 }
@@ -1195,7 +1451,9 @@ func (s *FileStorage) PutBucketWebsite(bucket string, website WebsiteConfigurati
 		return err
 	}
 	// Invalidate cache
-	s.Cache.Delete(cache.BucketWebsiteKey(bucket))
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketWebsiteKey(bucket))
+	}
 	return s.DB.PutBucketWebsite(bucket, string(data))
 }
 
@@ -1205,11 +1463,13 @@ func (s *FileStorage) GetBucketWebsite(bucket string) (*WebsiteConfiguration, er
 	}
 	// Try cache first
 	var cached WebsiteConfiguration
-	if ok := s.Cache.Get(cache.BucketWebsiteKey(bucket), &cached); ok {
-		metrics.RecordCacheHit("bucket_website")
-		return &cached, nil
+	if s.Cache != nil {
+		if ok := s.Cache.Get(cache.BucketWebsiteKey(bucket), &cached); ok {
+			metrics.RecordCacheHit("bucket_website")
+			return &cached, nil
+		}
+		metrics.RecordCacheMiss("bucket_website")
 	}
-	metrics.RecordCacheMiss("bucket_website")
 
 	data, err := s.DB.GetBucketWebsite(bucket)
 	if err != nil {
@@ -1223,7 +1483,9 @@ func (s *FileStorage) GetBucketWebsite(bucket string) (*WebsiteConfiguration, er
 		return nil, err
 	}
 	// Cache for 30 minutes
-	s.Cache.Set(cache.BucketWebsiteKey(bucket), &config, 30*time.Minute)
+	if s.Cache != nil {
+		s.Cache.Set(cache.BucketWebsiteKey(bucket), &config, 30*time.Minute)
+	}
 	return &config, nil
 }
 
@@ -1232,7 +1494,9 @@ func (s *FileStorage) DeleteBucketWebsite(bucket string) error {
 		return fmt.Errorf("database not available")
 	}
 	// Invalidate cache
-	s.Cache.Delete(cache.BucketWebsiteKey(bucket))
+	if s.Cache != nil {
+		s.Cache.Delete(cache.BucketWebsiteKey(bucket))
+	}
 	return s.DB.DeleteBucketWebsite(bucket)
 }
 
@@ -1264,12 +1528,15 @@ func (s *FileStorage) ProcessLifecycleRules() {
 	// Fetch all buckets with active lifecycle rules directly from DB
 	configs, err := s.DB.GetAllLifecycles()
 	if err != nil {
+		fmt.Printf("Lifecycle error: failed to fetch configs: %v\n", err)
+		s.Notifier.SendAlert("Lifecycle Worker Failure", fmt.Sprintf("Failed to fetch lifecycle configurations: %v", err))
 		return
 	}
 
 	for bucket, configJSON := range configs {
 		var config LifecycleConfiguration
 		if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
+			s.Notifier.SendAlert("Lifecycle Config Error", fmt.Sprintf("Failed to parse config for bucket %s: %v", bucket, err))
 			continue
 		}
 

@@ -100,3 +100,10 @@ func BuildStringToSign(algorithm, amzDate, credentialScope, canonicalRequest str
 		hashedReq,
 	)
 }
+
+// Sha256Hex calculates the SHA256 hash of a string and returns the hex string
+func Sha256Hex(data string) string {
+	h := sha256.New()
+	h.Write([]byte(data))
+	return hex.EncodeToString(h.Sum(nil))
+}

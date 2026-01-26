@@ -46,6 +46,15 @@ func (w *AnalyticsWorker) takeSnapshot() {
 			continue
 		}
 
+		// Check if we already have a snapshot for today
+		exists, err := w.db.HasSnapshotForToday(bucket)
+		if err != nil {
+			log.Printf("Analytics snapshot check exists failed for bucket %s: %v", bucket, err)
+		}
+		if exists {
+			continue
+		}
+
 		err = w.db.CreateStorageSnapshot(bucket, size)
 		if err != nil {
 			log.Printf("Analytics snapshot storage failed for bucket %s: %v", bucket, err)

@@ -111,7 +111,19 @@ func (um *UserManager) Initialize() error {
 	}
 
 	// 3. Attach policy to admin
+	// 3. Attach policy to admin and ensure keys exist
 	if user, ok := um.Users["admin"]; ok {
+		// Ensure keys exist (critical for presigning)
+		if len(user.AccessKeys) == 0 {
+			key := AccessKey{
+				AccessKeyID:     generateRandomString(20),
+				SecretAccessKey: generateRandomString(40),
+			}
+			if err := um.DB.CreateAccessKey("admin", key.AccessKeyID, key.SecretAccessKey); err == nil {
+				user.AccessKeys = append(user.AccessKeys, key)
+			}
+		}
+
 		hasPolicy := false
 		for _, p := range user.Policies {
 			if p.Name == policyName {
@@ -503,4 +515,22 @@ func generateRandomString(n int) string {
 	b := make([]byte, n/2)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+func (um *UserManager) VerifyPassword(username, password string) (bool, error) {
+	if um.DB == nil {
+		return false, nil
+	}
+	return um.DB.VerifyPassword(username, password)
+}
+
+func (um *UserManager) GetAccessKeys(username string) ([]AccessKey, error) {
+	um.mu.RLock()
+	defer um.mu.RUnlock()
+
+	user, ok := um.Users[username]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return user.AccessKeys, nil
 }

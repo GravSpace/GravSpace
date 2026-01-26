@@ -149,7 +149,7 @@
                                             </div>
                                             <div class="flex items-center gap-1.5 min-w-0">
                                                 <span class="truncate" :title="item.Key">{{ item.Key.split('/').pop()
-                                                }}</span>
+                                                    }}</span>
                                                 <div v-if="isLocked(item)" class="flex items-center gap-1 shrink-0">
                                                     <Lock class="w-3 h-3 text-amber-500" />
                                                     <span class="text-[9px] font-bold text-amber-600 uppercase">{{
@@ -185,7 +185,10 @@
                                                         <Eye class="w-4 h-4 mr-2" /> Preview
                                                     </DropdownMenuItem>
                                                     <DropdownMenuItem @click="fetchVersions(item.Key)">
-                                                        <History class="w-4 h-4 mr-2" /> Versions
+                                                        <History class="w-4 h-4 mr-2" /> Quick Versions
+                                                    </DropdownMenuItem>
+                                                    <DropdownMenuItem @click="openVersionExplorer(item)">
+                                                        <Clock class="w-4 h-4 mr-2" /> Timeline Explorer
                                                     </DropdownMenuItem>
                                                     <DropdownMenuItem @click="copyPresignedUrl(item.Key)">
                                                         <LinkIcon class="w-4 h-4 mr-2" /> Quick Copy Link
@@ -453,10 +456,9 @@
                     <div v-if="generatedUrl" class="space-y-3 animate-in fade-in slide-in-from-top-4 duration-300">
                         <Label class="text-[10px] uppercase font-bold text-muted-foreground">Public URL</Label>
                         <div class="flex gap-2">
-                            <Input :value="generatedUrl" readOnly
+                            <Input :modelValue="generatedUrl" readOnly
                                 class="h-10 bg-muted/50 font-mono text-[10px] flex-1 border-primary/20" />
-                            <Button @click="copyToClipboard(generatedUrl)"
-                                class="h-10 px-3 bg-primary/10 text-primary hover:bg-primary/20" variant="ghost">
+                            <Button @click="copyToClipboard(generatedUrl)" variant="ghost">
                                 <LinkIcon class="w-4 h-4" />
                             </Button>
                         </div>
@@ -467,11 +469,74 @@
 
                     <div class="flex justify-end gap-3 mt-4 border-t pt-4">
                         <Button variant="outline" @click="showShareDialog = false">Close</Button>
-                        <Button @click="generateShareLink" v-if="!generatedUrl"
-                            class="bg-primary text-black font-bold">Generate
+                        <Button @click="generateShareLink" v-if="!generatedUrl" variant="default">Generate
                             Link</Button>
-                        <Button variant="secondary" @click="generatedUrl = ''" v-else
+                        <Button variant="default" @click="generatedUrl = ''" v-else
                             class="text-xs font-bold uppercase tracking-wider">Reset Expiry</Button>
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
+
+        <!-- VERSION EXPLORER DIALOG -->
+        <Dialog :open="showVersionExplorer" @update:open="showVersionExplorer = false">
+            <DialogContent class="sm:max-w-2xl max-h-[80vh] flex flex-col">
+                <DialogHeader class="pb-4 border-b">
+                    <DialogTitle class="flex items-center gap-2">
+                        <Clock class="w-5 h-5 text-primary" />
+                        Version History
+                    </DialogTitle>
+                    <DialogDescription>
+                        Timeline for <span class="font-mono text-primary font-bold">{{ selectedExplorerItem?.Key
+                        }}</span>
+                    </DialogDescription>
+                </DialogHeader>
+
+                <div class="flex-1 overflow-y-auto py-6 px-2">
+                    <div v-if="loadingVersions" class="flex justify-center py-10">
+                        <Loader2 class="w-8 h-8 animate-spin text-muted-foreground" />
+                    </div>
+                    <div v-else-if="!explorerVersions?.length" class="text-center py-10 text-muted-foreground">
+                        No version history found.
+                    </div>
+                    <div v-else class="relative border-l-2 border-slate-200 dark:border-slate-800 ml-3 space-y-8">
+                        <div v-for="(v, index) in explorerVersions" :key="v.VersionID" class="relative pl-6">
+                            <!-- Timeline Dot -->
+                            <div class="absolute -left-[9px] top-1.5 w-4 h-4 rounded-full border-2 border-background"
+                                :class="v.IsLatest ? 'bg-primary' : (v.IsDeleteMarker ? 'bg-rose-500' : 'bg-slate-400')">
+                            </div>
+
+                            <div
+                                class="flex flex-col gap-1 p-3 rounded-lg border bg-card/50 shadow-xs hover:border-primary/30 transition-colors">
+                                <div class="flex items-center justify-between">
+                                    <div class="flex items-center gap-2">
+                                        <Badge v-if="v.IsLatest" class="text-[9px] h-4">Current</Badge>
+                                        <Badge v-if="v.IsDeleteMarker" variant="destructive" class="text-[9px] h-4">
+                                            Deleted
+                                        </Badge>
+                                        <span class="text-xs font-medium text-muted-foreground">
+                                            {{ new Date(v.ModTime).toLocaleString() }}
+                                        </span>
+                                    </div>
+                                    <div class="flex items-center gap-1">
+                                        <span class="text-[10px] font-mono mr-2">{{ v.IsDeleteMarker ? '-' :
+                                            formatSize(v.Size)
+                                        }}</span>
+                                        <Button v-if="!v.IsDeleteMarker" variant="outline" size="sm" class="h-7 text-xs"
+                                            @click="downloadObject(selectedExplorerItem?.Key, v.VersionID)">
+                                            <Download class="w-3 h-3 mr-1" /> Get
+                                        </Button>
+                                    </div>
+                                </div>
+
+                                <div class="flex items-center justify-between mt-1">
+                                    <code class="text-[10px] text-muted-foreground bg-muted px-1 rounded">{{ v.VersionID
+                                    }}</code>
+                                    <span v-if="index === 0" class="text-[10px] italic text-muted-foreground">Most
+                                        recent</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </DialogContent>
@@ -507,6 +572,34 @@
                             </div>
                             <Switch :modelValue="bucketInfo?.VersioningEnabled"
                                 @update:model-value="(v) => toggleVersioning(v)" />
+                        </div>
+
+                        <div class="space-y-4 pt-4 border-t">
+                            <div class="flex items-center justify-between">
+                                <div class="space-y-0.5">
+                                    <Label class="text-sm font-bold">Soft Delete (Recycle Bin)</Label>
+                                    <p class="text-xs text-muted-foreground">Keep deleted objects for a defined period
+                                        for
+                                        recovery.
+                                    </p>
+                                </div>
+                                <Switch :modelValue="bucketInfo?.SoftDeleteEnabled"
+                                    @update:model-value="(v) => toggleSoftDelete(v)" />
+                            </div>
+
+                            <div v-if="bucketInfo?.SoftDeleteEnabled"
+                                class="space-y-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                                <Label class="text-[10px] uppercase font-bold text-muted-foreground">Retention Period
+                                    (Days)</Label>
+                                <div class="flex gap-2">
+                                    <Input type="number" :modelValue="bucketInfo?.SoftDeleteRetention"
+                                        @update:model-value="(v) => updateSoftDeleteRetention(v)"
+                                        class="h-10 w-24 bg-background border-slate-200 dark:border-slate-800" />
+                                    <span class="text-xs text-muted-foreground flex items-center">days</span>
+                                </div>
+                                <p class="text-[10px] text-muted-foreground italic">Objects in trash will be permanently
+                                    removed after this period.</p>
+                            </div>
                         </div>
                     </TabsContent>
 
@@ -972,6 +1065,42 @@ async function toggleVersioning(val) {
     }
 }
 
+async function toggleSoftDelete(val) {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/soft-delete`, {
+            method: 'PUT',
+            body: {
+                enabled: val,
+                retention_days: bucketInfo.value?.SoftDeleteRetention || 30
+            }
+        })
+        if (res.ok) {
+            toast.success(`Soft Delete ${val ? 'enabled' : 'disabled'}`)
+            fetchBucketInfo()
+        }
+    } catch (e) {
+        toast.error('Failed to update soft delete')
+    }
+}
+
+async function updateSoftDeleteRetention(val) {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/soft-delete`, {
+            method: 'PUT',
+            body: {
+                enabled: bucketInfo.value?.SoftDeleteEnabled,
+                retention_days: parseInt(val)
+            }
+        })
+        if (res.ok) {
+            toast.success('Retention period updated')
+            fetchBucketInfo()
+        }
+    } catch (e) {
+        toast.error('Failed to update retention period')
+    }
+}
+
 // VIRTUAL SCROLLING
 const scrollContainer = ref(null)
 const scrollTop = ref(0)
@@ -1400,14 +1529,51 @@ function openShareDialog(item) {
     showShareDialog.value = true
 }
 
-async function generateShareLink() {
+// VERSION EXPLORER
+const showVersionExplorer = ref(false)
+const selectedExplorerItem = ref(null)
+const explorerVersions = ref([])
+const loadingVersions = ref(false)
+
+async function openVersionExplorer(item) {
+    selectedExplorerItem.value = item
+    explorerVersions.value = []
+    loadingVersions.value = true
+    showVersionExplorer.value = true
+
     try {
-        const url = `${API_BASE}/admin/buckets/${bucketName.value}/presign?key=${encodeS3Key(selectedShareObject.value.Key)}&expires=${shareExpiry.value}`
-        const res = await authFetch(url)
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects?versions&prefix=${encodeS3Key(item.Key)}`)
         if (res.ok) {
             const data = await res.json()
-            generatedUrl.value = data.url
+            // Should verify if data.versions is array, api might return null
+            explorerVersions.value = data.versions || []
+
+            // Sort by ModTime desc just in case
+            explorerVersions.value.sort((a, b) => new Date(b.ModTime) - new Date(a.ModTime))
         }
+    } catch (e) {
+        toast.error('Failed to load version history')
+    } finally {
+        loadingVersions.value = false
+    }
+}
+
+async function generateShareLink() {
+    try {
+        const body = {
+            key: selectedShareObject.value.Key,
+            versionId: selectedShareObject.value.VersionID || null,
+            expirySeconds: parseInt(shareExpiry.value)
+        }
+
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/share`, {
+            method: 'POST',
+            body: body
+        })
+
+        if (!res.ok) throw new Error('Failed to generate link')
+        const data = await res.json()
+        generatedUrl.value = data.url
     } catch (e) {
         toast.error('Failed to generate link')
     }
