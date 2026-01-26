@@ -103,9 +103,10 @@
                             <template v-for="item in visibleItems" :key="item.Key || item">
                                 <!-- FOLDER ITEM -->
                                 <TableRow v-if="typeof item === 'string'"
-                                    class="hover:bg-muted/50 transition-colors group">
-                                    <TableCell class="font-medium py-3">
-                                        <div class="flex items-center gap-3 cursor-pointer" @click="navigateTo(item)">
+                                    class="hover:bg-muted/50 transition-colors group cursor-pointer"
+                                    @mouseenter="prefetchFolder(item)">
+                                    <TableCell class="font-medium py-3" @click="navigateTo(item)">
+                                        <div class="flex items-center gap-3 cursor-pointer">
                                             <div
                                                 class="p-1.5 rounded bg-amber-500/10 text-amber-500 group-hover:bg-amber-500 group-hover:text-white transition-colors">
                                                 <Folder class="w-4 h-4 fill-current" />
@@ -149,7 +150,7 @@
                                             </div>
                                             <div class="flex items-center gap-1.5 min-w-0">
                                                 <span class="truncate" :title="item.Key">{{ item.Key.split('/').pop()
-                                                    }}</span>
+                                                }}</span>
                                                 <div v-if="isLocked(item)" class="flex items-center gap-1 shrink-0">
                                                     <Lock class="w-3 h-3 text-amber-500" />
                                                     <span class="text-[9px] font-bold text-amber-600 uppercase">{{
@@ -488,7 +489,7 @@
                     </DialogTitle>
                     <DialogDescription>
                         Timeline for <span class="font-mono text-primary font-bold">{{ selectedExplorerItem?.Key
-                        }}</span>
+                            }}</span>
                     </DialogDescription>
                 </DialogHeader>
 
@@ -521,7 +522,7 @@
                                     <div class="flex items-center gap-1">
                                         <span class="text-[10px] font-mono mr-2">{{ v.IsDeleteMarker ? '-' :
                                             formatSize(v.Size)
-                                        }}</span>
+                                            }}</span>
                                         <Button v-if="!v.IsDeleteMarker" variant="outline" size="sm" class="h-7 text-xs"
                                             @click="downloadObject(selectedExplorerItem?.Key, v.VersionID)">
                                             <Download class="w-3 h-3 mr-1" /> Get
@@ -1097,9 +1098,14 @@ async function updateSoftDeleteRetention(val) {
             fetchBucketInfo()
         }
     } catch (e) {
-        toast.error('Failed to update retention period')
+        toast.error('Failed to update soft delete period')
     }
 }
+
+
+
+
+
 
 // VIRTUAL SCROLLING
 const scrollContainer = ref(null)
@@ -1151,6 +1157,21 @@ async function fetchObjects() {
     }
 }
 
+const prefetchCache = ref({})
+async function prefetchFolder(prefix) {
+    if (prefetchCache.value[prefix] || searchQuery.value) return
+
+    try {
+        const url = `${API_BASE}/admin/buckets/${bucketName.value}/objects?delimiter=/&prefix=${encodeURIComponent(prefix)}`
+        const res = await authFetch(url)
+        if (res.ok) {
+            prefetchCache.value[prefix] = await res.json()
+        }
+    } catch (e) {
+        // Silent fail for prefetch
+    }
+}
+
 async function fetchUsers() {
     try {
         const res = await authFetch(`${API_BASE}/admin/users`)
@@ -1163,6 +1184,14 @@ async function fetchUsers() {
 function navigateTo(p) {
     currentPrefix.value = p
     objectVersions.value = {}
+
+    if (prefetchCache.value[p]) {
+        const data = prefetchCache.value[p]
+        objects.value = (data.objects || []).filter(o => o.Key !== p)
+        commonPrefixes.value = (data.common_prefixes || []).filter(p_ => p_ !== p)
+        return
+    }
+
     fetchObjects()
 }
 

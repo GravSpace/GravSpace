@@ -23,6 +23,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // Version information (set via ldflags during build)
@@ -115,7 +117,7 @@ func main() {
 	healthChecker := health.NewHealthChecker()
 
 	// Initialize Analytics Worker
-	analyticsWorker := storage.NewAnalyticsWorker(db, store)
+	analyticsWorker := storage.NewAnalyticsWorker(db, store, store.Jobs)
 	analyticsWorker.Start()
 
 	// Initialize Trash Worker (Soft Delete Cleanup)
@@ -177,7 +179,10 @@ func main() {
 
 	// Admin Routes
 	admin := e.Group("/admin")
-	admin.Use(middleware.JWT([]byte(jwtSecret)))
+	admin.Use(middleware.JWTWithConfig(middleware.JWTConfig{
+		SigningKey:  []byte(jwtSecret),
+		TokenLookup: "header:Authorization,query:token",
+	}))
 
 	// General Admin Routes (accessible by any logged-in user with appropriate policy if S3-based,
 	// but currently Console access uses JWT which we want to restrict for IAM)
@@ -263,6 +268,10 @@ func main() {
 	e.GET("/website/:bucket/*", s3Handler.ServeWebsite)
 	e.GET("/website/:bucket", s3Handler.ServeWebsite)
 
-	// Start server
-	e.Logger.Fatal(e.Start(":8080"))
+	// Start server with HTTP/2 support
+	h2s := &http2.Server{}
+	e.Logger.Fatal(e.StartServer(&http.Server{
+		Addr:    ":8080",
+		Handler: h2c.NewHandler(e, h2s),
+	}))
 }

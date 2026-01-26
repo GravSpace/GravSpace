@@ -16,8 +16,9 @@ import (
 	"github.com/GravSpace/GravSpace/internal/cache"
 	"github.com/GravSpace/GravSpace/internal/crypto"
 	"github.com/GravSpace/GravSpace/internal/database"
+	"github.com/GravSpace/GravSpace/internal/jobs"
 	"github.com/GravSpace/GravSpace/internal/metrics"
-	"github.com/GravSpace/GravSpace/internal/notification" // Added this import
+	"github.com/GravSpace/GravSpace/internal/notification"
 	"github.com/GravSpace/GravSpace/internal/notifications"
 )
 
@@ -160,6 +161,7 @@ type FileStorage struct {
 	DB            *database.Database
 	Cache         cache.Cache
 	Notifier      *notification.NotificationService
+	Jobs          *jobs.Manager
 	mu            sync.Mutex // For synchronizing access if needed
 	SyncWorker    *SyncWorker
 	Notifications *notifications.Dispatcher
@@ -191,8 +193,11 @@ func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 		DB:            db,
 		Cache:         c,
 		Notifier:      notification.NewNotificationService(db),
+		Jobs:          jobs.NewManager(4),                 // 4 background workers
 		Notifications: notifications.NewDispatcher(db, 5), // 5 workers
 	}
+
+	s.Jobs.Start()
 
 	// Initialize and start sync worker (every 5 minutes by default)
 	syncInterval := 5 * time.Minute
@@ -239,10 +244,21 @@ func (s *FileStorage) BucketExists(name string) (bool, error) {
 }
 
 func (s *FileStorage) GetBucketInfo(name string) (*database.BucketRow, error) {
+	if s.Cache != nil {
+		var cached database.BucketRow
+		if s.Cache.Get(cache.BucketInfoKey(name), &cached) {
+			return &cached, nil
+		}
+	}
+
 	if s.DB == nil {
 		return nil, fmt.Errorf("database not available")
 	}
-	return s.DB.GetBucket(name)
+	bucket, err := s.DB.GetBucket(name)
+	if err == nil && bucket != nil && s.Cache != nil {
+		s.Cache.Set(cache.BucketInfoKey(name), bucket, 10*time.Minute)
+	}
+	return bucket, err
 }
 
 func (s *FileStorage) SetBucketVersioning(name string, enabled bool) error {
@@ -260,6 +276,17 @@ func (s *FileStorage) SetBucketObjectLock(name string, enabled bool) error {
 }
 
 func (s *FileStorage) GetBucketObjectLock(name string) (bool, string, int, error) {
+	if s.Cache != nil {
+		var cached struct {
+			Enabled       bool
+			RetentionMode string
+			RetentionDays int
+		}
+		if s.Cache.Get(cache.BucketLockKey(name), &cached) {
+			return cached.Enabled, cached.RetentionMode, cached.RetentionDays, nil
+		}
+	}
+
 	if s.DB == nil {
 		return false, "", 0, fmt.Errorf("database not available")
 	}
@@ -270,6 +297,15 @@ func (s *FileStorage) GetBucketObjectLock(name string) (bool, string, int, error
 	if bucket == nil {
 		return false, "", 0, os.ErrNotExist
 	}
+
+	if s.Cache != nil {
+		s.Cache.Set(cache.BucketLockKey(name), struct {
+			Enabled       bool
+			RetentionMode string
+			RetentionDays int
+		}{bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays}, 10*time.Minute)
+	}
+
 	return bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, nil
 }
 

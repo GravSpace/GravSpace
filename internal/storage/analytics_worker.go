@@ -1,21 +1,25 @@
 package storage
 
 import (
+	"fmt"
 	"log"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/database"
+	"github.com/GravSpace/GravSpace/internal/jobs"
 )
 
 type AnalyticsWorker struct {
 	db      *database.Database
 	storage Storage
+	jobs    *jobs.Manager
 }
 
-func NewAnalyticsWorker(db *database.Database, storage Storage) *AnalyticsWorker {
+func NewAnalyticsWorker(db *database.Database, storage Storage, jobs *jobs.Manager) *AnalyticsWorker {
 	return &AnalyticsWorker{
 		db:      db,
 		storage: storage,
+		jobs:    jobs,
 	}
 }
 
@@ -40,27 +44,44 @@ func (w *AnalyticsWorker) takeSnapshot() {
 	}
 
 	for _, bucket := range buckets {
-		_, size, err := w.storage.GetBucketStats(bucket)
-		if err != nil {
-			log.Printf("Analytics snapshot failed for bucket %s: %v", bucket, err)
-			continue
-		}
-
-		// Check if we already have a snapshot for today
-		exists, err := w.db.HasSnapshotForToday(bucket)
-		if err != nil {
-			log.Printf("Analytics snapshot check exists failed for bucket %s: %v", bucket, err)
-		}
-		if exists {
-			continue
-		}
-
-		err = w.db.CreateStorageSnapshot(bucket, size)
-		if err != nil {
-			log.Printf("Analytics snapshot storage failed for bucket %s: %v", bucket, err)
+		// Enqueue snapshot job for each bucket to process in background
+		if w.jobs != nil {
+			w.jobs.Enqueue(&AnalyticsSnapshotJob{
+				DB:      w.db,
+				Storage: w.storage,
+				Bucket:  bucket,
+			})
 		}
 	}
-	log.Printf("Analytics storage snapshots captured for %d buckets", len(buckets))
+	log.Printf("Analytics snapshot jobs enqueued for %d buckets", len(buckets))
+}
+
+// AnalyticsSnapshotJob implements jobs.Job for background analytics snapshots
+type AnalyticsSnapshotJob struct {
+	DB      *database.Database
+	Storage Storage
+	Bucket  string
+}
+
+func (j *AnalyticsSnapshotJob) Name() string {
+	return "AnalyticsSnapshot:" + j.Bucket
+}
+
+func (j *AnalyticsSnapshotJob) Execute() error {
+	_, size, err := j.Storage.GetBucketStats(j.Bucket)
+	if err != nil {
+		return fmt.Errorf("analytics snapshot failed for bucket %s: %w", j.Bucket, err)
+	}
+
+	exists, err := j.DB.HasSnapshotForToday(j.Bucket)
+	if err != nil {
+		return fmt.Errorf("analytics snapshot check failed for bucket %s: %w", j.Bucket, err)
+	}
+	if exists {
+		return nil
+	}
+
+	return j.DB.CreateStorageSnapshot(j.Bucket, size)
 }
 
 func (w *AnalyticsWorker) getBucketStats(bucket string) (int, int64, error) {

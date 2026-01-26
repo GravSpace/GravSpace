@@ -364,6 +364,10 @@ func (d *Database) initSchema() error {
 
 	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key ON objects(bucket, key);
 	CREATE INDEX IF NOT EXISTS idx_objects_latest ON objects(bucket, is_latest) WHERE is_latest = TRUE;
+	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key_latest ON objects(bucket, key, is_latest);
+	CREATE INDEX IF NOT EXISTS idx_objects_trash ON objects(bucket, deleted_at) WHERE deleted_at IS NOT NULL;
+	CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(username, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_storage_snapshots_time_bucket ON storage_snapshots(timestamp, bucket);
 	CREATE INDEX IF NOT EXISTS idx_multipart_bucket_key ON multipart_uploads(bucket, key);
 	`
 

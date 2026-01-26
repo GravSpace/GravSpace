@@ -129,6 +129,14 @@ func BucketListKey() string {
 	return "buckets:list"
 }
 
+func BucketInfoKey(bucket string) string {
+	return "bucket:info:" + bucket
+}
+
+func BucketLockKey(bucket string) string {
+	return "bucket:lock:" + bucket
+}
+
 func ObjectListKey(bucket, prefix string) string {
 	return "objects:" + bucket + ":" + prefix
 }
