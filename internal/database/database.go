@@ -1067,7 +1067,7 @@ func (d *Database) GetStorageHistory(days int) ([]*StorageSnapshotRecord, error)
 func (d *Database) GetActionTrends(days int) (map[string][]map[string]interface{}, error) {
 	start := time.Now()
 	// Group by date and action
-	rows, err := d.db.Query(`SELECT date(timestamp) as day, action, count(*) as count 
+	rows, err := d.db.Query(`SELECT strftime('%Y-%m-%d', timestamp) as day, action, count(*) as count 
 	                          FROM audit_logs 
 	                          WHERE timestamp >= date('now', ?) 
 	                          GROUP BY day, action 

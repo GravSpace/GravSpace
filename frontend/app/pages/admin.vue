@@ -90,7 +90,6 @@ const navItems = [
     { path: '/admin/users', label: 'IAM Engine', icon: UserIcon },
     { path: '/admin/policies', label: 'Security Policies', icon: Shield },
     { path: '/admin/audit', label: 'Audit Logs', icon: ScrollText },
-    { path: '/admin/analytics', label: 'Analytics', icon: TrendingUp },
 ]
 
 function handleLogout() {
