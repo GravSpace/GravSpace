@@ -73,6 +73,20 @@ type ElementExpiration struct {
 	Days int `json:"days"`
 }
 
+// WebsiteConfiguration represents S3 Website configuration
+type WebsiteConfiguration struct {
+	IndexDocument *IndexDocument `json:"index_document,omitempty"`
+	ErrorDocument *ErrorDocument `json:"error_document,omitempty"`
+}
+
+type IndexDocument struct {
+	Suffix string `json:"suffix"`
+}
+
+type ErrorDocument struct {
+	Key string `json:"key"`
+}
+
 // Part represents a part of a multipart upload
 type Part struct {
 	PartNumber int
@@ -119,6 +133,13 @@ type Storage interface {
 	PutBucketLifecycle(bucket string, lifecycle LifecycleConfiguration) error
 	GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error)
 	DeleteBucketLifecycle(bucket string) error
+
+	// Website
+	PutBucketWebsite(bucket string, website WebsiteConfiguration) error
+	GetBucketWebsite(bucket string) (*WebsiteConfiguration, error)
+	DeleteBucketWebsite(bucket string) error
+
+	// Stats
 	StartLifecycleWorker()
 	GetGlobalStats() (count int, size int64, err error)
 	GetBucketStats(bucket string) (count int, size int64, err error)
@@ -309,6 +330,7 @@ func (s *FileStorage) DeleteBucket(name string) error {
 	s.Cache.Delete(cache.BucketListKey())
 	s.Cache.Delete(cache.BucketCORSKey(name))
 	s.Cache.Delete(cache.BucketLifecycleKey(name))
+	s.Cache.Delete(cache.BucketWebsiteKey(name)) // Invalidate website cache
 
 	return nil
 }
@@ -1110,8 +1132,10 @@ func (s *FileStorage) DeleteBucketCors(bucket string) error {
 }
 
 func (s *FileStorage) PutBucketLifecycle(bucket string, lifecycle LifecycleConfiguration) error {
-	path := filepath.Join(s.Root, bucket, "lifecycle.json")
-	data, err := json.MarshalIndent(lifecycle, "", "  ")
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	data, err := json.Marshal(lifecycle)
 	if err != nil {
 		return err
 	}
@@ -1119,14 +1143,13 @@ func (s *FileStorage) PutBucketLifecycle(bucket string, lifecycle LifecycleConfi
 	// Invalidate cache
 	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
 
-	if s.DB != nil {
-		s.DB.PutBucketLifecycle(bucket, string(data))
-	}
-
-	return os.WriteFile(path, data, 0644)
+	return s.DB.PutBucketLifecycle(bucket, string(data))
 }
 
 func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not available")
+	}
 	// Try cache first
 	var cached LifecycleConfiguration
 	if ok := s.Cache.Get(cache.BucketLifecycleKey(bucket), &cached); ok {
@@ -1135,16 +1158,15 @@ func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration
 	}
 	metrics.RecordCacheMiss("bucket_lifecycle")
 
-	path := filepath.Join(s.Root, bucket, "lifecycle.json")
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil, fmt.Errorf("Lifecycle configuration not found")
-	}
-	data, err := os.ReadFile(path)
+	data, err := s.DB.GetBucketLifecycle(bucket)
 	if err != nil {
 		return nil, err
 	}
+	if data == "" {
+		return nil, fmt.Errorf("Lifecycle configuration not found")
+	}
 	var lifecycle LifecycleConfiguration
-	if err := json.Unmarshal(data, &lifecycle); err != nil {
+	if err := json.Unmarshal([]byte(data), &lifecycle); err != nil {
 		return nil, err
 	}
 
@@ -1155,15 +1177,63 @@ func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration
 }
 
 func (s *FileStorage) DeleteBucketLifecycle(bucket string) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
 	// Invalidate cache
 	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
 
-	if s.DB != nil {
-		s.DB.PutBucketLifecycle(bucket, "")
-	}
+	return s.DB.DeleteBucketLifecycle(bucket)
+}
 
-	path := filepath.Join(s.Root, bucket, "lifecycle.json")
-	return os.Remove(path)
+func (s *FileStorage) PutBucketWebsite(bucket string, website WebsiteConfiguration) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	data, err := json.Marshal(website)
+	if err != nil {
+		return err
+	}
+	// Invalidate cache
+	s.Cache.Delete(cache.BucketWebsiteKey(bucket))
+	return s.DB.PutBucketWebsite(bucket, string(data))
+}
+
+func (s *FileStorage) GetBucketWebsite(bucket string) (*WebsiteConfiguration, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+	// Try cache first
+	var cached WebsiteConfiguration
+	if ok := s.Cache.Get(cache.BucketWebsiteKey(bucket), &cached); ok {
+		metrics.RecordCacheHit("bucket_website")
+		return &cached, nil
+	}
+	metrics.RecordCacheMiss("bucket_website")
+
+	data, err := s.DB.GetBucketWebsite(bucket)
+	if err != nil {
+		return nil, err
+	}
+	if data == "" {
+		return nil, fmt.Errorf("Website configuration not found")
+	}
+	var config WebsiteConfiguration
+	if err := json.Unmarshal([]byte(data), &config); err != nil {
+		return nil, err
+	}
+	// Cache for 30 minutes
+	s.Cache.Set(cache.BucketWebsiteKey(bucket), &config, 30*time.Minute)
+	return &config, nil
+}
+
+func (s *FileStorage) DeleteBucketWebsite(bucket string) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	// Invalidate cache
+	s.Cache.Delete(cache.BucketWebsiteKey(bucket))
+	return s.DB.DeleteBucketWebsite(bucket)
 }
 
 func (s *FileStorage) StartLifecycleWorker() {

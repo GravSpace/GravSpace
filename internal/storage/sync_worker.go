@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/GravSpace/GravSpace/internal/cache"
 	"github.com/GravSpace/GravSpace/internal/database"
 )
 
@@ -86,20 +87,63 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 		// Sync objects in this bucket
 		bucketPath := filepath.Join(sw.storage.Root, bucketName)
 		err := filepath.Walk(bucketPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil || !info.IsDir() {
+			if err != nil {
 				return err
 			}
 
-			// Check if this is an object directory (has 'latest' file)
-			latestPath := filepath.Join(path, "latest")
-			if _, err := os.Stat(latestPath); err != nil {
-				return nil // Not an object directory
+			// Skip the bucket root itself
+			if path == bucketPath {
+				return nil
 			}
 
 			// Get relative key
 			relPath, _ := filepath.Rel(bucketPath, path)
 			if relPath == "." {
 				return nil
+			}
+
+			// Handle regular files (non-versioned)
+			if !info.IsDir() {
+				// Skip special files
+				if info.Name() == "latest" {
+					return nil
+				}
+
+				// Check if object exists in database
+				dbObj, err := sw.storage.DB.GetObject(bucketName, relPath, "simple")
+				if err != nil {
+					log.Printf("Sync error checking object %s in DB: %v\n", relPath, err)
+					errors++
+					return nil
+				}
+
+				if dbObj == nil {
+					// Object not in database, add it
+					contentType := "application/octet-stream"
+					objectRow := &database.ObjectRow{
+						Bucket:      bucketName,
+						Key:         relPath,
+						VersionID:   "simple",
+						Size:        info.Size(),
+						ETag:        &relPath,
+						ContentType: &contentType,
+						IsLatest:    true,
+					}
+					_, err := sw.storage.DB.CreateObject(objectRow)
+					if err == nil {
+						synced++
+					} else {
+						log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
+						errors++
+					}
+				}
+				return nil
+			}
+
+			// Handle versioned objects (directories with 'latest' file)
+			latestPath := filepath.Join(path, "latest")
+			if _, err := os.Stat(latestPath); err != nil {
+				return nil // Not an object directory
 			}
 
 			// Read latest version
@@ -147,6 +191,16 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 					log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
 					errors++
 				}
+			} else if !dbObj.IsLatest {
+				// Object exists but is_latest is wrong, fix it
+				err := sw.storage.DB.UpdateObjectLatest(bucketName, relPath, versionID, true)
+				if err == nil {
+					synced++
+					log.Printf("Fixed is_latest for %s/%s\n", bucketName, relPath)
+				} else {
+					log.Printf("Sync error updating is_latest for %s: %v\n", relPath, err)
+					errors++
+				}
 			}
 
 			return filepath.SkipDir // Don't descend into object directories
@@ -162,6 +216,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 
 	// Prune orphaned records
 	sw.pruneOrphanedRecords()
+	sw.pruneOrphanedBuckets()
 }
 
 func (sw *SyncWorker) pruneOrphanedRecords() {
@@ -193,6 +248,35 @@ func (sw *SyncWorker) pruneOrphanedRecords() {
 	}
 
 	if prunedCount > 0 {
-		log.Printf("Filesystem sync: pruned %d orphaned database records\n", prunedCount)
+		log.Printf("Filesystem sync: pruned %d orphaned object records\n", prunedCount)
+	}
+}
+
+func (sw *SyncWorker) pruneOrphanedBuckets() {
+	buckets, err := sw.storage.DB.ListBuckets()
+	if err != nil {
+		log.Printf("Prune error listing buckets: %v\n", err)
+		return
+	}
+
+	prunedCount := 0
+	for _, bucketName := range buckets {
+		bucketPath := filepath.Join(sw.storage.Root, bucketName)
+		if _, err := os.Stat(bucketPath); os.IsNotExist(err) {
+			// Bucket directory missing, prune from database
+			err := sw.storage.DB.DeleteBucket(bucketName)
+			if err != nil {
+				log.Printf("Prune error deleting bucket %s: %v\n", bucketName, err)
+			} else {
+				prunedCount++
+				log.Printf("Pruned orphaned bucket: %s\n", bucketName)
+			}
+		}
+	}
+
+	if prunedCount > 0 {
+		log.Printf("Filesystem sync: pruned %d orphaned bucket records\n", prunedCount)
+		// Invalidate bucket list cache
+		sw.storage.Cache.Delete(cache.BucketListKey())
 	}
 }

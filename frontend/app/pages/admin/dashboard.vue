@@ -88,6 +88,11 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue'
+
+useSeoMeta({
+    title: 'Analytics Dashboard | GravSpace',
+    description: 'Monitor real-time storage metrics, historical trends, and data distribution across your buckets.',
+})
 import {
     RefreshCw, TrendingUp, Database, Activity, User, Pizza,
     PieChart, LineChart, FileUp, Download, Trash2

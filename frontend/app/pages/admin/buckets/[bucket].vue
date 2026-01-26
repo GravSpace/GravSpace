@@ -149,7 +149,7 @@
                                             </div>
                                             <div class="flex items-center gap-1.5 min-w-0">
                                                 <span class="truncate" :title="item.Key">{{ item.Key.split('/').pop()
-                                                    }}</span>
+                                                }}</span>
                                                 <div v-if="isLocked(item)" class="flex items-center gap-1 shrink-0">
                                                     <Lock class="w-3 h-3 text-amber-500" />
                                                     <span class="text-[9px] font-bold text-amber-600 uppercase">{{
@@ -298,6 +298,10 @@
 
         <Dialog :open="!!previewObject" @update:open="previewObject = null">
             <DialogContent class=" p-0 overflow-hidden bg-white/95 border-0 rounded-xl shadow-2xl">
+                <DialogHeader class="sr-only">
+                    <DialogTitle>Object Preview</DialogTitle>
+                    <DialogDescription>Viewing preview for {{ previewObject?.Key }}</DialogDescription>
+                </DialogHeader>
                 <div class="relative h-[85vh] flex items-center justify-center">
                     <div v-if="!previewUrl" class="flex flex-col items-center gap-4 animate-pulse">
                         <Loader2 class="w-10 h-10 animate-spin text-primary" />
@@ -486,10 +490,11 @@
                 </DialogHeader>
 
                 <Tabs v-model="activeSettingsTab" class="mt-4">
-                    <TabsList class="grid w-full grid-cols-3">
+                    <TabsList class="grid w-full grid-cols-4">
                         <TabsTrigger value="general">General</TabsTrigger>
                         <TabsTrigger value="notifications">Webhooks</TabsTrigger>
                         <TabsTrigger value="security">Security</TabsTrigger>
+                        <TabsTrigger value="website">Website</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="general" class="space-y-6 py-4">
@@ -593,6 +598,56 @@
                             </div>
                         </div>
                     </TabsContent>
+
+                    <TabsContent value="website" class="space-y-6 py-4">
+                        <div class="flex items-center justify-between p-4 rounded-lg border bg-muted/30">
+                            <div class="space-y-0.5">
+                                <Label class="text-sm font-bold">Static Website Hosting</Label>
+                                <p class="text-xs text-muted-foreground">Host a static website directly from this
+                                    bucket.</p>
+                            </div>
+                            <Switch :modelValue="websiteConfig.enabled" @update:model-value="toggleWebsiteHosting" />
+                        </div>
+
+                        <div v-if="websiteConfig.enabled" class="mt-6 space-y-4 pt-4 border-t">
+                            <h4 class="text-xs font-bold uppercase tracking-widest text-muted-foreground">Document
+                                Configuration
+                            </h4>
+
+                            <div class="space-y-4">
+                                <div class="space-y-2">
+                                    <Label class="text-[10px] font-bold uppercase">Index Document</Label>
+                                    <Input v-model="websiteConfig.indexDocument" placeholder="index.html"
+                                        class="h-10" />
+                                    <p class="text-[10px] text-muted-foreground">The default page served for directory
+                                        requests.
+                                    </p>
+                                </div>
+                                <div class="space-y-2">
+                                    <Label class="text-[10px] font-bold uppercase">Error Document (Optional)</Label>
+                                    <Input v-model="websiteConfig.errorDocument" placeholder="error.html"
+                                        class="h-10" />
+                                    <p class="text-[10px] text-muted-foreground">The page served when an object is not
+                                        found
+                                        (404).</p>
+                                </div>
+                            </div>
+
+                            <Button @click="saveWebsiteConfig" class="w-full mt-4">
+                                Save Website Configuration
+                            </Button>
+
+                            <div class="p-4 rounded-lg bg-blue-500/10 border border-blue-500/20 mt-4">
+                                <div class="flex items-start gap-3">
+                                    <Share2 class="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                                    <div class="flex-1">
+                                        <p class="text-[10px] font-bold text-blue-700 mb-1">Website Endpoint</p>
+                                        <code class="text-[10px] text-blue-600 break-all">{{ websiteURL }}</code>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </TabsContent>
                 </Tabs>
             </DialogContent>
         </Dialog>
@@ -689,11 +744,16 @@ import { useTransfers } from '@/composables/useTransfers'
 const config = useRuntimeConfig()
 const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
-const { addTransfer, updateProgress, setError, activeTransfersCount } = useTransfers()
+const { addTransfer, updateProgress, setAbort, setError, activeTransfersCount } = useTransfers()
 const route = useRoute()
 const router = useRouter()
 
 const bucketName = ref(route.params.bucket)
+
+useSeoMeta({
+    title: () => `Bucket: ${bucketName.value} | GravSpace`,
+    description: () => `Explore objects and manage settings for the bucket "${bucketName.value}" in GravSpace.`,
+})
 const currentPrefix = ref('')
 const objects = ref([])
 const commonPrefixes = ref([])
@@ -734,6 +794,7 @@ const newWebhook = ref({
 async function openBucketSettings() {
     await fetchBucketInfo()
     await fetchWebhooks()
+    await fetchWebsiteConfig()
     showBucketSettings.value = true
 }
 
@@ -773,17 +834,94 @@ async function addWebhook() {
 }
 
 async function deleteWebhook(id) {
-    if (!confirm('Remove this webhook?')) return
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/webhooks/${id}`, {
+                method: 'DELETE'
+            })
+            if (!res.ok) throw new Error('Failed to remove webhook')
+            await fetchWebhooks()
+        },
+        {
+            loading: 'Removing webhook...',
+            success: 'Webhook removed successfully',
+            error: 'Failed to remove webhook'
+        }
+    )
+}
+
+const websiteConfig = ref({
+    enabled: false,
+    indexDocument: 'index.html',
+    errorDocument: 'error.html'
+})
+
+const websiteURL = computed(() => {
+    if (!websiteConfig.value.enabled) return ''
+    const host = window.location.host
+    const protocol = window.location.protocol
+    return `${protocol}//${host}/website/${bucketName.value}/`
+})
+
+async function fetchWebsiteConfig() {
     try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/webhooks/${id}`, {
-            method: 'DELETE'
-        })
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/website`)
         if (res.ok) {
-            toast.success('Webhook removed')
-            fetchWebhooks()
+            const config = await res.json()
+            websiteConfig.value = {
+                enabled: true,
+                indexDocument: config.index_document?.suffix || 'index.html',
+                errorDocument: config.error_document?.key || 'error.html'
+            }
+        } else {
+            websiteConfig.value = { enabled: false, indexDocument: 'index.html', errorDocument: 'error.html' }
         }
     } catch (e) {
-        toast.error('Failed to remove webhook')
+        websiteConfig.value = { enabled: false, indexDocument: 'index.html', errorDocument: 'error.html' }
+    }
+}
+
+async function toggleWebsiteHosting(enabled) {
+    if (!enabled) {
+        // Disable website hosting
+        try {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/website`, {
+                method: 'DELETE'
+            })
+            if (res.ok) {
+                websiteConfig.value.enabled = false
+                toast.success('Website hosting disabled')
+            }
+        } catch (e) {
+            toast.error('Failed to disable website hosting')
+        }
+    } else {
+        websiteConfig.value.enabled = true
+        toast.info('Configure and save your website settings')
+    }
+}
+
+async function saveWebsiteConfig() {
+    if (!websiteConfig.value.indexDocument) {
+        toast.error('Index document is required')
+        return
+    }
+    try {
+        const payload = {
+            index_document: { suffix: websiteConfig.value.indexDocument },
+            error_document: websiteConfig.value.errorDocument ? { key: websiteConfig.value.errorDocument } : null
+        }
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/website`, {
+            method: 'PUT',
+            body: payload
+        })
+        if (res.ok) {
+            toast.success('Website configuration saved successfully')
+        } else {
+            toast.error('Failed to save website configuration')
+        }
+    } catch (e) {
+        toast.error('Failed to save website configuration')
     }
 }
 
@@ -988,6 +1126,7 @@ async function performUpload(file, path) {
 
     try {
         const xhr = new XMLHttpRequest()
+        setAbort(transferId, () => xhr.abort())
         xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}`)
         const token = authState.value.token
         if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
@@ -1025,31 +1164,55 @@ async function performMultipartUpload(file, path) {
         const totalParts = Math.ceil(file.size / CHUNK_SIZE)
         const parts = []
         let uploadedSize = 0
+        const CONCURRENCY = 3
+        let currentPartIdx = 0
+        let isAborted = false
+        const activeXhrs = new Set()
 
-        for (let i = 0; i < totalParts; i++) {
-            const partNumber = i + 1
-            const start = i * CHUNK_SIZE
-            const end = Math.min((i + 1) * CHUNK_SIZE, file.size)
-            const chunk = file.slice(start, end)
+        setAbort(transferId, () => {
+            isAborted = true
+            activeXhrs.forEach(xhr => xhr.abort())
+        })
 
-            const xhr = new XMLHttpRequest()
-            xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploadId=${UploadId}&partNumber=${partNumber}`)
-            const token = authState.value.token
-            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+        async function uploadWorker() {
+            while (currentPartIdx < totalParts && !isAborted) {
+                const i = currentPartIdx++
+                const partNumber = i + 1
+                const start = i * CHUNK_SIZE
+                const end = Math.min((i + 1) * CHUNK_SIZE, file.size)
+                const chunk = file.slice(start, end)
 
-            await new Promise((resolve, reject) => {
-                xhr.onload = () => {
-                    if (xhr.status >= 200 && xhr.status < 300) {
-                        uploadedSize += (end - start)
-                        updateProgress(transferId, (uploadedSize / file.size) * 100)
-                        parts.push({ PartNumber: partNumber, ETag: xhr.getResponseHeader('ETag') })
-                        resolve()
-                    } else reject()
-                }
-                xhr.onerror = reject
-                xhr.send(chunk)
-            })
+                const chunkEtag = await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest()
+                    activeXhrs.add(xhr)
+                    xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploadId=${UploadId}&partNumber=${partNumber}`)
+                    const token = authState.value.token
+                    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+
+                    xhr.onload = () => {
+                        activeXhrs.delete(xhr)
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            uploadedSize += (end - start)
+                            updateProgress(transferId, (uploadedSize / file.size) * 100)
+                            resolve(xhr.getResponseHeader('ETag'))
+                        } else reject(new Error(`Part ${partNumber} failed`))
+                    }
+                    xhr.onerror = () => {
+                        activeXhrs.delete(xhr)
+                        reject(new Error(`Network error on part ${partNumber}`))
+                    }
+                    xhr.send(chunk)
+                })
+                if (!isAborted) parts.push({ PartNumber: partNumber, ETag: chunkEtag })
+            }
         }
+
+        // Start workers
+        const workers = []
+        for (let w = 0; w < Math.min(CONCURRENCY, totalParts); w++) {
+            workers.push(uploadWorker())
+        }
+        await Promise.all(workers)
 
         const completeRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeURIComponent(key)}?uploadId=${UploadId}`, {
             method: 'POST',
@@ -1059,6 +1222,8 @@ async function performMultipartUpload(file, path) {
         if (completeRes.ok) {
             updateProgress(transferId, 100)
             if (bucketName.value === route.params.bucket) fetchObjects()
+        } else {
+            throw new Error('Failed to complete upload')
         }
     } catch (err) { setError(transferId, err.message) }
 }
@@ -1072,6 +1237,7 @@ async function downloadObject(key, versionId = '') {
         if (versionId) url += `?versionId=${versionId}`
 
         const xhr = new XMLHttpRequest()
+        setAbort(transferId, () => xhr.abort())
         xhr.open('GET', url)
         const token = authState.value.token
         if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
@@ -1096,21 +1262,27 @@ async function downloadObject(key, versionId = '') {
 }
 
 async function deleteObject(key, versionId = null) {
-    if (!confirm(`Delete ${key}?`)) return
-    try {
-        let url = `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}`
-        if (versionId) url += `?versionId=${versionId}`
-        const res = await authFetch(url, { method: 'DELETE' })
-        if (res.ok) {
-            toast.success('Deleted')
+    toast.promise(
+        async () => {
+            let url = `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}`
+            if (versionId) url += `?versionId=${versionId}`
+            const res = await authFetch(url, { method: 'DELETE' })
+            if (!res.ok) throw new Error('Failed to delete object')
+
             if (versionId && objectVersions.value[key]) {
-                fetchVersions(key)
+                await fetchVersions(key)
             } else {
-                fetchObjects()
+                await fetchObjects()
             }
+        },
+        {
+            loading: `Deleting ${key}...`,
+            success: `${key} deleted successfully`,
+            error: 'Failed to delete object'
         }
-    } catch (e) { toast.error('Delete failed') }
+    )
 }
+
 
 async function fetchVersions(key) {
     if (objectVersions.value[key]) {

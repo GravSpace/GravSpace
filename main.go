@@ -196,6 +196,9 @@ func main() {
 	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
 	admin.POST("/buckets/:bucket/webhooks", adminHandler.CreateWebhook)
 	admin.DELETE("/buckets/:bucket/webhooks/:id", adminHandler.DeleteWebhook)
+	admin.GET("/buckets/:bucket/website", adminHandler.GetBucketWebsite)
+	admin.PUT("/buckets/:bucket/website", adminHandler.SetBucketWebsite)
+	admin.DELETE("/buckets/:bucket/website", adminHandler.DeleteBucketWebsite)
 
 	// Restricted Admin Routes (IAM & System)
 	iam := admin.Group("")
@@ -240,6 +243,10 @@ func main() {
 	s3.PUT("/:bucket/*", s3Handler.PutObject)
 	s3.POST("/:bucket/*", s3Handler.PostObject)
 	s3.DELETE("/:bucket/*", s3Handler.DeleteObject)
+
+	// Website Static Hosting (Public access handled within handler)
+	e.GET("/website/:bucket/*", s3Handler.ServeWebsite)
+	e.GET("/website/:bucket", s3Handler.ServeWebsite)
 
 	// Start server
 	e.Logger.Fatal(e.Start(":8080"))

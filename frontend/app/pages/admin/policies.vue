@@ -132,22 +132,82 @@
                             intent</p>
                     </div>
                     <div class="space-y-2">
-                        <div class="flex items-center justify-between">
-                            <Label class="text-xs font-bold uppercase tracking-wider opacity-70">Policy Document
-                                (JSON)</Label>
-                            <Badge variant="outline" class="font-mono text-[9px] h-4 scale-90">IAM 2012-10-17</Badge>
-                        </div>
-                        <div class="relative group">
-                            <Textarea v-model="newPolicyJson" rows="14"
-                                class="font-mono text-[11px] tabular-nums bg-slate-950 text-emerald-400 border-0 ring-1 ring-slate-800 focus:ring-primary shadow-2xl rounded-lg p-4 resize-none leading-relaxed"
-                                spellcheck="false" />
-                            <div
-                                class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <Button variant="secondary" size="xs"
-                                    class="h-6 text-[9px] bg-slate-800 hover:bg-slate-700 text-white"
-                                    @click="formatJson">Format</Button>
-                            </div>
-                        </div>
+                        <Tabs default-value="builder" class="w-full">
+                            <TabsList class="grid w-full grid-cols-2 h-9">
+                                <TabsTrigger value="builder" class="text-xs">Visual Builder</TabsTrigger>
+                                <TabsTrigger value="json" class="text-xs">JSON Editor</TabsTrigger>
+                            </TabsList>
+
+                            <TabsContent value="builder"
+                                class="space-y-4 py-4 border rounded-lg p-4 bg-muted/20 border-slate-200 dark:border-slate-800 mt-2">
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div class="space-y-2">
+                                        <Label
+                                            class="text-[10px] font-bold uppercase tracking-wider opacity-70">Effect</Label>
+                                        <div class="flex gap-2">
+                                            <Button size="xs"
+                                                :variant="builderEffect === 'Allow' ? 'default' : 'outline'"
+                                                @click="builderEffect = 'Allow'"
+                                                class="flex-1 h-8 text-[10px]">Allow</Button>
+                                            <Button size="xs"
+                                                :variant="builderEffect === 'Deny' ? 'destructive' : 'outline'"
+                                                @click="builderEffect = 'Deny'"
+                                                class="flex-1 h-8 text-[10px]">Deny</Button>
+                                        </div>
+                                    </div>
+                                    <div class="space-y-2">
+                                        <Label
+                                            class="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource
+                                            ARN</Label>
+                                        <Input v-model="builderResource" placeholder="arn:aws:s3:::*"
+                                            class="h-8 text-xs font-mono" />
+                                    </div>
+                                </div>
+
+                                <div class="space-y-3">
+                                    <div class="flex items-center justify-between">
+                                        <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Common
+                                            S3
+                                            Actions</Label>
+                                        <div class="flex items-center gap-2">
+                                            <span class="text-[9px] text-muted-foreground">Auto-sync JSON</span>
+                                            <Switch :model-value="builderSync"
+                                                @update:model-value="v => builderSync = v" class="scale-75" />
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div v-for="action in availableActions" :key="action.id"
+                                            class="flex items-center space-x-2 p-2 rounded border bg-card hover:bg-accent/50 cursor-pointer transition-colors"
+                                            @click="toggleAction(action.id)">
+                                            <input type="checkbox" :checked="builderActions.includes(action.id)"
+                                                class="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer" />
+                                            <span class="text-[10px] font-medium leading-none">{{ action.label }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </TabsContent>
+
+                            <TabsContent value="json" class="space-y-2 mt-2">
+                                <div class="flex items-center justify-between">
+                                    <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Policy
+                                        Document
+                                        (JSON)</Label>
+                                    <Badge variant="outline" class="font-mono text-[9px] h-4 scale-90">IAM 2012-10-17
+                                    </Badge>
+                                </div>
+                                <div class="relative group">
+                                    <Textarea v-model="newPolicyJson" rows="12"
+                                        class="font-mono text-[11px] tabular-nums bg-slate-950 text-emerald-400 border-0 ring-1 ring-slate-800 focus:ring-primary shadow-2xl rounded-lg p-4 resize-none leading-relaxed"
+                                        spellcheck="false" />
+                                    <div
+                                        class="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Button variant="secondary" size="xs"
+                                            class="h-6 text-[9px] bg-slate-800 hover:bg-slate-700 text-white"
+                                            @click="formatJson">Format</Button>
+                                    </div>
+                                </div>
+                            </TabsContent>
+                        </Tabs>
                     </div>
                     <div class="flex justify-end gap-3 pt-2">
                         <Button variant="outline" @click="showPolicyModal = false">Cancel</Button>
@@ -186,7 +246,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
+
+useSeoMeta({
+    title: 'IAM Policies | GravSpace',
+    description: 'Manage reusable permission templates and secure your cloud storage resources with fine-grained access control.',
+})
 import { Plus, Trash2, Shield, ShieldCheck, FileText, MoreVertical, Eye } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -197,8 +262,8 @@ import {
     DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import {
-    Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle
-} from '@/components/ui/dialog'
+    Tabs, TabsContent, TabsList, TabsTrigger
+} from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -213,14 +278,46 @@ const showPolicyModal = ref(false)
 const policyName = ref('')
 const expandedPolicy = ref(null)
 const selectedPolicy = ref(null)
-const newPolicyJson = ref(JSON.stringify({
-    version: "2012-10-17",
-    statement: [{
-        effect: "Allow",
-        action: ["s3:GetObject", "s3:ListBucket"],
-        resource: ["arn:aws:s3:::*"]
-    }]
-}, null, 2))
+
+const builderActions = ref(['s3:GetObject', 's3:ListBucket'])
+const builderResource = ref('arn:aws:s3:::*')
+const builderEffect = ref('Allow')
+const builderSync = ref(true)
+
+const availableActions = [
+    { id: 's3:ListAllMyBuckets', label: 'List All Buckets' },
+    { id: 's3:ListBucket', label: 'List Bucket Content' },
+    { id: 's3:GetBucketLocation', label: 'Get Bucket Location' },
+    { id: 's3:GetObject', label: 'Get/Download Object' },
+    { id: 's3:PutObject', label: 'Put/Upload Object' },
+    { id: 's3:DeleteObject', label: 'Delete Object' },
+    { id: 's3:GetObjectTagging', label: 'Get Tags' },
+    { id: 's3:PutObjectTagging', label: 'Put Tags' }
+]
+
+const newPolicyJson = ref('')
+
+watch([builderActions, builderResource, builderEffect], () => {
+    if (!builderSync.value) return
+    const policy = {
+        version: "2012-10-17",
+        statement: [{
+            effect: builderEffect.value,
+            action: builderActions.value,
+            resource: [builderResource.value]
+        }]
+    }
+    newPolicyJson.value = JSON.stringify(policy, null, 2)
+}, { immediate: true, deep: true })
+
+function toggleAction(id) {
+    const idx = builderActions.value.indexOf(id)
+    if (idx > -1) {
+        builderActions.value.splice(idx, 1)
+    } else {
+        builderActions.value.push(id)
+    }
+}
 
 async function fetchPolicies() {
     try {
@@ -260,19 +357,21 @@ async function createPolicy() {
 }
 
 async function deletePolicy(name) {
-    if (!confirm(`Permanently delete policy "${name}"? This action cannot be undone.`)) return
-    try {
-        const res = await authFetch(`${API_BASE}/admin/policies/${name}`, { method: 'DELETE' })
-        if (res.ok) {
-            toast.success(`Policy "${name}" removed successfully.`)
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/policies/${name}`, { method: 'DELETE' })
+            if (!res.ok) {
+                const err = await res.text()
+                throw new Error(err || 'Failed to delete policy')
+            }
             await fetchPolicies()
-        } else {
-            const err = await res.text()
-            toast.error(`Failed to delete policy: ${err}`)
+        },
+        {
+            loading: `Deleting policy "${name}"...`,
+            success: `Policy "${name}" removed successfully`,
+            error: (err) => err.message || 'Failed to delete policy'
         }
-    } catch (e) {
-        toast.error('Failed to communicate with identity service.')
-    }
+    )
 }
 
 function togglePolicyDetails(name) {

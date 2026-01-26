@@ -339,6 +339,11 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+
+useSeoMeta({
+    title: 'IAM Users | GravSpace',
+    description: 'Manage administrative principals and cloud service accounts for secure programmatic and console access.',
+})
 import {
     Plus, MoreHorizontal, ShieldCheck, UserPlus, Trash, RefreshCw, KeyIcon,
     Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2, FileCode, UserMinus
@@ -439,16 +444,18 @@ async function createUser() {
 }
 
 async function deleteUser(username) {
-    if (!confirm(`Erase all data and credentials for principal "${username}"? This is irreversible.`)) return
-    try {
-        const res = await authFetch(`${API_BASE}/admin/users/${username}`, { method: 'DELETE' })
-        if (res.ok) {
-            toast.success('Account decommissioned.')
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/users/${username}`, { method: 'DELETE' })
+            if (!res.ok) throw new Error('Failed to delete user')
             await fetchUsers()
+        },
+        {
+            loading: `Deleting user "${username}"...`,
+            success: 'Account decommissioned successfully',
+            error: 'Failed to delete user'
         }
-    } catch (e) {
-        toast.error('Purge failed.')
-    }
+    )
 }
 
 async function generateKey(username) {
@@ -464,16 +471,18 @@ async function generateKey(username) {
 }
 
 async function deleteKey(username, keyId) {
-    if (!confirm(`Revoke and destroy access key "${keyId}"? Current sessions using this key will be terminated.`)) return
-    try {
-        const res = await authFetch(`${API_BASE}/admin/users/${username}/keys/${keyId}`, { method: 'DELETE' })
-        if (res.ok) {
-            toast.success('Access key revoked.')
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/users/${username}/keys/${keyId}`, { method: 'DELETE' })
+            if (!res.ok) throw new Error('Failed to revoke key')
             await fetchUsers()
+        },
+        {
+            loading: `Revoking access key "${keyId}"...`,
+            success: 'Access key revoked successfully',
+            error: 'Failed to revoke access key'
         }
-    } catch (e) {
-        toast.error('Key destruction failed.')
-    }
+    )
 }
 
 function openChangePasswordDialog(username) {
@@ -549,16 +558,18 @@ async function attachPolicy() {
 }
 
 async function removePolicy(username, policyName) {
-    if (!confirm(`Revoke policy "${policyName}" from "${username}"?`)) return
-    try {
-        const res = await authFetch(`${API_BASE}/admin/users/${username}/policies/${policyName}`, { method: 'DELETE' })
-        if (res.ok) {
-            toast.success('Rights restricted.')
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/users/${username}/policies/${policyName}`, { method: 'DELETE' })
+            if (!res.ok) throw new Error('Failed to revoke policy')
             await fetchUsers()
+        },
+        {
+            loading: `Revoking policy "${policyName}"...`,
+            success: 'Policy revoked successfully',
+            error: 'Failed to revoke policy'
         }
-    } catch (e) {
-        toast.error('Revocation failed.')
-    }
+    )
 }
 
 function copyToClipboard(text, label) {

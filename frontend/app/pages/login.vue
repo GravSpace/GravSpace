@@ -115,6 +115,11 @@ import { ChevronRight, Loader2, Info } from 'lucide-vue-next'
 const router = useRouter()
 const { login, authState } = useAuth()
 
+useSeoMeta({
+    title: 'Sign In | GravSpace',
+    description: 'Access your administrative credentials for GravSpace Enterprise S3 Management Suite.',
+})
+
 const accessKeyId = ref('')
 const secretAccessKey = ref('')
 const isLoading = ref(false)

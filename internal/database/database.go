@@ -54,6 +54,7 @@ type BucketConfig struct {
 	Bucket          string
 	CORSConfig      string // JSON
 	LifecycleConfig string // JSON
+	WebsiteConfig   string // JSON
 }
 
 type UserRecord struct {
@@ -318,6 +319,7 @@ func (d *Database) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_storage_snapshots_timestamp ON storage_snapshots(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_objects_lifecycle ON objects(bucket, is_latest, modified_at);
 	CREATE INDEX IF NOT EXISTS idx_audit_logs_username ON audit_logs(username);
 
 	CREATE TABLE IF NOT EXISTS webhooks (
@@ -367,6 +369,9 @@ func (d *Database) initSchema() error {
 	}
 	// Migration: Add encryption_type if it doesn't exist
 	if err := d.addColumnIfNotExists("objects", "encryption_type", "TEXT"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("bucket_configs", "website_config", "TEXT"); err != nil {
 		return err
 	}
 
@@ -545,6 +550,14 @@ func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) 
 	return &obj, nil
 }
 
+func (d *Database) UpdateObjectLatest(bucket, key, versionID string, isLatest bool) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE objects SET is_latest = ? WHERE bucket = ? AND key = ? AND version_id = ?",
+		isLatest, bucket, key, versionID)
+	metrics.RecordDBQuery("UpdateObjectLatest", time.Since(start))
+	return err
+}
+
 func (d *Database) DeleteObject(bucket, key, versionID string) error {
 	start := time.Now()
 	if versionID != "" {
@@ -707,6 +720,28 @@ func (d *Database) GetBucketLifecycle(bucket string) (string, error) {
 
 func (d *Database) DeleteBucketLifecycle(bucket string) error {
 	_, err := d.db.Exec("UPDATE bucket_configs SET lifecycle_config = NULL WHERE bucket = ?", bucket)
+	return err
+}
+
+func (d *Database) PutBucketWebsite(bucket string, websiteJSON string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO bucket_configs (bucket, website_config) VALUES (?, ?)
+		ON CONFLICT(bucket) DO UPDATE SET website_config = excluded.website_config
+	`, bucket, websiteJSON)
+	return err
+}
+
+func (d *Database) GetBucketWebsite(bucket string) (string, error) {
+	var websiteJSON sql.NullString
+	err := d.db.QueryRow("SELECT website_config FROM bucket_configs WHERE bucket = ?", bucket).Scan(&websiteJSON)
+	if err == sql.ErrNoRows || !websiteJSON.Valid {
+		return "", nil
+	}
+	return websiteJSON.String, err
+}
+
+func (d *Database) DeleteBucketWebsite(bucket string) error {
+	_, err := d.db.Exec("UPDATE bucket_configs SET website_config = NULL WHERE bucket = ?", bucket)
 	return err
 }
 
@@ -899,13 +934,13 @@ func (d *Database) DeleteUserPolicy(username, name string) error {
 
 func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]*ObjectRow, error) {
 	start := time.Now()
-	// Find objects where (modified_at + days) < now
+	// Calculate cutoff time in Go to allow index usage on modified_at column
+	cutoff := time.Now().AddDate(0, 0, -days)
 	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode 
 	          FROM objects 
-	          WHERE bucket = ? AND is_latest = 1 
-	          AND datetime(modified_at, '+' || ? || ' days') < datetime('now')`
+	          WHERE bucket = ? AND is_latest = 1 AND modified_at < ?`
 
-	args := []interface{}{bucket, days}
+	args := []interface{}{bucket, cutoff}
 	if prefix != "" {
 		query += " AND key LIKE ?"
 		args = append(args, prefix+"%")

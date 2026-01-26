@@ -141,6 +141,10 @@ func BucketLifecycleKey(bucket string) string {
 	return "lifecycle:" + bucket
 }
 
+func BucketWebsiteKey(bucket string) string {
+	return "website:" + bucket
+}
+
 func ObjectMetadataKey(bucket, key, versionID string) string {
 	if versionID != "" {
 		return "object:" + bucket + ":" + key + ":" + versionID

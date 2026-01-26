@@ -583,3 +583,36 @@ func (h *AdminHandler) GetActionAnalytics(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, trends)
 }
+
+func (h *AdminHandler) GetBucketWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	config, err := h.Storage.GetBucketWebsite(bucket)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	if config == nil {
+		return c.JSON(http.StatusNotFound, echo.Map{"error": "Website configuration not found"})
+	}
+	return c.JSON(http.StatusOK, config)
+}
+
+func (h *AdminHandler) SetBucketWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var config storage.WebsiteConfiguration
+	if err := c.Bind(&config); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid website configuration")
+	}
+
+	if err := h.Storage.PutBucketWebsite(bucket, config); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) DeleteBucketWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	if err := h.Storage.DeleteBucketWebsite(bucket); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}

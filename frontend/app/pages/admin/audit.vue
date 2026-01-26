@@ -39,7 +39,7 @@
                                         {{ log.Username ? log.Username.substring(0, 2).toUpperCase() : '??' }}
                                     </div>
                                     <span class="text-xs font-semibold truncate">{{ log.Username || 'anonymous'
-                                    }}</span>
+                                        }}</span>
                                 </div>
                             </TableCell>
                             <TableCell>
@@ -89,7 +89,7 @@
                 <div class="flex items-center gap-3">
                     <span class="text-[11px] text-muted-foreground">Showing {{ offset + 1 }}-{{ offset + (logs?.length
                         || 0)
-                        }}</span>
+                    }}</span>
                     <div class="flex gap-1">
                         <Button variant="outline" size="sm" :disabled="offset === 0" @click="prevPage"
                             class="h-8 w-8 p-0 border-slate-200">
@@ -108,6 +108,11 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+
+useSeoMeta({
+    title: 'Audit Logs | GravSpace',
+    description: 'Review compliance and security event history for your Enterprise S3 storage.',
+})
 import { RefreshCw, ShieldOff, ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { Card } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'

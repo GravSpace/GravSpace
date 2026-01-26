@@ -764,3 +764,59 @@ func (h *S3Handler) ListVersions(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXML)
 	return c.XML(http.StatusOK, result)
 }
+
+// ServeWebsite serves static website content from a bucket
+func (h *S3Handler) ServeWebsite(c echo.Context) error {
+	bucket := c.Param("bucket")
+	path := c.Param("*")
+
+	// Get website configuration
+	config, err := h.Storage.GetBucketWebsite(bucket)
+	if err != nil || config == nil {
+		return c.String(http.StatusNotFound, "Website configuration not found for this bucket")
+	}
+
+	// Determine the key to fetch
+	key := path
+	if key == "" || strings.HasSuffix(key, "/") {
+		// Directory request - append index document
+		if config.IndexDocument != nil && config.IndexDocument.Suffix != "" {
+			key = key + config.IndexDocument.Suffix
+		} else {
+			key = key + "index.html" // Default
+		}
+	}
+
+	// Try to get the object
+	reader, obj, err := h.Storage.GetObject(bucket, key, "")
+	if err != nil {
+		// Object not found - serve error document if configured
+		if config.ErrorDocument != nil && config.ErrorDocument.Key != "" {
+			errorReader, _, errorErr := h.Storage.GetObject(bucket, config.ErrorDocument.Key, "")
+			if errorErr == nil {
+				defer errorReader.Close()
+				contentType := mime.TypeByExtension(filepath.Ext(config.ErrorDocument.Key))
+				if contentType == "" {
+					contentType = "text/html"
+				}
+				return c.Stream(http.StatusNotFound, contentType, errorReader)
+			}
+		}
+		return c.String(http.StatusNotFound, "Not Found")
+	}
+	defer reader.Close()
+
+	// Determine content type
+	contentType := mime.TypeByExtension(filepath.Ext(key))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Set headers
+	c.Response().Header().Set("x-amz-version-id", obj.VersionID)
+	c.Response().Header().Set("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
+	c.Response().Header().Set("Last-Modified", obj.ModTime.Format(http.TimeFormat))
+	c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
+
+	return c.Stream(http.StatusOK, contentType, reader)
+}
