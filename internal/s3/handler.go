@@ -3,9 +3,11 @@ package s3
 import (
 	"encoding/xml"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/labstack/echo/v4"
@@ -167,6 +169,21 @@ type ElementExpiration struct {
 	Days int `xml:"Days"`
 }
 
+type ObjectLockConfiguration struct {
+	XMLName           xml.Name        `xml:"ObjectLockConfiguration"`
+	ObjectLockEnabled string          `xml:"ObjectLockEnabled"`
+	Rule              *ObjectLockRule `xml:"Rule,omitempty"`
+}
+
+type ObjectLockRule struct {
+	DefaultRetention *DefaultRetention `xml:"DefaultRetention"`
+}
+
+type DefaultRetention struct {
+	Mode string `xml:"Mode"`
+	Days int    `xml:"Days"`
+}
+
 func (h *S3Handler) PostBucket(c echo.Context) error {
 	bucket := c.Param("bucket")
 
@@ -177,9 +194,10 @@ func (h *S3Handler) PostBucket(c echo.Context) error {
 			return c.String(http.StatusBadRequest, err.Error())
 		}
 
+		bypass := c.Request().Header.Get("x-amz-bypass-governance-retention") == "true"
 		result := DeleteResult{}
 		for _, obj := range req.Objects {
-			if err := h.Storage.DeleteObject(bucket, obj.Key, obj.VersionId); err != nil {
+			if err := h.Storage.DeleteObject(bucket, obj.Key, obj.VersionId, bypass); err != nil {
 				result.Error = append(result.Error, struct {
 					Key     string `xml:"Key"`
 					Code    string `xml:"Code"`
@@ -250,6 +268,24 @@ func (h *S3Handler) PutBucket(c echo.Context) error {
 
 		if err := h.Storage.PutBucketLifecycle(bucket, config); err != nil {
 			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		}
+		return c.NoContent(http.StatusOK)
+	}
+
+	// Object Lock
+	if c.Request().URL.Query().Has("object-lock") {
+		var req ObjectLockConfiguration
+		if err := xml.NewDecoder(c.Request().Body).Decode(&req); err != nil {
+			return c.String(http.StatusBadRequest, err.Error())
+		}
+		enabled := req.ObjectLockEnabled == "Enabled"
+		if err := h.Storage.SetBucketObjectLock(bucket, enabled); err != nil {
+			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		}
+		if req.Rule != nil && req.Rule.DefaultRetention != nil {
+			if err := h.Storage.SetBucketDefaultRetention(bucket, req.Rule.DefaultRetention.Mode, req.Rule.DefaultRetention.Days); err != nil {
+				return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			}
 		}
 		return c.NoContent(http.StatusOK)
 	}
@@ -337,16 +373,14 @@ func (h *S3Handler) GetObject(c echo.Context) error {
 		return c.XML(http.StatusOK, result)
 	}
 
-	reader, vid, err := h.Storage.GetObject(bucket, key, versionID)
+	reader, obj, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
 		return c.NoContent(http.StatusNotFound)
 	}
 	defer reader.Close()
 
-	// Check encryption (we need the Stat or just trust the Engine handles it)
-	// The Engine already returns a decrypted reader, but we might want the header
-	obj, _ := h.Storage.StatObject(bucket, key, versionID)
-	if obj != nil && obj.EncryptionType != "" {
+	// Use metadata directly from Object
+	if obj.EncryptionType != "" {
 		c.Response().Header().Set("x-amz-server-side-encryption", obj.EncryptionType)
 	}
 
@@ -356,10 +390,29 @@ func (h *S3Handler) GetObject(c echo.Context) error {
 	}
 
 	// Set S3 headers
-	c.Response().Header().Set("x-amz-version-id", vid)
+	c.Response().Header().Set("x-amz-version-id", obj.VersionID)
+	c.Response().Header().Set("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
+	c.Response().Header().Set("Last-Modified", obj.ModTime.Format(http.TimeFormat))
 
-	// Expose headers for CORS
-	c.Response().Header().Set("Access-Control-Expose-Headers", "x-amz-version-id, x-amz-server-side-encryption, ETag, Content-Length, Last-Modified")
+	// Handle Range Request
+	rangeHeader := c.Request().Header.Get("Range")
+	if rangeHeader != "" && strings.HasPrefix(rangeHeader, "bytes=") {
+		var start, end int64
+		fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+		if end == 0 || end >= obj.Size {
+			end = obj.Size - 1
+		}
+
+		contentLength := end - start + 1
+		c.Response().Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
+		c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
+
+		// If it's a small range or we want to be simple, we could seek,
+		// but since engine.GetObject returns an io.ReadCloser (which might not seek),
+		// we skip the first 'start' bytes.
+		io.CopyN(io.Discard, reader, start)
+		return c.Stream(http.StatusPartialContent, contentType, io.LimitReader(reader, contentLength))
+	}
 
 	// Support response-content-disposition query param
 	if disp := c.QueryParam("response-content-disposition"); disp != "" {
@@ -369,6 +422,7 @@ func (h *S3Handler) GetObject(c echo.Context) error {
 		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	}
 
+	c.Response().Header().Set("Content-Length", fmt.Sprintf("%d", obj.Size))
 	return c.Stream(http.StatusOK, contentType, reader)
 }
 
@@ -391,6 +445,10 @@ func (h *S3Handler) HeadObject(c echo.Context) error {
 	c.Response().Header().Set(echo.HeaderContentLength, fmt.Sprintf("%d", obj.Size))
 	c.Response().Header().Set(echo.HeaderLastModified, obj.ModTime.Format(http.TimeFormat))
 	c.Response().Header().Set("x-amz-version-id", obj.VersionID)
+	c.Response().Header().Set("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
+	if obj.EncryptionType != "" {
+		c.Response().Header().Set("x-amz-server-side-encryption", obj.EncryptionType)
+	}
 
 	return c.NoContent(http.StatusOK)
 }
@@ -429,6 +487,10 @@ func (h *S3Handler) PutObject(c echo.Context) error {
 	}
 
 	encryptionType := c.Request().Header.Get("x-amz-server-side-encryption")
+	// S3 Object Lock headers
+	// Note: Engine currently handles default retention from bucket setting.
+	// For per-object retention during upload, we could expand PutObject signature later.
+
 	vid, err := h.Storage.PutObject(bucket, key, c.Request().Body, encryptionType)
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
@@ -506,7 +568,8 @@ func (h *S3Handler) DeleteObject(c echo.Context) error {
 		return c.NoContent(http.StatusNoContent)
 	}
 
-	if err := h.Storage.DeleteObject(bucket, key, versionID); err != nil {
+	bypass := c.Request().Header.Get("x-amz-bypass-governance-retention") == "true"
+	if err := h.Storage.DeleteObject(bucket, key, versionID, bypass); err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -589,13 +652,36 @@ func (h *S3Handler) ListObjects(c echo.Context) error {
 		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXML)
 		return c.XML(http.StatusOK, result)
 	}
+	// Object Lock
+	if c.Request().URL.Query().Has("object-lock") {
+		enabled, mode, days, err := h.Storage.GetBucketObjectLock(bucket)
+		if err != nil {
+			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		}
+		result := ObjectLockConfiguration{
+			ObjectLockEnabled: "Disabled",
+		}
+		if enabled {
+			result.ObjectLockEnabled = "Enabled"
+		}
+		if mode != "" {
+			result.Rule = &ObjectLockRule{
+				DefaultRetention: &DefaultRetention{
+					Mode: mode,
+					Days: days,
+				},
+			}
+		}
+		c.Response().Header().Set(echo.HeaderContentType, echo.MIMEApplicationXML)
+		return c.XML(http.StatusOK, result)
+	}
 
 	// Check if this is a ListVersions request
 	if c.QueryParam("versions") != "" || c.Request().URL.Query().Has("versions") {
 		return h.ListVersions(c)
 	}
 
-	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter)
+	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter, "")
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
@@ -648,27 +734,29 @@ func (h *S3Handler) ListVersions(c echo.Context) error {
 	prefix := c.QueryParam("prefix")
 	delimiter := c.QueryParam("delimiter")
 
-	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter)
+	objects, _, err := h.Storage.ListObjects(bucket, prefix, "", "") // Get all objects first
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 
 	result := ListVersionsResult{
-		Name:           bucket,
-		Prefix:         prefix,
-		Delimiter:      delimiter,
-		CommonPrefixes: commonPrefixes,
+		Name:      bucket,
+		Prefix:    prefix,
+		Delimiter: delimiter,
 	}
 
 	for _, o := range objects {
-		versions, _ := h.Storage.ListVersions(bucket, o.Key)
+		versions, err := h.Storage.ListVersions(bucket, o.Key)
+		if err != nil {
+			continue
+		}
 		for _, v := range versions {
 			result.Versions = append(result.Versions, Version{
 				Key:          v.Key,
 				VersionId:    v.VersionID,
 				IsLatest:     v.IsLatest,
-				LastModified: v.ModTime.Format(http.TimeFormat),
 				Size:         v.Size,
+				LastModified: v.ModTime.Format(http.TimeFormat),
 			})
 		}
 	}

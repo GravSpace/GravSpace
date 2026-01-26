@@ -9,12 +9,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/cache"
 	"github.com/GravSpace/GravSpace/internal/crypto"
 	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/metrics"
+	"github.com/GravSpace/GravSpace/internal/notifications"
 )
 
 // Object represents a stored object version
@@ -28,6 +30,12 @@ type Object struct {
 	RetainUntilDate *time.Time
 	LegalHold       bool
 	LockMode        string
+}
+
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 32*1024) // 32KB buffer
+	},
 }
 
 // CORSConfiguration represents the S3 CORS configuration
@@ -81,14 +89,16 @@ type Storage interface {
 	GetBucketInfo(name string) (*database.BucketRow, error)
 	SetBucketVersioning(name string, enabled bool) error
 	SetBucketObjectLock(name string, enabled bool) error
+	GetBucketObjectLock(name string) (enabled bool, mode string, days int, err error)
 	PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error)
-	GetObject(bucket, key, versionID string) (io.ReadCloser, string, error)
+	GetObject(bucket, key, versionID string) (io.ReadCloser, *Object, error)
 	StatObject(bucket, key, versionID string) (*Object, error)
-	DeleteObject(bucket, key, versionID string) error
-	ListObjects(bucket, prefix, delimiter string) ([]Object, []string, error)
+	DeleteObject(bucket, key, versionID string, bypassGovernance bool) error
+	ListObjects(bucket, prefix, delimiter, search string) ([]Object, []string, error)
 	ListVersions(bucket, key string) ([]Object, error)
 	SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error
 	SetObjectLegalHold(bucket, key, versionID string, hold bool) error
+	SetBucketDefaultRetention(bucket, mode string, days int) error
 
 	// Multipart Upload
 	InitiateMultipartUpload(bucket, key string) (string, error)
@@ -110,14 +120,17 @@ type Storage interface {
 	GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error)
 	DeleteBucketLifecycle(bucket string) error
 	StartLifecycleWorker()
+	GetGlobalStats() (count int, size int64, err error)
+	GetBucketStats(bucket string) (count int, size int64, err error)
 }
 
 // FileStorage implements Storage using the local filesystem
 type FileStorage struct {
-	Root       string
-	DB         *database.Database
-	Cache      cache.Cache
-	SyncWorker *SyncWorker
+	Root          string
+	DB            *database.Database
+	Cache         cache.Cache
+	SyncWorker    *SyncWorker
+	Notifications *notifications.Dispatcher
 }
 
 func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
@@ -126,7 +139,19 @@ func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 	}
 
 	// Initialize cache
-	c := cache.NewInMemoryCache()
+	var c cache.Cache
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL != "" {
+		fmt.Printf("Using Redis cache at %s\n", redisURL)
+		var err error
+		c, err = cache.NewRedisCache(redisURL)
+		if err != nil {
+			fmt.Printf("Failed to connect to Redis: %v. Falling back to in-memory cache.\n", err)
+			c = cache.NewInMemoryCache()
+		}
+	} else {
+		c = cache.NewInMemoryCache()
+	}
 
 	// Create storage instance
 	s := &FileStorage{
@@ -198,6 +223,20 @@ func (s *FileStorage) SetBucketObjectLock(name string, enabled bool) error {
 	return s.DB.SetBucketObjectLock(name, enabled)
 }
 
+func (s *FileStorage) GetBucketObjectLock(name string) (bool, string, int, error) {
+	if s.DB == nil {
+		return false, "", 0, fmt.Errorf("database not available")
+	}
+	bucket, err := s.DB.GetBucket(name)
+	if err != nil {
+		return false, "", 0, err
+	}
+	if bucket == nil {
+		return false, "", 0, os.ErrNotExist
+	}
+	return bucket.ObjectLockEnabled, bucket.DefaultRetentionMode, bucket.DefaultRetentionDays, nil
+}
+
 func (s *FileStorage) SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error {
 	if s.DB == nil {
 		return fmt.Errorf("database not available")
@@ -212,24 +251,30 @@ func (s *FileStorage) SetObjectLegalHold(bucket, key, versionID string, hold boo
 	return s.DB.SetObjectLegalHold(bucket, key, versionID, hold)
 }
 
+func (s *FileStorage) SetBucketDefaultRetention(bucket, mode string, days int) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.SetBucketDefaultRetention(bucket, mode, days)
+}
+
 func (s *FileStorage) ListBuckets() ([]string, error) {
 	// Try cache first
-	if cached, ok := s.Cache.Get(cache.BucketListKey()); ok {
+	var buckets []string
+	if ok := s.Cache.Get(cache.BucketListKey(), &buckets); ok {
 		metrics.RecordCacheHit("bucket_list")
-		if buckets, ok := cached.([]string); ok {
-			return buckets, nil
-		}
+		return buckets, nil
 	}
 	metrics.RecordCacheMiss("bucket_list")
 
 	// Try database
 	if s.DB != nil {
-		buckets, err := s.DB.ListBuckets()
-		if err == nil {
-			// Cache for 5 minutes
-			s.Cache.Set(cache.BucketListKey(), buckets, 5*time.Minute)
-			return buckets, nil
+		dbBuckets, err := s.DB.ListBuckets()
+		if err != nil {
+			return nil, err
 		}
+		s.Cache.Set(cache.BucketListKey(), dbBuckets, 15*time.Minute)
+		return dbBuckets, nil
 	}
 
 	// Fallback to filesystem
@@ -237,16 +282,16 @@ func (s *FileStorage) ListBuckets() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var buckets []string
+	var results []string
 	for _, entry := range entries {
 		if entry.IsDir() && entry.Name() != ".versions" {
-			buckets = append(buckets, entry.Name())
+			results = append(results, entry.Name())
 		}
 	}
 
 	// Cache the result
-	s.Cache.Set(cache.BucketListKey(), buckets, 5*time.Minute)
-	return buckets, nil
+	s.Cache.Set(cache.BucketListKey(), results, 5*time.Minute)
+	return results, nil
 }
 
 func (s *FileStorage) DeleteBucket(name string) error {
@@ -278,8 +323,24 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		return "", nil
 	}
 
-	// Check if the existing object has a lock (before overwriting)
+	// Check if versioning is enabled and get object lock defaults
+	versioningEnabled := false
+	var defaultRetentionMode string
+	var defaultRetentionDays int
 	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil {
+			versioningEnabled = bucketInfo.VersioningEnabled
+			if bucketInfo.ObjectLockEnabled {
+				defaultRetentionMode = bucketInfo.DefaultRetentionMode
+				defaultRetentionDays = bucketInfo.DefaultRetentionDays
+			}
+		}
+	}
+
+	// Check if the existing object has a lock (before overwriting)
+	// ONLY block if versioning is disabled. If versioning is enabled, a new version is created.
+	if !versioningEnabled && s.DB != nil {
 		existingObj, _ := s.DB.GetObject(bucket, key, "")
 		if existingObj != nil {
 			// Check for legal hold
@@ -296,15 +357,6 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 				return "", fmt.Errorf("object is under %s retention until %s and cannot be overwritten",
 					lockMode, existingObj.RetainUntilDate.Format(time.RFC3339))
 			}
-		}
-	}
-
-	// Check if versioning is enabled for this bucket
-	versioningEnabled := false
-	if s.DB != nil {
-		bucketInfo, err := s.DB.GetBucket(bucket)
-		if err == nil && bucketInfo != nil {
-			versioningEnabled = bucketInfo.VersioningEnabled
 		}
 	}
 
@@ -345,7 +397,9 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}
 
-	size, err = io.Copy(writeCloser, reader)
+	buf := bufferPool.Get().([]byte)
+	size, err = io.CopyBuffer(writeCloser, reader, buf)
+	bufferPool.Put(buf)
 	if err != nil {
 		return "", err
 	}
@@ -365,19 +419,43 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 	// Save metadata to database
 	if s.DB != nil {
 		contentType := "application/octet-stream"
+		// Apply default retention if set
+		var retainUntil *time.Time
+		var lockMode *string
+		if defaultRetentionMode != "" && defaultRetentionDays > 0 {
+			t := time.Now().AddDate(0, 0, defaultRetentionDays)
+			retainUntil = &t
+			m := defaultRetentionMode
+			lockMode = &m
+		}
+
 		objectRow := &database.ObjectRow{
-			Bucket:         bucket,
-			Key:            key,
-			VersionID:      versionID,
-			Size:           size,
-			ETag:           &versionID,
-			ContentType:    &contentType,
-			IsLatest:       true,
-			EncryptionType: &encryptionType,
+			Bucket:          bucket,
+			Key:             key,
+			VersionID:       versionID,
+			Size:            size,
+			ETag:            &versionID,
+			ContentType:     &contentType,
+			IsLatest:        true,
+			EncryptionType:  &encryptionType,
+			RetainUntilDate: retainUntil,
+			LockMode:        lockMode,
 		}
 		s.DB.CreateObject(objectRow)
 		metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
 		metrics.StorageBytes.WithLabelValues(bucket).Add(float64(size))
+
+		// Trigger Webhook
+		if s.Notifications != nil {
+			s.Notifications.Dispatch(notifications.Event{
+				Bucket:    bucket,
+				Key:       key,
+				VersionID: versionID,
+				Size:      size,
+				ETag:      versionID,
+				EventName: "ObjectCreated:Put",
+			})
+		}
 	}
 
 	// Invalidate object list cache for this bucket
@@ -386,46 +464,39 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 	return versionID, nil
 }
 
-func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, string, error) {
-	fullPath := filepath.Join(s.Root, bucket, key)
-	info, err := os.Stat(fullPath)
-	if err == nil && !info.IsDir() {
-		// Legacy file support: if it's a simple file, return it directly.
-		reader, err := os.Open(fullPath)
-		if err != nil {
-			return nil, "", err
-		}
-		return reader, "legacy", nil
-	}
-
-	objectDir := fullPath
-	if versionID == "" {
-		data, err := os.ReadFile(filepath.Join(objectDir, "latest"))
-		if err != nil {
-			return nil, "", err
-		}
-		versionID = string(data)
-	}
-
-	reader, err := os.Open(filepath.Join(objectDir, versionID))
+func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, *Object, error) {
+	// 1. Get metadata first (from DB or Stat)
+	obj, err := s.StatObject(bucket, key, versionID)
 	if err != nil {
-		return nil, "", err
+		return nil, nil, err
+	}
+
+	// Adjust versionID if it was empty (StatObject resolved it)
+	versionID = obj.VersionID
+
+	fullPath := filepath.Join(s.Root, bucket, key)
+	var reader *os.File
+	if versionID == "legacy" {
+		reader, err = os.Open(fullPath)
+	} else {
+		reader, err = os.Open(filepath.Join(fullPath, versionID))
+	}
+
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Check if encrypted
-	if s.DB != nil {
-		obj, _ := s.DB.GetObject(bucket, key, versionID)
-		if obj != nil && obj.EncryptionType != nil && *obj.EncryptionType == "AES256" {
-			decryptedReader, err := crypto.DecryptStream(crypto.GetMasterKey(), reader)
-			if err != nil {
-				reader.Close()
-				return nil, "", err
-			}
-			return decryptedReader, versionID, nil
+	if obj.EncryptionType == "AES256" {
+		decryptedReader, err := crypto.DecryptStream(crypto.GetMasterKey(), reader)
+		if err != nil {
+			reader.Close()
+			return nil, nil, err
 		}
+		return decryptedReader, obj, nil
 	}
 
-	return reader, versionID, nil
+	return reader, obj, nil
 }
 
 func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error) {
@@ -474,33 +545,59 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 	}, nil
 }
 
-func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
+func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernance bool) error {
 	objectDir := filepath.Join(s.Root, bucket, key)
 
 	// Delete from database
 	if s.DB != nil {
-		// Get object to check for locks before deleting
-		obj, _ := s.DB.GetObject(bucket, key, versionID)
-		if obj != nil {
-			// Check for legal hold
-			if obj.LegalHold {
-				return fmt.Errorf("object is under legal hold and cannot be deleted")
+		if strings.HasSuffix(key, "/") && versionID == "" {
+			// Folder deletion: delete prefix recursively from DB
+			err := s.DB.DeletePrefix(bucket, key)
+			if err != nil {
+				return err
 			}
-
-			// Check for retention period
-			if obj.RetainUntilDate != nil && time.Now().Before(*obj.RetainUntilDate) {
-				lockMode := ""
-				if obj.LockMode != nil {
-					lockMode = *obj.LockMode
+		} else {
+			// Specific file or version deletion
+			obj, _ := s.DB.GetObject(bucket, key, versionID)
+			if obj != nil {
+				// Check for legal hold
+				if obj.LegalHold {
+					return fmt.Errorf("object is under legal hold and cannot be deleted")
 				}
-				return fmt.Errorf("object is under %s retention until %s and cannot be deleted",
-					lockMode, obj.RetainUntilDate.Format(time.RFC3339))
-			}
 
-			metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
-			metrics.StorageBytes.WithLabelValues(bucket).Sub(float64(obj.Size))
+				// Check for retention period
+				if obj.RetainUntilDate != nil && time.Now().Before(*obj.RetainUntilDate) {
+					lockMode := ""
+					if obj.LockMode != nil {
+						lockMode = *obj.LockMode
+					}
+
+					// GOVERNANCE mode can be bypassed if the user has permission (handled by bypassGovernance flag)
+					if lockMode == "GOVERNANCE" && bypassGovernance {
+						// Allow deletion
+					} else {
+						return fmt.Errorf("object is under %s retention until %s and cannot be deleted",
+							lockMode, obj.RetainUntilDate.Format(time.RFC3339))
+					}
+				}
+
+				metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
+				metrics.StorageBytes.WithLabelValues(bucket).Sub(float64(obj.Size))
+			}
+			s.DB.DeleteObject(bucket, key, versionID)
+
+			// Trigger Webhook for file deletion
+			if s.Notifications != nil {
+				s.Notifications.Dispatch(notifications.Event{
+					Bucket:    bucket,
+					Key:       key,
+					VersionID: versionID,
+					Size:      obj.Size,
+					ETag:      versionID,
+					EventName: "ObjectRemoved:Delete",
+				})
+			}
 		}
-		s.DB.DeleteObject(bucket, key, versionID)
 	}
 
 	// Invalidate cache
@@ -514,133 +611,152 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string) error {
 	return os.Remove(filepath.Join(objectDir, versionID))
 }
 
-func (s *FileStorage) ListObjects(bucket, prefix, delimiter string) ([]Object, []string, error) {
+func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]Object, []string, error) {
+	// Try database first if available - it's much faster
+	if s.DB != nil {
+		// Use a high limit for now or implement pagination
+		dbObjects, err := s.DB.ListObjects(bucket, prefix, search, 10000)
+		if err == nil {
+			var objects []Object
+			var commonPrefixes []string
+			seenPrefixes := make(map[string]bool)
+
+			for _, o := range dbObjects {
+				relKey := o.Key
+				if prefix != "" && !strings.HasPrefix(relKey, prefix) {
+					continue
+				}
+
+				subKey := relKey[len(prefix):]
+				if delimiter != "" {
+					idx := strings.Index(subKey, delimiter)
+					if idx != -1 {
+						cp := prefix + subKey[:idx+len(delimiter)]
+						if !seenPrefixes[cp] {
+							commonPrefixes = append(commonPrefixes, cp)
+							seenPrefixes[cp] = true
+						}
+						continue
+					}
+				}
+
+				obj := Object{
+					Key:       o.Key,
+					VersionID: o.VersionID,
+					Size:      o.Size,
+					IsLatest:  o.IsLatest,
+					ModTime:   o.ModifiedAt,
+				}
+				if o.LockMode != nil {
+					obj.LockMode = *o.LockMode
+				}
+				obj.RetainUntilDate = o.RetainUntilDate
+				obj.LegalHold = o.LegalHold
+				if o.EncryptionType != nil {
+					obj.EncryptionType = *o.EncryptionType
+				}
+				objects = append(objects, obj)
+			}
+			return objects, commonPrefixes, nil
+		}
+	}
+
+	// Fallback to filesystem - use ReadDir instead of Walk if possible for performance
 	bucketDir := filepath.Join(s.Root, bucket)
 	objects := []Object{}
 	commonPrefixes := []string{}
-	seenPrefixes := make(map[string]bool)
 
-	err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || path == bucketDir {
-			return err
-		}
-
-		rel, _ := filepath.Rel(bucketDir, path)
-
-		if !info.IsDir() {
-			// Check if it's a standalone file (no 'latest' in its directory)
-			parent := filepath.Dir(path)
-			if _, err := os.Stat(filepath.Join(parent, "latest")); err == nil {
-				return nil // Versioned file, will be handled by its parent directory
+	// If recursive walk is needed (delimiter="") we use Walk
+	if delimiter == "" {
+		err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || path == bucketDir {
+				return err
 			}
-			if filepath.Base(path) == "latest" {
-				return nil // Control file
-			}
-
-			// Filter by prefix
-			if prefix != "" && !strings.HasPrefix(rel, prefix) {
+			rel, _ := filepath.Rel(bucketDir, path)
+			if info.IsDir() {
+				// Object directory detection (has 'latest')
+				if _, err := os.Stat(filepath.Join(path, "latest")); err == nil {
+					data, _ := os.ReadFile(filepath.Join(path, "latest"))
+					vid := string(data)
+					vinfo, _ := os.Stat(filepath.Join(path, vid))
+					objects = append(objects, Object{
+						Key:       rel,
+						VersionID: vid,
+						Size:      vinfo.Size(),
+						IsLatest:  true,
+						ModTime:   vinfo.ModTime(),
+					})
+					return filepath.SkipDir
+				}
 				return nil
 			}
+			// Legacy file
+			if filepath.Base(path) != "latest" && !strings.Contains(path, "/.uploads/") {
+				objects = append(objects, Object{
+					Key:       rel,
+					VersionID: "legacy",
+					Size:      info.Size(),
+					IsLatest:  true,
+					ModTime:   info.ModTime(),
+				})
+			}
+			return nil
+		})
+		return objects, commonPrefixes, err
+	}
 
-			obj := Object{
-				Key:       rel,
+	// For specific prefix with delimiter, only read the relevant directory
+	searchDir := filepath.Join(bucketDir, prefix)
+	// Truncate to the nearest directory if prefix points to a file-like path part
+	if !strings.HasSuffix(prefix, "/") && prefix != "" {
+		searchDir = filepath.Dir(searchDir)
+	}
+
+	entries, err := os.ReadDir(searchDir)
+	if err != nil {
+		return nil, nil, nil // Return empty if dir doesn't exist
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "latest" || name == ".uploads" || name == ".versions" {
+			continue
+		}
+
+		relPath := filepath.Join(prefix, name)
+		if !strings.HasPrefix(relPath, prefix) {
+			continue
+		}
+
+		if entry.IsDir() {
+			// Check if it's an object dir
+			if _, err := os.Stat(filepath.Join(searchDir, name, "latest")); err == nil {
+				data, _ := os.ReadFile(filepath.Join(searchDir, name, "latest"))
+				vid := string(data)
+				vinfo, _ := entry.Info()
+				objects = append(objects, Object{
+					Key:       relPath,
+					VersionID: vid,
+					Size:      vinfo.Size(),
+					IsLatest:  true,
+					ModTime:   vinfo.ModTime(),
+				})
+			} else {
+				commonPrefixes = append(commonPrefixes, relPath+"/")
+			}
+		} else {
+			info, _ := entry.Info()
+			objects = append(objects, Object{
+				Key:       relPath,
 				VersionID: "legacy",
 				Size:      info.Size(),
 				IsLatest:  true,
 				ModTime:   info.ModTime(),
-			}
-
-			if s.DB != nil {
-				dbObj, _ := s.DB.GetObject(bucket, rel, "legacy")
-				if dbObj != nil {
-					obj.RetainUntilDate = dbObj.RetainUntilDate
-					obj.LegalHold = dbObj.LegalHold
-					if dbObj.LockMode != nil {
-						obj.LockMode = *dbObj.LockMode
-					}
-					if dbObj.EncryptionType != nil {
-						obj.EncryptionType = *dbObj.EncryptionType
-					}
-				}
-			}
-
-			objects = append(objects, obj)
-			return nil
+			})
 		}
+	}
 
-		// It's a directory
-		relKey := rel + "/"
-
-		// Filter by prefix
-		if prefix != "" {
-			if !strings.HasPrefix(relKey, prefix) {
-				if strings.HasPrefix(prefix, relKey) {
-					return nil // Parent of prefix, continue walking
-				}
-				return filepath.SkipDir
-			}
-		}
-
-		// Check if it's an object directory (contains 'latest')
-		latestPath := filepath.Join(path, "latest")
-		isObject := false
-		if _, err := os.Stat(latestPath); err == nil {
-			isObject = true
-		}
-
-		// Apply delimiter logic
-		subKey := relKey[len(prefix):]
-		if delimiter != "" {
-			idx := strings.Index(subKey, delimiter)
-			if idx != -1 {
-				// We found a delimiter match.
-				// If it's NOT at the very end of subKey, it's definitely a prefix to something deeper.
-				// If it IS at the end, it's a prefix ONLY if it's not also an object.
-				if idx < len(subKey)-len(delimiter) || !isObject {
-					cp := relKey[:len(prefix)+idx+len(delimiter)]
-					if !seenPrefixes[cp] {
-						commonPrefixes = append(commonPrefixes, cp)
-						seenPrefixes[cp] = true
-					}
-					return filepath.SkipDir
-				}
-			}
-		}
-
-		if isObject {
-			data, _ := os.ReadFile(latestPath)
-			vid := string(data)
-			vinfo, _ := os.Stat(filepath.Join(path, vid))
-
-			obj := Object{
-				Key:       rel,
-				VersionID: vid,
-				Size:      vinfo.Size(),
-				IsLatest:  true,
-				ModTime:   vinfo.ModTime(),
-			}
-
-			if s.DB != nil {
-				dbObj, _ := s.DB.GetObject(bucket, rel, vid)
-				if dbObj != nil {
-					obj.RetainUntilDate = dbObj.RetainUntilDate
-					obj.LegalHold = dbObj.LegalHold
-					if dbObj.LockMode != nil {
-						obj.LockMode = *dbObj.LockMode
-					}
-					if dbObj.EncryptionType != nil {
-						obj.EncryptionType = *dbObj.EncryptionType
-					}
-				}
-			}
-
-			objects = append(objects, obj)
-			return filepath.SkipDir
-		}
-
-		return nil
-	})
-	return objects, commonPrefixes, err
+	return objects, commonPrefixes, nil
 }
 
 func (s *FileStorage) ListVersions(bucket, key string) ([]Object, error) {
@@ -735,7 +851,10 @@ func (s *FileStorage) UploadPart(bucket, key, uploadID string, partNumber int, r
 	}
 	defer file.Close()
 
-	_, err = io.Copy(file, reader)
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf)
+
+	_, err = io.CopyBuffer(file, reader, buf)
 	if err != nil {
 		return "", err
 	}
@@ -750,49 +869,131 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 		return "", fmt.Errorf("upload %s not found", uploadID)
 	}
 
-	// Create temporary file for assembly
-	tempFile, err := os.CreateTemp("", "mpu-assembly-*")
+	// 1. Resolve versioning and metadata similar to PutObject
+	var versioningEnabled bool
+	var defaultRetentionMode string
+	var defaultRetentionDays int
+	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil {
+			versioningEnabled = bucketInfo.VersioningEnabled
+			if bucketInfo.ObjectLockEnabled {
+				defaultRetentionMode = bucketInfo.DefaultRetentionMode
+				defaultRetentionDays = bucketInfo.DefaultRetentionDays
+			}
+		}
+	}
+
+	versionID := fmt.Sprintf("%d", time.Now().UnixNano())
+	var targetPath string
+	if versioningEnabled {
+		objectDir := filepath.Join(s.Root, bucket, key)
+		if err := os.MkdirAll(objectDir, 0755); err != nil {
+			return "", err
+		}
+		targetPath = filepath.Join(objectDir, versionID)
+	} else {
+		objectDir := filepath.Join(s.Root, bucket, filepath.Dir(key))
+		if err := os.MkdirAll(objectDir, 0755); err != nil {
+			return "", err
+		}
+		targetPath = filepath.Join(s.Root, bucket, key)
+		versionID = "simple"
+	}
+
+	destFile, err := os.Create(targetPath)
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tempFile.Name())
-	defer tempFile.Close()
+	defer destFile.Close()
 
-	// Sort parts by part number just in case
-	sort.Slice(parts, func(i, j int) bool {
-		return parts[i].PartNumber < parts[j].PartNumber
-	})
-
-	for _, p := range parts {
-		partPath := filepath.Join(uploadDir, fmt.Sprintf("%d", p.PartNumber))
-		pf, err := os.Open(partPath)
-		if err != nil {
-			return "", fmt.Errorf("part %d missing: %w", p.PartNumber, err)
-		}
-		_, err = io.Copy(tempFile, pf)
-		pf.Close()
+	// 2. Setup streaming sink (with encryption if needed)
+	// For multipart, encryption type should ideally come from initiation.
+	// For now we'll assume standard or inherit from bucket.
+	var writer io.WriteCloser = destFile
+	encryptionType := "" // Could be passed or retrieved from session
+	if encryptionType == "AES256" {
+		writer, err = crypto.EncryptStream(crypto.GetMasterKey(), destFile)
 		if err != nil {
 			return "", err
 		}
 	}
 
-	// Seek back to start
-	if _, err := tempFile.Seek(0, 0); err != nil {
+	// 3. Stream parts directly
+	sort.Slice(parts, func(i, j int) bool {
+		return parts[i].PartNumber < parts[j].PartNumber
+	})
+
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf)
+
+	var totalSize int64
+	for _, p := range parts {
+		partPath := filepath.Join(uploadDir, fmt.Sprintf("%d", p.PartNumber))
+		pf, err := os.Open(partPath)
+		if err != nil {
+			writer.Close()
+			return "", fmt.Errorf("part %d missing: %w", p.PartNumber, err)
+		}
+		n, err := io.CopyBuffer(writer, pf, buf)
+		pf.Close()
+		if err != nil {
+			writer.Close()
+			return "", err
+		}
+		totalSize += n
+	}
+
+	if err := writer.Close(); err != nil {
 		return "", err
 	}
 
-	// Now PutObject using the assembled stream
-	// For multipart, we should ideally retrieve the encryption type from the upload session.
-	// For now, we'll pass "" as we don't store it in the session yet.
-	vid, err := s.PutObject(bucket, key, tempFile, "")
-	if err != nil {
-		return "", err
+	// 4. Update latest pointer and metadata
+	if versioningEnabled {
+		objectDir := filepath.Join(s.Root, bucket, key)
+		os.WriteFile(filepath.Join(objectDir, "latest"), []byte(versionID), 0644)
 	}
 
-	// Cleanup
-	os.RemoveAll(uploadDir)
+	if s.DB != nil {
+		contentType := "application/octet-stream"
+		var retainUntil *time.Time
+		var lockMode *string
+		if defaultRetentionMode != "" && defaultRetentionDays > 0 {
+			t := time.Now().AddDate(0, 0, defaultRetentionDays)
+			retainUntil = &t
+			m := defaultRetentionMode
+			lockMode = &m
+		}
 
-	return vid, nil
+		s.DB.CreateObject(&database.ObjectRow{
+			Bucket:          bucket,
+			Key:             key,
+			VersionID:       versionID,
+			Size:            totalSize,
+			ETag:            &versionID,
+			ContentType:     &contentType,
+			IsLatest:        true,
+			EncryptionType:  &encryptionType,
+			RetainUntilDate: retainUntil,
+			LockMode:        lockMode,
+		})
+		metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
+		metrics.StorageBytes.WithLabelValues(bucket).Add(float64(totalSize))
+	}
+
+	// Dispatch notification
+	if s.Notifications != nil {
+		s.Notifications.Dispatch(notifications.Event{
+			Bucket:    bucket,
+			Key:       key,
+			VersionID: versionID,
+			Size:      totalSize,
+			ETag:      versionID,
+			EventName: "ObjectCreated:CompleteMultipartUpload",
+		})
+	}
+
+	return versionID, nil
 }
 
 func (s *FileStorage) AbortMultipartUpload(bucket, key, uploadID string) error {
@@ -810,19 +1011,12 @@ func (s *FileStorage) PutObjectTagging(bucket, key, versionID string, tags map[s
 		versionID = string(data)
 	}
 
-	// S3 tags are stored per version. We'll put them in the same directory as the version file.
-	// But wait, the current engine stores versions as files *inside* an object directory.
-	// Let's refine: data/bucket/key/V1 (file), data/bucket/key/V1.tags (json)
 	tagsPath := filepath.Join(objectDir, versionID+".tags")
-
-	// Convert map[string]string to JSON
-	// Simple implementation for now
-	var lines []string
-	for k, v := range tags {
-		lines = append(lines, fmt.Sprintf("%q:%q", k, v))
+	data, err := json.Marshal(tags)
+	if err != nil {
+		return err
 	}
-	json := "{" + strings.Join(lines, ",") + "}"
-	return os.WriteFile(tagsPath, []byte(json), 0644)
+	return os.WriteFile(tagsPath, data, 0644)
 }
 
 func (s *FileStorage) GetObjectTagging(bucket, key, versionID string) (map[string]string, error) {
@@ -845,22 +1039,25 @@ func (s *FileStorage) GetObjectTagging(bucket, key, versionID string) (map[strin
 		return nil, err
 	}
 
-	// Very simple "parser" for our simple "json"
 	tags := make(map[string]string)
-	content := strings.Trim(string(data), "{}")
-	if content == "" {
-		return tags, nil
-	}
-	pairs := strings.Split(content, ",")
-	for _, p := range pairs {
-		kv := strings.Split(p, ":")
-		if len(kv) == 2 {
-			k := strings.Trim(kv[0], "\"")
-			v := strings.Trim(kv[1], "\"")
-			tags[k] = v
-		}
+	if err := json.Unmarshal(data, &tags); err != nil {
+		return nil, err
 	}
 	return tags, nil
+}
+
+func (s *FileStorage) GetGlobalStats() (count int, size int64, err error) {
+	if s.DB == nil {
+		return 0, 0, fmt.Errorf("database not initialized")
+	}
+	return s.DB.GetGlobalStats()
+}
+
+func (s *FileStorage) GetBucketStats(bucket string) (count int, size int64, err error) {
+	if s.DB == nil {
+		return 0, 0, fmt.Errorf("database not initialized")
+	}
+	return s.DB.GetBucketStats(bucket)
 }
 
 func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error {
@@ -878,11 +1075,10 @@ func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error
 
 func (s *FileStorage) GetBucketCors(bucket string) (*CORSConfiguration, error) {
 	// Try cache first
-	if cached, ok := s.Cache.Get(cache.BucketCORSKey(bucket)); ok {
+	var cached CORSConfiguration
+	if ok := s.Cache.Get(cache.BucketCORSKey(bucket), &cached); ok {
 		metrics.RecordCacheHit("bucket_cors")
-		if cors, ok := cached.(*CORSConfiguration); ok {
-			return cors, nil
-		}
+		return &cached, nil
 	}
 	metrics.RecordCacheMiss("bucket_cors")
 
@@ -923,16 +1119,19 @@ func (s *FileStorage) PutBucketLifecycle(bucket string, lifecycle LifecycleConfi
 	// Invalidate cache
 	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
 
+	if s.DB != nil {
+		s.DB.PutBucketLifecycle(bucket, string(data))
+	}
+
 	return os.WriteFile(path, data, 0644)
 }
 
 func (s *FileStorage) GetBucketLifecycle(bucket string) (*LifecycleConfiguration, error) {
 	// Try cache first
-	if cached, ok := s.Cache.Get(cache.BucketLifecycleKey(bucket)); ok {
+	var cached LifecycleConfiguration
+	if ok := s.Cache.Get(cache.BucketLifecycleKey(bucket), &cached); ok {
 		metrics.RecordCacheHit("bucket_lifecycle")
-		if lifecycle, ok := cached.(*LifecycleConfiguration); ok {
-			return lifecycle, nil
-		}
+		return &cached, nil
 	}
 	metrics.RecordCacheMiss("bucket_lifecycle")
 
@@ -959,6 +1158,10 @@ func (s *FileStorage) DeleteBucketLifecycle(bucket string) error {
 	// Invalidate cache
 	s.Cache.Delete(cache.BucketLifecycleKey(bucket))
 
+	if s.DB != nil {
+		s.DB.PutBucketLifecycle(bucket, "")
+	}
+
 	path := filepath.Join(s.Root, bucket, "lifecycle.json")
 	return os.Remove(path)
 }
@@ -984,14 +1187,19 @@ func (s *FileStorage) StartLifecycleWorker() {
 }
 
 func (s *FileStorage) ProcessLifecycleRules() {
-	buckets, err := s.ListBuckets()
+	if s.DB == nil {
+		return
+	}
+
+	// Fetch all buckets with active lifecycle rules directly from DB
+	configs, err := s.DB.GetAllLifecycles()
 	if err != nil {
 		return
 	}
 
-	for _, bucket := range buckets {
-		config, err := s.GetBucketLifecycle(bucket)
-		if err != nil {
+	for bucket, configJSON := range configs {
+		var config LifecycleConfiguration
+		if err := json.Unmarshal([]byte(configJSON), &config); err != nil {
 			continue
 		}
 
@@ -1000,42 +1208,16 @@ func (s *FileStorage) ProcessLifecycleRules() {
 				continue
 			}
 
-			// Simple walk through objects
-			bucketPath := filepath.Join(s.Root, bucket)
-			filepath.Walk(bucketPath, func(path string, info os.FileInfo, err error) error {
-				if err != nil || info.IsDir() {
-					return nil
-				}
+			// Use DB to find expired objects (optimized via indices)
+			expired, err := s.DB.GetExpiredObjects(bucket, rule.Filter.Prefix, rule.Expiration.Days)
+			if err != nil {
+				continue
+			}
 
-				// Skip hidden files/internal files
-				rel, _ := filepath.Rel(bucketPath, path)
-				if strings.HasPrefix(rel, ".") || rel == "lifecycle.json" || rel == "cors.json" || rel == "tags.json" {
-					return nil
-				}
-
-				// Check prefix
-				if !strings.HasPrefix(rel, rule.Filter.Prefix) {
-					return nil
-				}
-
-				// Check expiration
-				if rule.Expiration.Days > 0 {
-					expiryDate := info.ModTime().Add(time.Duration(rule.Expiration.Days) * 24 * time.Hour)
-					if time.Now().After(expiryDate) {
-						os.Remove(path)
-						// Also cleanup empty version directories if any
-						dir := filepath.Dir(path)
-						if dir != bucketPath {
-							entries, _ := os.ReadDir(dir)
-							if len(entries) == 0 {
-								os.Remove(dir)
-							}
-						}
-					}
-				}
-
-				return nil
-			})
+			for _, obj := range expired {
+				// Permanently delete the expired version
+				s.DeleteObject(bucket, obj.Key, obj.VersionID, true)
+			}
 		}
 	}
 }

@@ -15,9 +15,11 @@ import (
 	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/health"
 	"github.com/GravSpace/GravSpace/internal/metrics"
+	"github.com/GravSpace/GravSpace/internal/notifications"
 	"github.com/GravSpace/GravSpace/internal/s3"
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/golang-jwt/jwt"
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,6 +33,11 @@ var (
 )
 
 func main() {
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Println("Note: .env file not found, using system environment variables")
+	}
+
 	// Parse command line flags
 	versionFlag := flag.Bool("version", false, "Print version information")
 	flag.BoolVar(versionFlag, "v", false, "Print version information (shorthand)")
@@ -97,13 +104,22 @@ func main() {
 		log.Printf("Warning: Failed to initialize users: %v", err)
 	}
 
+	// Initialize Notifications Dispatcher
+	dispatcher := notifications.NewDispatcher(db, 5)
+	dispatcher.Start()
+	store.Notifications = dispatcher
+
 	s3Handler := &s3.S3Handler{Storage: store}
 	store.StartLifecycleWorker()
 	adminHandler := &s3.AdminHandler{UserManager: um, Storage: store}
 	healthChecker := health.NewHealthChecker()
 
+	// Initialize Analytics Worker
+	analyticsWorker := storage.NewAnalyticsWorker(db, store)
+	analyticsWorker.Start()
+
 	// Initialize Audit Logger
-	auditLogger, err := audit.NewAuditLogger("./logs/audit.log")
+	auditLogger, err := audit.NewAuditLogger("./logs/audit.log", db)
 	if err != nil {
 		log.Printf("Warning: Failed to initialize audit logger: %v", err)
 		auditLogger = nil // Continue without audit logging
@@ -159,8 +175,6 @@ func main() {
 	admin := e.Group("/admin")
 	admin.Use(middleware.JWT([]byte(jwtSecret)))
 
-	admin.Use(middleware.JWT([]byte(jwtSecret)))
-
 	// General Admin Routes (accessible by any logged-in user with appropriate policy if S3-based,
 	// but currently Console access uses JWT which we want to restrict for IAM)
 	admin.GET("/buckets", adminHandler.ListBuckets)
@@ -170,18 +184,27 @@ func main() {
 	admin.PUT("/buckets/:bucket/versioning", adminHandler.SetBucketVersioning)
 	admin.PUT("/buckets/:bucket/object-lock", adminHandler.SetBucketObjectLock)
 	admin.PUT("/buckets/:bucket/retention", adminHandler.SetObjectRetention)
+	admin.PUT("/buckets/:bucket/retention/default", adminHandler.SetBucketDefaultRetention)
 	admin.PUT("/buckets/:bucket/legal-hold", adminHandler.SetObjectLegalHold)
 	admin.GET("/buckets/:bucket/objects", adminHandler.ListObjects)
 	admin.GET("/buckets/:bucket/objects/*", adminHandler.GetObject)
 	admin.GET("/buckets/:bucket/download/*", adminHandler.DownloadObject)
 	admin.PUT("/buckets/:bucket/objects/*", adminHandler.PutObject)
 	admin.DELETE("/buckets/:bucket/objects/*", adminHandler.DeleteObject)
+	admin.GET("/buckets/:bucket/tags/*", adminHandler.GetObjectTagging)
+	admin.PUT("/buckets/:bucket/tags/*", adminHandler.PutObjectTagging)
+	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
+	admin.POST("/buckets/:bucket/webhooks", adminHandler.CreateWebhook)
+	admin.DELETE("/buckets/:bucket/webhooks/:id", adminHandler.DeleteWebhook)
 
 	// Restricted Admin Routes (IAM & System)
 	iam := admin.Group("")
 	iam.Use(auth.AdminOnlyMiddleware)
 
 	iam.GET("/stats", adminHandler.GetSystemStats)
+	iam.GET("/audit-logs", adminHandler.GetAuditLogs)
+	iam.GET("/analytics/storage", adminHandler.GetStorageAnalytics)
+	iam.GET("/analytics/requests", adminHandler.GetActionAnalytics)
 	iam.GET("/users", adminHandler.ListUsers)
 	iam.POST("/users", adminHandler.CreateUser)
 	iam.DELETE("/users/:username", adminHandler.DeleteUser)

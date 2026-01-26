@@ -42,7 +42,7 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 				user = um.Users["anonymous"]
 				um.mu.RUnlock()
 				if user == nil {
-					return sendS3Error(c, "Forbidden", "Anonymous access disabled", "", "")
+					return sendS3Error(c, "AccessDenied", "Anonymous access is not enabled", "", "")
 				}
 			} else if queryCred != "" {
 				isPresigned = true
@@ -55,18 +55,28 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 			} else {
 				// Header-based
 				if !strings.HasPrefix(authHeader, "AWS4-HMAC-SHA256") {
-					return sendS3Error(c, "InvalidToken", "Invalid Authorization header", "", "")
-				}
-				// Extract Credential and Signature
-				parts := strings.Split(authHeader, " ")
-				for _, p := range parts {
-					p = strings.TrimSuffix(p, ",")
-					if strings.HasPrefix(p, "Credential=") {
-						cred := strings.TrimPrefix(p, "Credential=")
-						accessKeyID = strings.Split(cred, "/")[0]
+					// Fallback to anonymous if auth header is malformed but some apps do this
+					um.mu.RLock()
+					user = um.Users["anonymous"]
+					um.mu.RUnlock()
+					if user == nil {
+						return sendS3Error(c, "InvalidToken", "Invalid Authorization header", "", "")
 					}
-					if strings.HasPrefix(p, "Signature=") {
-						providedSignature = strings.TrimPrefix(p, "Signature=")
+				} else {
+					// Extract Credential and Signature
+					authParts := strings.Split(authHeader, ",")
+					for _, p := range authParts {
+						p = strings.TrimSpace(p)
+						if strings.HasPrefix(p, "AWS4-HMAC-SHA256 Credential=") {
+							cred := strings.TrimPrefix(p, "AWS4-HMAC-SHA256 Credential=")
+							accessKeyID = strings.Split(cred, "/")[0]
+						} else if strings.HasPrefix(p, "Credential=") {
+							cred := strings.TrimPrefix(p, "Credential=")
+							accessKeyID = strings.Split(cred, "/")[0]
+						}
+						if strings.HasPrefix(p, "Signature=") {
+							providedSignature = strings.TrimPrefix(p, "Signature=")
+						}
 					}
 				}
 			}
@@ -102,25 +112,35 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 						amzDate = c.Request().Header.Get("Date")
 					}
 					// Parse Auth Header for signed headers
-					parts := strings.Split(authHeader, " ")
-					for _, p := range parts {
-						p = strings.TrimSuffix(p, ",")
+					authParts := strings.Split(authHeader, ",")
+					for _, p := range authParts {
+						p = strings.TrimSpace(p)
 						if strings.HasPrefix(p, "SignedHeaders=") {
 							signedHeadersStr = strings.TrimPrefix(p, "SignedHeaders=")
 						}
 					}
 					algorithm = "AWS4-HMAC-SHA256"
 					// Extract scope from auth header
-					for _, p := range parts {
-						p = strings.TrimSuffix(p, ",")
-						if strings.HasPrefix(p, "Credential=") {
+					for _, p := range authParts {
+						p = strings.TrimSpace(p)
+						if strings.HasPrefix(p, "AWS4-HMAC-SHA256 Credential=") {
+							cred := strings.TrimPrefix(p, "AWS4-HMAC-SHA256 Credential=")
+							credentialScope = strings.Join(strings.Split(cred, "/")[1:], "/")
+						} else if strings.HasPrefix(p, "Credential=") {
 							cred := strings.TrimPrefix(p, "Credential=")
 							credentialScope = strings.Join(strings.Split(cred, "/")[1:], "/")
 						}
 					}
 				}
 
+				if credentialScope == "" {
+					return sendS3Error(c, "AuthorizationHeaderMalformed", "The authorization header is malformed; the credential scope is missing.", "", "")
+				}
+
 				scopeParts := strings.Split(credentialScope, "/")
+				if len(scopeParts) < 3 {
+					return sendS3Error(c, "AuthorizationHeaderMalformed", "The authorization header is malformed; invalid credential scope.", "", "")
+				}
 				date := scopeParts[0]
 				region := scopeParts[1]
 				service := scopeParts[2]
@@ -132,7 +152,7 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 				path := c.Request().URL.Path
 
 				payloadHash := c.Request().Header.Get("X-Amz-Content-Sha256")
-				if isPresigned {
+				if isPresigned || payloadHash == "" {
 					payloadHash = "UNSIGNED-PAYLOAD"
 				}
 
@@ -141,8 +161,8 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 				calculatedSignature := CalculateSignature(secretKey, date, region, service, stringToSign)
 
 				if providedSignature != calculatedSignature {
-					fmt.Printf("Signature Mismatch!\nCalculated: %s\nProvided: %s\nCanonical Request:\n%s\nString to Sign:\n%s\n",
-						calculatedSignature, providedSignature, canonicalRequest, stringToSign)
+					// Fallback: If signature fails but user is anonymous-eligible, we'll check permission later
+					// But usually, if they provided keys, they must be valid.
 					if auditLogger != nil {
 						auditLogger.LogDenied(user.Username, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "Signature mismatch")
 					}
@@ -156,6 +176,8 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 				if auditLogger != nil {
 					auditLogger.LogDenied(user.Username, action, resource, c.RealIP(), c.Request().UserAgent(), "Policy denied")
 				}
+				// Special case: if user is not anonymous and access denied, they might need better policies.
+				// If they ARE anonymous, return 403.
 				return sendS3Error(c, "AccessDenied", "Access Denied by IAM Policy", c.Param("bucket"), c.Param("*"))
 			}
 

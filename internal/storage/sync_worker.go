@@ -159,4 +159,40 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 
 	duration := time.Since(startTime)
 	log.Printf("Filesystem sync completed: %d objects synced, %d errors in %v\n", synced, errors, duration)
+
+	// Prune orphaned records
+	sw.pruneOrphanedRecords()
+}
+
+func (sw *SyncWorker) pruneOrphanedRecords() {
+	objs, err := sw.storage.DB.ListAllObjects()
+	if err != nil {
+		log.Printf("Prune error listing objects: %v\n", err)
+		return
+	}
+
+	prunedCount := 0
+	for _, obj := range objs {
+		objectDir := filepath.Join(sw.storage.Root, obj.Bucket, obj.Key)
+		versionPath := filepath.Join(objectDir, obj.VersionID)
+
+		// Special case for simple (no versioning)
+		if obj.VersionID == "simple" {
+			versionPath = filepath.Join(sw.storage.Root, obj.Bucket, obj.Key)
+		}
+
+		if _, err := os.Stat(versionPath); os.IsNotExist(err) {
+			// Physical file/directory missing, prune DB record
+			err := sw.storage.DB.DeleteObject(obj.Bucket, obj.Key, obj.VersionID)
+			if err != nil {
+				log.Printf("Prune error deleting %s: %v\n", obj.Key, err)
+			} else {
+				prunedCount++
+			}
+		}
+	}
+
+	if prunedCount > 0 {
+		log.Printf("Filesystem sync: pruned %d orphaned database records\n", prunedCount)
+	}
 }

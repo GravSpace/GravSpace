@@ -51,7 +51,8 @@ services:
     ports:
       - "${PUBLISH_IP:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
     environment:
-      - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-http://localhost:8080}
+      - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-/api}
+      - BACKEND_URL=${BACKEND_URL:-http://localhost:8080}
       - NODE_ENV=production
     depends_on:
       backend:

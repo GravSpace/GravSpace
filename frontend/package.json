@@ -12,6 +12,7 @@
   "dependencies": {
     "@tanstack/vue-table": "^8.21.3",
     "@vueuse/core": "^14.1.0",
+    "chart.js": "^4.5.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-vue-next": "^0.562.0",
@@ -20,6 +21,7 @@
     "shadcn-nuxt": "^2.4.3",
     "tailwind-merge": "^3.4.0",
     "vue": "^3.5.27",
+    "vue-chartjs": "^5.3.3",
     "vue-router": "^4.6.4",
     "vue-sonner": "^2.0.9"
   },

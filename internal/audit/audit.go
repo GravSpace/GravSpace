@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/GravSpace/GravSpace/internal/database"
 )
 
 type AuditLog struct {
@@ -21,9 +23,10 @@ type AuditLog struct {
 
 type AuditLogger struct {
 	logFile *os.File
+	db      *database.Database
 }
 
-func NewAuditLogger(logPath string) (*AuditLogger, error) {
+func NewAuditLogger(logPath string, db *database.Database) (*AuditLogger, error) {
 	// Ensure log directory exists
 	dir := filepath.Dir(logPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -38,6 +41,7 @@ func NewAuditLogger(logPath string) (*AuditLogger, error) {
 
 	return &AuditLogger{
 		logFile: file,
+		db:      db,
 	}, nil
 }
 
@@ -49,9 +53,24 @@ func (a *AuditLogger) Log(entry AuditLog) error {
 		return err
 	}
 
-	_, err = a.logFile.WriteString(string(jsonData) + "\n")
-	if err != nil {
-		return err
+	// Save to file
+	if a.logFile != nil {
+		a.logFile.WriteString(string(jsonData) + "\n")
+	}
+
+	// Save to database
+	if a.db != nil {
+		detailsJSON, _ := json.Marshal(entry.Details)
+		a.db.CreateAuditLog(&database.AuditLogRecord{
+			Timestamp: entry.Timestamp,
+			Username:  entry.User,
+			Action:    entry.Action,
+			Resource:  entry.Resource,
+			Result:    entry.Result,
+			IP:        entry.IP,
+			UserAgent: entry.UserAgent,
+			Details:   string(detailsJSON),
+		})
 	}
 
 	// Also print to stdout for container logs

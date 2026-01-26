@@ -19,11 +19,13 @@ type Database struct {
 }
 
 type BucketRow struct {
-	Name              string
-	CreatedAt         time.Time
-	Owner             string
-	VersioningEnabled bool
-	ObjectLockEnabled bool
+	Name                 string
+	CreatedAt            time.Time
+	Owner                string
+	VersioningEnabled    bool
+	ObjectLockEnabled    bool
+	DefaultRetentionMode string
+	DefaultRetentionDays int
 }
 
 type ObjectRow struct {
@@ -73,6 +75,35 @@ type PolicyRecord struct {
 	Name      string
 	Data      string // JSON
 	CreatedAt time.Time
+}
+
+type WebhookRecord struct {
+	ID        int64
+	Bucket    string
+	URL       string
+	Events    string // JSON encoded events
+	Secret    string
+	Active    bool
+	CreatedAt time.Time
+}
+
+type AuditLogRecord struct {
+	ID        int64
+	Timestamp time.Time
+	Username  string
+	Action    string
+	Resource  string
+	Result    string
+	IP        string
+	UserAgent string
+	Details   string // JSON
+}
+
+type StorageSnapshotRecord struct {
+	ID        int64
+	Timestamp time.Time
+	Bucket    string
+	Size      int64
 }
 
 // NewDatabase creates a new database connection
@@ -153,6 +184,14 @@ func NewDatabase(dbPath string) (*Database, error) {
 			return nil, fmt.Errorf("failed to open local database: %w", err)
 		}
 		fmt.Printf("Connected to local SQLite database: %s\n", dbPath)
+
+		// Enable WAL mode for local SQLite
+		if _, err := db.Exec("PRAGMA journal_mode=WAL;"); err != nil {
+			fmt.Printf("Warning: failed to enable WAL mode: %v\n", err)
+		}
+		if _, err := db.Exec("PRAGMA synchronous=NORMAL;"); err != nil {
+			fmt.Printf("Warning: failed to set synchronous=NORMAL: %v\n", err)
+		}
 	}
 
 	// Note: Turso/libSQL driver may not support certain SQLite PRAGMAs directly via Exec.
@@ -175,7 +214,9 @@ func (d *Database) initSchema() error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		owner TEXT,
 		versioning_enabled BOOLEAN DEFAULT FALSE,
-		object_lock_enabled BOOLEAN DEFAULT FALSE
+		object_lock_enabled BOOLEAN DEFAULT FALSE,
+		default_retention_mode TEXT,
+		default_retention_days INTEGER
 	);
 
 	CREATE TABLE IF NOT EXISTS objects (
@@ -195,6 +236,10 @@ func (d *Database) initSchema() error {
 		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE,
 		UNIQUE(bucket, key, version_id)
 	);
+
+	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key_latest ON objects(bucket, key, is_latest);
+	CREATE INDEX IF NOT EXISTS idx_objects_expiry ON objects(bucket, is_latest, modified_at);
+	CREATE INDEX IF NOT EXISTS idx_objects_bucket_prefix ON objects(bucket, key);
 
 	CREATE TABLE IF NOT EXISTS object_tags (
 		object_id INTEGER NOT NULL,
@@ -252,6 +297,40 @@ func (d *Database) initSchema() error {
 		UNIQUE(username, name)
 	);
 
+	CREATE TABLE IF NOT EXISTS audit_logs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		username TEXT,
+		action TEXT,
+		resource TEXT,
+		result TEXT,
+		ip TEXT,
+		user_agent TEXT,
+		details TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS storage_snapshots (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		bucket TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_storage_snapshots_timestamp ON storage_snapshots(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_audit_logs_username ON audit_logs(username);
+
+	CREATE TABLE IF NOT EXISTS webhooks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		bucket TEXT NOT NULL,
+		url TEXT NOT NULL,
+		events TEXT NOT NULL,
+		secret TEXT,
+		active BOOLEAN DEFAULT TRUE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE
+	);
+
 	CREATE TABLE IF NOT EXISTS global_policies (
 		name TEXT PRIMARY KEY,
 		policy_data TEXT NOT NULL, -- JSON
@@ -269,6 +348,12 @@ func (d *Database) initSchema() error {
 
 	// Migrations for existing tables
 	if err := d.addColumnIfNotExists("buckets", "object_lock_enabled", "BOOLEAN DEFAULT FALSE"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("buckets", "default_retention_mode", "TEXT"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("buckets", "default_retention_days", "INTEGER"); err != nil {
 		return err
 	}
 	if err := d.addColumnIfNotExists("objects", "retain_until_date", "TIMESTAMP"); err != nil {
@@ -366,10 +451,18 @@ func (d *Database) BucketExists(name string) (bool, error) {
 
 func (d *Database) GetBucket(name string) (*BucketRow, error) {
 	var bucket BucketRow
-	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled FROM buckets WHERE name = ?", name).
-		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled)
+	var mode sql.NullString
+	var days sql.NullInt64
+	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled, default_retention_mode, default_retention_days FROM buckets WHERE name = ?", name).
+		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled, &mode, &days)
 	if err == sql.ErrNoRows {
 		return nil, nil
+	}
+	if mode.Valid {
+		bucket.DefaultRetentionMode = mode.String
+	}
+	if days.Valid {
+		bucket.DefaultRetentionDays = int(days.Int64)
 	}
 	return &bucket, err
 }
@@ -385,6 +478,13 @@ func (d *Database) SetBucketObjectLock(name string, enabled bool) error {
 	start := time.Now()
 	_, err := d.db.Exec("UPDATE buckets SET object_lock_enabled = ? WHERE name = ?", enabled, name)
 	metrics.RecordDBQuery("SetBucketObjectLock", time.Since(start))
+	return err
+}
+
+func (d *Database) SetBucketDefaultRetention(name string, mode string, days int) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE buckets SET default_retention_mode = ?, default_retention_days = ? WHERE name = ?", mode, days, name)
+	metrics.RecordDBQuery("SetBucketDefaultRetention", time.Since(start))
 	return err
 }
 
@@ -457,26 +557,33 @@ func (d *Database) DeleteObject(bucket, key, versionID string) error {
 	return err
 }
 
-func (d *Database) ListObjects(bucket, prefix string, limit int) ([]*ObjectRow, error) {
+func (d *Database) DeletePrefix(bucket, prefix string) error {
+	start := time.Now()
+	_, err := d.db.Exec("DELETE FROM objects WHERE bucket = ? AND key LIKE ?", bucket, prefix+"%")
+	metrics.RecordDBQuery("DeletePrefix", time.Since(start))
+	return err
+}
+
+func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*ObjectRow, error) {
 	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
 	          FROM objects WHERE bucket = ? AND is_latest = TRUE`
 
+	args := []interface{}{bucket}
+
 	if prefix != "" {
 		query += " AND key LIKE ?"
-		prefix = prefix + "%"
+		args = append(args, prefix+"%")
+	}
+
+	if search != "" {
+		query += " AND key LIKE ?"
+		args = append(args, "%"+search+"%")
 	}
 
 	query += " ORDER BY key LIMIT ?"
+	args = append(args, limit)
 
-	var rows *sql.Rows
-	var err error
-
-	if prefix != "" {
-		rows, err = d.db.Query(query, bucket, prefix, limit)
-	} else {
-		rows, err = d.db.Query(query, bucket, limit)
-	}
-
+	rows, err := d.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -601,6 +708,42 @@ func (d *Database) GetBucketLifecycle(bucket string) (string, error) {
 func (d *Database) DeleteBucketLifecycle(bucket string) error {
 	_, err := d.db.Exec("UPDATE bucket_configs SET lifecycle_config = NULL WHERE bucket = ?", bucket)
 	return err
+}
+
+func (d *Database) GetAllLifecycles() (map[string]string, error) {
+	rows, err := d.db.Query("SELECT bucket, lifecycle_config FROM bucket_configs WHERE lifecycle_config IS NOT NULL AND lifecycle_config != ''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	configs := make(map[string]string)
+	for rows.Next() {
+		var bucket, config string
+		if err := rows.Scan(&bucket, &config); err != nil {
+			return nil, err
+		}
+		configs[bucket] = config
+	}
+	return configs, nil
+}
+
+func (d *Database) GetGlobalStats() (count int, size int64, err error) {
+	err = d.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(size), 0)
+		FROM objects 
+		WHERE is_latest = 1
+	`).Scan(&count, &size)
+	return
+}
+
+func (d *Database) GetBucketStats(bucket string) (count int, size int64, err error) {
+	err = d.db.QueryRow(`
+		SELECT COUNT(*), COALESCE(SUM(size), 0)
+		FROM objects 
+		WHERE bucket = ? AND is_latest = 1
+	`, bucket).Scan(&count, &size)
+	return
 }
 
 // User operations
@@ -754,6 +897,198 @@ func (d *Database) DeleteUserPolicy(username, name string) error {
 	return err
 }
 
+func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]*ObjectRow, error) {
+	start := time.Now()
+	// Find objects where (modified_at + days) < now
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode 
+	          FROM objects 
+	          WHERE bucket = ? AND is_latest = 1 
+	          AND datetime(modified_at, '+' || ? || ' days') < datetime('now')`
+
+	args := []interface{}{bucket, days}
+	if prefix != "" {
+		query += " AND key LIKE ?"
+		args = append(args, prefix+"%")
+	}
+
+	rows, err := d.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []*ObjectRow
+	for rows.Next() {
+		var obj ObjectRow
+		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode); err != nil {
+			return nil, err
+		}
+		objects = append(objects, &obj)
+	}
+	metrics.RecordDBQuery("GetExpiredObjects", time.Since(start))
+	return objects, rows.Err()
+}
+
 func (d *Database) Close() error {
 	return d.db.Close()
+}
+
+func (d *Database) ListAllObjects() ([]*ObjectRow, error) {
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode
+	          FROM objects`
+	rows, err := d.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []*ObjectRow
+	for rows.Next() {
+		var obj ObjectRow
+		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode); err != nil {
+			return nil, err
+		}
+		objects = append(objects, &obj)
+	}
+
+	return objects, rows.Err()
+}
+func (d *Database) CreateWebhook(w *WebhookRecord) (int64, error) {
+	start := time.Now()
+	res, err := d.db.Exec(`INSERT INTO webhooks (bucket, url, events, secret, active) 
+	                        VALUES (?, ?, ?, ?, ?)`,
+		w.Bucket, w.URL, w.Events, w.Secret, w.Active)
+	metrics.RecordDBQuery("CreateWebhook", time.Since(start))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (d *Database) ListWebhooks(bucket string) ([]*WebhookRecord, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`SELECT id, bucket, url, events, secret, active, created_at 
+	                          FROM webhooks WHERE bucket = ?`, bucket)
+	metrics.RecordDBQuery("ListWebhooks", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	hooks := []*WebhookRecord{}
+	for rows.Next() {
+		h := &WebhookRecord{}
+		err := rows.Scan(&h.ID, &h.Bucket, &h.URL, &h.Events, &h.Secret, &h.Active, &h.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		hooks = append(hooks, h)
+	}
+	return hooks, nil
+}
+
+func (d *Database) DeleteWebhook(id int64) error {
+	start := time.Now()
+	_, err := d.db.Exec("DELETE FROM webhooks WHERE id = ?", id)
+	metrics.RecordDBQuery("DeleteWebhook", time.Since(start))
+	return err
+}
+
+func (d *Database) GetWebhooksByBucket(bucket string) ([]*WebhookRecord, error) {
+	return d.ListWebhooks(bucket)
+}
+
+func (d *Database) CreateAuditLog(l *AuditLogRecord) error {
+	start := time.Now()
+	_, err := d.db.Exec(`INSERT INTO audit_logs (username, action, resource, result, ip, user_agent, details) 
+	                        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		l.Username, l.Action, l.Resource, l.Result, l.IP, l.UserAgent, l.Details)
+	metrics.RecordDBQuery("CreateAuditLog", time.Since(start))
+	return err
+}
+
+func (d *Database) ListAuditLogs(limit, offset int) ([]*AuditLogRecord, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`SELECT id, timestamp, username, action, resource, result, ip, user_agent, details 
+	                          FROM audit_logs ORDER BY timestamp DESC LIMIT ? OFFSET ?`, limit, offset)
+	metrics.RecordDBQuery("ListAuditLogs", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	logs := []*AuditLogRecord{}
+	for rows.Next() {
+		l := &AuditLogRecord{}
+		err := rows.Scan(&l.ID, &l.Timestamp, &l.Username, &l.Action, &l.Resource, &l.Result, &l.IP, &l.UserAgent, &l.Details)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, l)
+	}
+	return logs, nil
+}
+
+func (d *Database) CreateStorageSnapshot(bucket string, size int64) error {
+	start := time.Now()
+	_, err := d.db.Exec(`INSERT INTO storage_snapshots (bucket, size) VALUES (?, ?)`, bucket, size)
+	metrics.RecordDBQuery("CreateStorageSnapshot", time.Since(start))
+	return err
+}
+
+func (d *Database) GetStorageHistory(days int) ([]*StorageSnapshotRecord, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`SELECT id, timestamp, bucket, size 
+	                          FROM storage_snapshots 
+	                          WHERE timestamp >= date('now', ?) 
+	                          ORDER BY timestamp ASC`, fmt.Sprintf("-%d days", days))
+	metrics.RecordDBQuery("GetStorageHistory", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	history := []*StorageSnapshotRecord{}
+	for rows.Next() {
+		s := &StorageSnapshotRecord{}
+		err := rows.Scan(&s.ID, &s.Timestamp, &s.Bucket, &s.Size)
+		if err != nil {
+			return nil, err
+		}
+		history = append(history, s)
+	}
+	return history, nil
+}
+
+func (d *Database) GetActionTrends(days int) (map[string][]map[string]interface{}, error) {
+	start := time.Now()
+	// Group by date and action
+	rows, err := d.db.Query(`SELECT date(timestamp) as day, action, count(*) as count 
+	                          FROM audit_logs 
+	                          WHERE timestamp >= date('now', ?) 
+	                          GROUP BY day, action 
+	                          ORDER BY day ASC`, fmt.Sprintf("-%d days", days))
+	metrics.RecordDBQuery("GetActionTrends", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	trends := make(map[string][]map[string]interface{})
+	for rows.Next() {
+		var day, action string
+		var count int
+		if err := rows.Scan(&day, &action, &count); err != nil {
+			return nil, err
+		}
+		trends[action] = append(trends[action], map[string]interface{}{
+			"day":   day,
+			"count": count,
+		})
+	}
+	return trends, nil
 }

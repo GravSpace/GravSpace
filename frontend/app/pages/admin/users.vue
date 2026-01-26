@@ -80,7 +80,7 @@
                                                         @click="copyToClipboard(key.accessKeyId, 'Key ID')">
                                                         <Copy class="w-3 h-3" />
                                                     </Button>
-                                                    <Button v-if="username !== 'admin'" variant="ghost" size="icon"
+                                                    <Button variant="ghost" size="icon"
                                                         class="h-6 w-6 shrink-0 text-destructive hover:bg-destructive/10"
                                                         @click="deleteKey(username, key.accessKeyId)">
                                                         <Trash class="w-3 h-3" />
@@ -420,7 +420,7 @@ async function createUser() {
     try {
         const res = await authFetch(`${API_BASE}/admin/users`, {
             method: 'POST',
-            body: JSON.stringify({ username })
+            body: { username }
         })
         if (res.ok) {
             toast.success(`Principal "${username}" formed.`)
