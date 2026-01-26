@@ -16,6 +16,15 @@ export default defineNuxtConfig({
      */
     componentDir: '@/components/ui'
   },
+  runtimeConfig: {
+    public: {
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || '/api'
+    }
+  },
+  routeRules: {
+    '/api/admin/**': { proxy: `${process.env.BACKEND_URL || 'http://localhost:8080'}/admin/**` },
+    '/api/login': { proxy: `${process.env.BACKEND_URL || 'http://localhost:8080'}/login` }
+  },
   devtools: { enabled: false },
   runtimeConfig: {
     public: {

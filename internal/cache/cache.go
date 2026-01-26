@@ -1,12 +1,13 @@
 package cache
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 )
 
 type Cache interface {
-	Get(key string) (interface{}, bool)
+	Get(key string, target interface{}) bool
 	Set(key string, value interface{}, ttl time.Duration) error
 	Delete(key string) error
 	Clear() error
@@ -41,24 +42,32 @@ func NewInMemoryCache() *InMemoryCache {
 	return c
 }
 
-func (c *InMemoryCache) Get(key string) (interface{}, bool) {
+func (c *InMemoryCache) Get(key string, target interface{}) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	entry, exists := c.data[key]
 	if !exists {
 		c.stats.Misses++
-		return nil, false
+		return false
 	}
 
 	// Check if expired
 	if time.Now().After(entry.expiration) {
 		c.stats.Misses++
-		return nil, false
+		return false
 	}
 
 	c.stats.Hits++
-	return entry.value, true
+
+	// Copy value to target
+	// If it's already the same type, we can try reflection or just JSON marshal/unmarshal for safety
+	data, err := json.Marshal(entry.value)
+	if err != nil {
+		return false
+	}
+	err = json.Unmarshal(data, target)
+	return err == nil
 }
 
 func (c *InMemoryCache) Set(key string, value interface{}, ttl time.Duration) error {

@@ -147,7 +147,7 @@
                     <DialogTitle>Bucket Versioning</DialogTitle>
                     <DialogDescription>
                         Control version history for <strong class="text-slate-900 dark:text-slate-100">{{ selectedBucket
-                            }}</strong>
+                        }}</strong>
                     </DialogDescription>
                 </DialogHeader>
                 <div class="space-y-4 py-6">
@@ -191,6 +191,39 @@
                         </div>
                         <Switch v-model:modelValue="objectLockEnabled"
                             @update:model-value="(v) => updateObjectLock(v)" />
+                    </div>
+
+                    <div v-if="objectLockEnabled"
+                        class="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800">
+                        <div class="space-y-1.5">
+                            <Label>Default Retention Mode</Label>
+                            <div class="flex gap-2 mt-1">
+                                <Button v-for="mode in ['GOVERNANCE', 'COMPLIANCE']" :key="mode"
+                                    :variant="defaultRetentionMode === mode ? 'primary' : 'outline'" size="sm"
+                                    class="flex-1 text-[10px] font-bold tracking-wider h-8"
+                                    @click="defaultRetentionMode = mode">
+                                    {{ mode }}
+                                </Button>
+                                <Button :variant="!defaultRetentionMode ? 'primary' : 'outline'" size="sm"
+                                    class="flex-1 text-[10px] font-bold tracking-wider h-8"
+                                    @click="defaultRetentionMode = ''">
+                                    NONE
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div v-if="defaultRetentionMode" class="space-y-1.5">
+                            <Label for="retention-days">Retention Days</Label>
+                            <Input id="retention-days" v-model.number="defaultRetentionDays" type="number" min="1"
+                                class="h-9" placeholder="e.g. 30" />
+                            <p class="text-[10px] text-muted-foreground">Number of days objects are protected after
+                                upload.</p>
+                        </div>
+
+                        <Button class="w-full h-9 mt-2" @click="updateDefaultRetention" :disabled="loading">
+                            <Loader2 v-if="loading" class="w-4 h-4 mr-2 animate-spin" />
+                            Save Default Retention
+                        </Button>
                     </div>
                     <div class="flex justify-end gap-3">
                         <Button variant="outline" @click="showObjectLockDialog = false">Close</Button>
@@ -246,6 +279,8 @@ const selectedBucket = ref('')
 const versioningEnabled = ref(false)
 const showObjectLockDialog = ref(false)
 const objectLockEnabled = ref(false)
+const defaultRetentionMode = ref('')
+const defaultRetentionDays = ref(0)
 
 
 async function fetchBuckets() {
@@ -347,7 +382,7 @@ async function togglePublic(bucket) {
             }
             await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
                 method: 'POST',
-                body: JSON.stringify(policy)
+                body: policy
             })
             toast.success(`"${bucket}" is now accessible to the public.`)
         }
@@ -380,8 +415,7 @@ async function updateVersioning(versioning) {
     try {
         const res = await authFetch(`${API_BASE}/admin/buckets/${selectedBucket.value}/versioning`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: versioning })
+            body: { enabled: versioning }
         })
         if (res.ok) {
             toast.success(`Versioning ${versioningEnabled.value ? 'enabled' : 'disabled'} for "${selectedBucket.value}".`)
@@ -402,10 +436,14 @@ async function openObjectLockDialog(bucket) {
         if (res.ok) {
             const info = await res.json()
             objectLockEnabled.value = info.ObjectLockEnabled || false
+            defaultRetentionMode.value = info.DefaultRetentionMode || ''
+            defaultRetentionDays.value = info.DefaultRetentionDays || 0
         }
     } catch (e) {
         console.error('Failed to fetch bucket info', e)
         objectLockEnabled.value = false
+        defaultRetentionMode.value = ''
+        defaultRetentionDays.value = 0
     }
     showObjectLockDialog.value = true
 }
@@ -414,8 +452,7 @@ async function updateObjectLock(lockEnabled) {
     try {
         const res = await authFetch(`${API_BASE}/admin/buckets/${selectedBucket.value}/object-lock`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: lockEnabled })
+            body: { enabled: lockEnabled }
         })
         if (res.ok) {
             toast.success(`Object Lock ${objectLockEnabled.value ? 'enabled' : 'disabled'} for "${selectedBucket.value}".`)
@@ -426,6 +463,29 @@ async function updateObjectLock(lockEnabled) {
         toast.error('Failed to update object lock setting.')
         // Revert the toggle
         objectLockEnabled.value = !objectLockEnabled.value
+    }
+}
+
+async function updateDefaultRetention() {
+    loading.value = true
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${selectedBucket.value}/retention/default`, {
+            method: 'PUT',
+            body: {
+                mode: defaultRetentionMode.value,
+                days: defaultRetentionDays.value
+            }
+        })
+        if (res.ok) {
+            toast.success('Default retention policy synchronized.')
+            showObjectLockDialog.value = false
+        } else {
+            throw new Error('Sync failed')
+        }
+    } catch (e) {
+        toast.error('Failed to save default retention settings.')
+    } finally {
+        loading.value = false
     }
 }
 

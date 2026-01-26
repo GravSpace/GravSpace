@@ -22,40 +22,34 @@
 
                 <Card>
                     <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle class="text-sm font-medium">System Status</CardTitle>
-                        <Activity class="h-4 w-4 text-muted-foreground" />
-                    </CardHeader>
-                    <CardContent>
-                        <div class="text-2xl font-bold">{{ stats.uptime || 'Running' }}</div>
-                        <p class="text-xs text-muted-foreground">System uptime</p>
-                    </CardContent>
-                </Card>
-
-                <Card>
-                    <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle class="text-sm font-medium">Total Buckets</CardTitle>
+                        <CardTitle class="text-sm font-medium">Total Objects</CardTitle>
                         <Database class="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div class="text-2xl font-bold">{{ buckets?.length || 0 }}</div>
-                        <p class="text-xs text-muted-foreground">Storage containers</p>
+                        <div class="text-2xl font-bold">{{ stats.total_objects || 0 }}</div>
+                        <p class="text-xs text-muted-foreground">Across {{ buckets?.length || 0 }} buckets</p>
                     </CardContent>
                 </Card>
 
                 <Card>
                     <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle class="text-sm font-medium">Quick Actions</CardTitle>
+                        <CardTitle class="text-sm font-medium">Storage Capacity</CardTitle>
                         <Zap class="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div class="flex flex-col gap-2">
-                            <Button size="sm" variant="outline" @click="$router.push('/admin/buckets')">
-                                Manage Buckets
-                            </Button>
-                            <Button size="sm" variant="outline" @click="$router.push('/admin/users')">
-                                Manage Users
-                            </Button>
-                        </div>
+                        <div class="text-2xl font-bold">{{ formatSize(stats.total_size || 0) }}</div>
+                        <p class="text-xs text-muted-foreground">Total primary storage</p>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+                        <CardTitle class="text-sm font-medium">System Uptime</CardTitle>
+                        <Activity class="h-4 w-4 text-muted-foreground" />
+                    </CardHeader>
+                    <CardContent>
+                        <div class="text-2xl font-mono font-bold truncate">{{ formatUptime(stats.uptime) }}</div>
+                        <p class="text-xs text-muted-foreground">Time since boot</p>
                     </CardContent>
                 </Card>
             </div>
@@ -112,6 +106,21 @@ async function fetchBuckets() {
     } catch (e) {
         console.error('Failed to fetch buckets', e)
     }
+}
+
+function formatSize(bytes) {
+    if (bytes === 0) return '0 B'
+    const k = 1024
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+function formatUptime(uptime) {
+    if (!uptime) return 'N/A'
+    // ConvertGo duration like "1h2m3.456s" to something cleaner if needed
+    // or just return first part
+    return uptime.split('.')[0] + 's'
 }
 
 onMounted(() => {

@@ -1,15 +1,18 @@
 package s3
 
 import (
+	"encoding/json"
 	"fmt"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/auth"
+	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/labstack/echo/v4"
 )
@@ -80,6 +83,21 @@ func (h *AdminHandler) SetBucketObjectLock(c echo.Context) error {
 	if err := h.Storage.SetBucketObjectLock(bucket, req.Enabled); err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
+	return h.SetBucketDefaultRetention(c) // Also allow setting defaults if provided
+}
+
+func (h *AdminHandler) SetBucketDefaultRetention(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		Mode string `json:"mode"`
+		Days int    `json:"days"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+	if err := h.Storage.SetBucketDefaultRetention(bucket, req.Mode, req.Days); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
 	return c.NoContent(http.StatusOK)
 }
 
@@ -133,9 +151,10 @@ func (h *AdminHandler) ListObjects(c echo.Context) error {
 	bucket := c.Param("bucket")
 	prefix := c.QueryParam("prefix")
 	delimiter := c.QueryParam("delimiter")
+	search := c.QueryParam("search")
 
 	if c.Request().URL.Query().Has("versions") {
-		objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter)
+		objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter, search)
 		if err != nil {
 			return c.String(http.StatusInternalServerError, err.Error())
 		}
@@ -150,7 +169,7 @@ func (h *AdminHandler) ListObjects(c echo.Context) error {
 		})
 	}
 
-	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter)
+	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter, search)
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
@@ -166,7 +185,7 @@ func (h *AdminHandler) GetObject(c echo.Context) error {
 	key := c.Param("*")
 	versionID := c.QueryParam("versionId")
 
-	reader, vid, err := h.Storage.GetObject(bucket, key, versionID)
+	reader, obj, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
 		fmt.Printf("DEBUG: GetObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
 		return c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
@@ -178,7 +197,7 @@ func (h *AdminHandler) GetObject(c echo.Context) error {
 		contentType = "application/octet-stream"
 	}
 
-	c.Response().Header().Set("x-amz-version-id", vid)
+	c.Response().Header().Set("x-amz-version-id", obj.VersionID)
 	if c.QueryParam("download") == "true" {
 		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
 	}
@@ -203,7 +222,7 @@ func (h *AdminHandler) DownloadObject(c echo.Context) error {
 	key := c.Param("*")
 	versionID := c.QueryParam("versionId")
 
-	reader, vid, err := h.Storage.GetObject(bucket, key, versionID)
+	reader, obj, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
 		fmt.Printf("DEBUG: DownloadObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
 		return c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
@@ -215,7 +234,7 @@ func (h *AdminHandler) DownloadObject(c echo.Context) error {
 		contentType = "application/octet-stream"
 	}
 
-	c.Response().Header().Set("x-amz-version-id", vid)
+	c.Response().Header().Set("x-amz-version-id", obj.VersionID)
 	c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
 
 	return c.Stream(http.StatusOK, contentType, reader)
@@ -225,11 +244,40 @@ func (h *AdminHandler) DeleteObject(c echo.Context) error {
 	bucket := c.Param("bucket")
 	key := c.Param("*")
 	versionID := c.QueryParam("versionId")
+	bypass := c.QueryParam("bypassGovernance") != "false" // Admin by default bypasses unless explicitly false
 
-	if err := h.Storage.DeleteObject(bucket, key, versionID); err != nil {
+	if err := h.Storage.DeleteObject(bucket, key, versionID, bypass); err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (h *AdminHandler) GetObjectTagging(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	tags, err := h.Storage.GetObjectTagging(bucket, key, versionID)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, tags)
+}
+
+func (h *AdminHandler) PutObjectTagging(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	var tags map[string]string
+	if err := c.Bind(&tags); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid tags format")
+	}
+
+	if err := h.Storage.PutObjectTagging(bucket, key, versionID, tags); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
 }
 
 func (h *AdminHandler) ListUsers(c echo.Context) error {
@@ -328,12 +376,20 @@ func (h *AdminHandler) AttachPolicyTemplate(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{"message": "Policy template attached successfully"})
 }
 
+var startTime = time.Now()
+
 func (h *AdminHandler) GetSystemStats(c echo.Context) error {
-	// Dummy stats for now
-	stats := map[string]interface{}{
-		"total_users": len(h.UserManager.Users),
-		"uptime":      "running",
+	count, size, err := h.Storage.GetGlobalStats()
+	if err != nil {
+		count, size = 0, 0
 	}
+
+	stats := map[string]interface{}{}
+	stats["total_users"] = len(h.UserManager.Users)
+	stats["total_objects"] = count
+	stats["total_size"] = size
+	stats["uptime"] = time.Since(startTime).String()
+
 	return c.JSON(http.StatusOK, stats)
 }
 
@@ -411,4 +467,119 @@ func (h *AdminHandler) DeletePolicy(c echo.Context) error {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusOK)
+}
+func (h *AdminHandler) GetObjectLegalHold(c echo.Context) error {
+	bucket := c.Param("bucket")
+	key := c.Param("*")
+	versionID := c.QueryParam("versionId")
+
+	obj, err := h.Storage.StatObject(bucket, key, versionID)
+	if err != nil {
+		return c.String(http.StatusNotFound, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, echo.Map{"legalHold": obj.LegalHold})
+}
+
+// Webhook Handlers
+
+func (h *AdminHandler) ListWebhooks(c echo.Context) error {
+	bucket := c.Param("bucket")
+	db := h.Storage.(*storage.FileStorage).DB
+	hooks, err := db.ListWebhooks(bucket)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.JSON(http.StatusOK, hooks)
+}
+
+func (h *AdminHandler) CreateWebhook(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		URL    string   `json:"url"`
+		Events []string `json:"events"`
+		Secret string   `json:"secret"`
+		Active bool     `json:"active"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+
+	eventsJSON, _ := json.Marshal(req.Events)
+	db := h.Storage.(*storage.FileStorage).DB
+	id, err := db.CreateWebhook(&database.WebhookRecord{
+		Bucket: bucket,
+		URL:    req.URL,
+		Events: string(eventsJSON),
+		Secret: req.Secret,
+		Active: req.Active,
+	})
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusCreated, echo.Map{"id": id})
+}
+
+func (h *AdminHandler) DeleteWebhook(c echo.Context) error {
+	idStr := c.Param("id")
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+
+	db := h.Storage.(*storage.FileStorage).DB
+	if err := db.DeleteWebhook(id); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) GetAuditLogs(c echo.Context) error {
+	limitStr := c.QueryParam("limit")
+	offsetStr := c.QueryParam("offset")
+
+	limit, _ := strconv.Atoi(limitStr)
+	if limit == 0 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(offsetStr)
+
+	db := h.Storage.(*storage.FileStorage).DB
+	logs, err := db.ListAuditLogs(limit, offset)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, logs)
+}
+
+func (h *AdminHandler) GetStorageAnalytics(c echo.Context) error {
+	daysStr := c.QueryParam("days")
+	days, _ := strconv.Atoi(daysStr)
+	if days == 0 {
+		days = 30
+	}
+
+	db := h.Storage.(*storage.FileStorage).DB
+	history, err := db.GetStorageHistory(days)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, history)
+}
+
+func (h *AdminHandler) GetActionAnalytics(c echo.Context) error {
+	daysStr := c.QueryParam("days")
+	days, _ := strconv.Atoi(daysStr)
+	if days == 0 {
+		days = 30
+	}
+
+	db := h.Storage.(*storage.FileStorage).DB
+	trends, err := db.GetActionTrends(days)
+	if err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+
+	return c.JSON(http.StatusOK, trends)
 }
