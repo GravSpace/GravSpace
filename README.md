@@ -167,7 +167,8 @@ docker run -p 8080:8080 \
 cd frontend
 docker build -t gravspace-frontend:latest .
 docker run -p 3000:3000 \
-  -e NUXT_PUBLIC_API_BASE=http://localhost:8080 \
+  -e NUXT_PUBLIC_API_BASE=/api \
+  -e NUXT_BACKEND_URL=http://localhost:8080 \
   gravspace-frontend:latest
 ```
 
@@ -243,13 +244,15 @@ LIFECYCLE_WORKER_INTERVAL=2h
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `NUXT_PUBLIC_API_BASE` | Backend API base URL | `http://localhost:8080` | Yes |
+| `NUXT_PUBLIC_API_BASE` | Backend API base URL (client-side) | `/api` | Yes |
+| `NUXT_BACKEND_URL` | Target backend URL for proxy (server-side) | `http://localhost:8080` | Yes |
 | `FRONTEND_PORT` | Port for frontend service (Docker Compose only) | `3000` | No |
 | `NODE_ENV` | Node environment | `production` | No |
 
 **Example**:
 ```bash
-NUXT_PUBLIC_API_BASE=http://localhost:8080
+NUXT_PUBLIC_API_BASE=/api
+NUXT_BACKEND_URL=http://gravspace-core:8080
 FRONTEND_PORT=3000
 NODE_ENV=production
 ```
