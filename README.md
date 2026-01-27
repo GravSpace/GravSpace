@@ -29,7 +29,7 @@ Install GravSpace binary with a single command:
 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
 
 # Or specify version
-VERSION=1.0.0 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
+VERSION=0.0.2-alpha.2 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
 
 # Or download manually from releases
 # Visit: https://github.com/gravspace/gravspace/releases

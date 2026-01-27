@@ -13,7 +13,7 @@ The easiest way to install GravSpace is using the install script:
 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
 
 # Install specific version
-VERSION=1.0.0 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
+VERSION=0.0.2-alpha.2 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
 
 # Install to custom directory
 INSTALL_DIR=$HOME/.local/bin curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
@@ -28,35 +28,35 @@ Visit the [Releases page](https://github.com/gravspace/gravspace/releases) and d
 **Linux:**
 ```bash
 # AMD64 (x86_64)
-wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-linux-amd64.tar.gz
+wget https://github.com/gravspace/gravspace/releases/download/v0.0.2-alpha.2/gravspace-0.0.2-alpha.2-linux-amd64.tar.gz
 
 # ARM64 (aarch64)
-wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-linux-arm64.tar.gz
+wget https://github.com/gravspace/gravspace/releases/download/v0.0.2-alpha.2/gravspace-0.0.2-alpha.2-linux-arm64.tar.gz
 ```
 
 **macOS:**
 ```bash
 # Intel (AMD64)
-wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-darwin-amd64.tar.gz
+wget https://github.com/gravspace/gravspace/releases/download/v0.0.2-alpha.2/gravspace-0.0.2-alpha.2-darwin-amd64.tar.gz
 
 # Apple Silicon (ARM64)
-wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-darwin-arm64.tar.gz
+wget https://github.com/gravspace/gravspace/releases/download/v0.0.2-alpha.2/gravspace-0.0.2-alpha.2-darwin-arm64.tar.gz
 ```
 
 **Windows:**
 ```powershell
 # AMD64 only (ARM64 not supported due to SQLite compatibility)
-Invoke-WebRequest -Uri "https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-windows-amd64.zip" -OutFile "gravspace.zip"
+Invoke-WebRequest -Uri "https://github.com/gravspace/gravspace/releases/download/v0.0.2-alpha.2/gravspace-0.0.2-alpha.2-windows-amd64.zip" -OutFile "gravspace.zip"
 ```
 
 #### 2. Verify Checksum (Optional but Recommended)
 
 ```bash
 # Download checksum file
-wget https://github.com/gravspace/gravspace/releases/download/v1.0.0/gravspace-1.0.0-linux-amd64.tar.gz.sha256
+wget https://github.com/gravspace/gravspace/releases/download/v0.0.2-alpha.2/gravspace-0.0.2-alpha.2-linux-amd64.tar.gz.sha256
 
 # Verify
-sha256sum -c gravspace-1.0.0-linux-amd64.tar.gz.sha256
+sha256sum -c gravspace-0.0.2-alpha.2-linux-amd64.tar.gz.sha256
 ```
 
 #### 3. Extract and Install
@@ -64,7 +64,7 @@ sha256sum -c gravspace-1.0.0-linux-amd64.tar.gz.sha256
 **Linux/macOS:**
 ```bash
 # Extract
-tar xzf gravspace-1.0.0-linux-amd64.tar.gz
+tar xzf gravspace-0.0.2-alpha.2-linux-amd64.tar.gz
 
 # Move to PATH
 sudo mv gravspace-linux-amd64 /usr/local/bin/gravspace
