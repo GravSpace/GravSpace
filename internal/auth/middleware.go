@@ -6,9 +6,12 @@ import (
 	"encoding/xml"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/GravSpace/GravSpace/internal/audit"
+	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/golang-jwt/jwt"
 	"github.com/labstack/echo/v4"
 )
@@ -24,7 +27,7 @@ type S3Error struct {
 	HostId     string   `xml:"HostId"`
 }
 
-func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.MiddlewareFunc {
+func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store storage.Storage) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			authHeader := c.Request().Header.Get("Authorization")
@@ -167,6 +170,38 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger) echo.Midd
 						auditLogger.LogDenied(user.Username, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "Signature mismatch")
 					}
 					return sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
+				}
+
+				// ADDITIONAL SECURITY CHECKS FOR PRESIGNED URLS
+				if isPresigned {
+					// 1. IP Restriction
+					allowedIP := c.QueryParam("X-Amz-Allowed-IP")
+					if allowedIP != "" && allowedIP != c.RealIP() {
+						if auditLogger != nil {
+							auditLogger.LogDenied(user.Username, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "IP restriction failure")
+						}
+						return sendS3Error(c, "AccessDenied", "IP address restricted for this URL", "", "")
+					}
+
+					// 2. One-time Use
+					isOneTime := c.QueryParam("X-Amz-One-Time-Use") == "true"
+					if isOneTime && store != nil {
+						used, _ := store.IsSignatureUsed(providedSignature)
+						if used {
+							if auditLogger != nil {
+								auditLogger.LogDenied(user.Username, "authenticate", "", c.RealIP(), c.Request().UserAgent(), "One-time URL already used")
+							}
+							return sendS3Error(c, "AccessDenied", "This one-time use URL has already been used.", "", "")
+						}
+						// Record usage
+						expiresStr := c.QueryParam("X-Amz-Expires")
+						expiresSec, _ := strconv.Atoi(expiresStr)
+						if expiresSec <= 0 {
+							expiresSec = 3600
+						}
+						expiresAt := time.Now().Add(time.Duration(expiresSec) * time.Second)
+						store.RecordSignature(providedSignature, expiresAt)
+					}
 				}
 			}
 

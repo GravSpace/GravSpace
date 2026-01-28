@@ -137,13 +137,14 @@ func (h *AdminHandler) SetObjectLegalHold(c echo.Context) error {
 	versionID := c.QueryParam("versionId")
 
 	var req struct {
-		Hold bool `json:"hold"`
+		Hold   bool   `json:"hold"`
+		Reason string `json:"reason"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.String(http.StatusBadRequest, "Invalid request")
 	}
 
-	if err := h.Storage.SetObjectLegalHold(bucket, key, versionID, req.Hold); err != nil {
+	if err := h.Storage.SetObjectLegalHold(bucket, key, versionID, req.Hold, req.Reason); err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusOK)
@@ -734,6 +735,8 @@ func (h *AdminHandler) ShareObject(c echo.Context) error {
 		Key           string `json:"key"`
 		VersionID     string `json:"versionId"`
 		ExpirySeconds int    `json:"expirySeconds"`
+		AllowedIP     string `json:"allowedIp"`
+		OneTimeUse    bool   `json:"oneTimeUse"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.String(http.StatusBadRequest, "Invalid request")
@@ -743,7 +746,7 @@ func (h *AdminHandler) ShareObject(c echo.Context) error {
 		req.ExpirySeconds = 3600 // Default 1 hour
 	}
 
-	presignedURL, err := h.GeneratePresignedURL(bucket, req.Key, req.VersionID, time.Duration(req.ExpirySeconds)*time.Second)
+	presignedURL, err := h.GeneratePresignedURL(bucket, req.Key, req.VersionID, time.Duration(req.ExpirySeconds)*time.Second, req.AllowedIP, req.OneTimeUse)
 	if err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
@@ -777,7 +780,7 @@ func (h *AdminHandler) VerifyAdminPassword(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]bool{"valid": true})
 }
 
-func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expiry time.Duration) (string, error) {
+func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expiry time.Duration, allowedIP string, oneTimeUse bool) (string, error) {
 	keys, err := h.UserManager.GetAccessKeys("admin")
 	if err != nil || len(keys) == 0 {
 		// Fallback to "admin" if current user keys not found - simple hack for feature
@@ -817,6 +820,13 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 	if versionID != "" && versionID != "simple" && versionID != "folder" {
 		query.Set("versionId", versionID)
 		endpoint += "?versionId=" + versionID
+	}
+
+	if allowedIP != "" {
+		query.Set("X-Amz-Allowed-IP", allowedIP)
+	}
+	if oneTimeUse {
+		query.Set("X-Amz-One-Time-Use", "true")
 	}
 
 	canonicalURI := fmt.Sprintf("/%s/%s", bucket, encodedKey)

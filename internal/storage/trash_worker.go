@@ -54,6 +54,7 @@ func (w *TrashWorker) ProcessTrash() {
 
 		now := time.Now()
 		retentionDuration := time.Duration(bucket.SoftDeleteRetention) * 24 * time.Hour
+		var idsToDelete []int64
 
 		for _, obj := range objects {
 			if obj.DeletedAt == nil {
@@ -62,9 +63,23 @@ func (w *TrashWorker) ProcessTrash() {
 
 			if now.Sub(*obj.DeletedAt) > retentionDuration {
 				log.Printf("Trash worker: permanently deleting expired object %s/%s (version: %s)", obj.Bucket, obj.Key, obj.VersionID)
-				if err := w.store.DeleteTrashObject(obj.Bucket, obj.Key, obj.VersionID); err != nil {
-					log.Printf("Trash worker error deleting object %s: %v", obj.Key, err)
+
+				// Delete from filesystem first
+				if err := w.store.DeleteTrashFilesystem(obj.Bucket, obj.Key, obj.VersionID); err != nil {
+					log.Printf("Trash worker error deleting filesystem object %s: %v", obj.Key, err)
+					continue
 				}
+
+				// Collect for batch DB delete
+				idsToDelete = append(idsToDelete, obj.ID)
+			}
+		}
+
+		if len(idsToDelete) > 0 {
+			if err := w.db.DeleteObjectsByID(idsToDelete); err != nil {
+				log.Printf("Trash worker error batch deleting from DB for bucket %s: %v", bName, err)
+			} else {
+				log.Printf("Trash worker: successfully batch deleted %d metadata records for bucket %s", len(idsToDelete), bName)
 			}
 		}
 	}

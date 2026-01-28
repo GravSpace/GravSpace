@@ -150,7 +150,7 @@
                                             </div>
                                             <div class="flex items-center gap-1.5 min-w-0">
                                                 <span class="truncate" :title="item.Key">{{ item.Key.split('/').pop()
-                                                }}</span>
+                                                    }}</span>
                                                 <div v-if="isLocked(item)" class="flex items-center gap-1 shrink-0">
                                                     <Lock class="w-3 h-3 text-amber-500" />
                                                     <span class="text-[9px] font-bold text-amber-600 uppercase">{{
@@ -367,6 +367,11 @@
                         <Switch v-model:modelValue="lockSettings.legalHold" />
                     </div>
 
+                    <div v-if="lockSettings.legalHold" class="space-y-2">
+                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Reason for Hold</Label>
+                        <Input v-model="lockSettings.reason" placeholder="e.g. Compliance Audit 2026" />
+                    </div>
+
                     <div class="space-y-4">
                         <div class="flex items-center gap-2 px-1">
                             <Clock class="w-4 h-4 text-primary" />
@@ -454,6 +459,25 @@
                         </select>
                     </div>
 
+                    <div class="space-y-4">
+                        <div class="space-y-2">
+                            <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed IP
+                                (Optional)</Label>
+                            <Input v-model="shareAllowedIP" placeholder="e.g. 192.168.1.1" class="h-10" />
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <Switch v-model:model-value="shareOneTimeUse" />
+                            <div class="space-y-0.5">
+                                <Label
+                                    class="text-[10px] uppercase font-bold text-muted-foreground leading-none">One-time
+                                    Use</Label>
+                                <p class="text-[10px] text-muted-foreground">URL becomes invalid after first successful
+                                    access.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
                     <div v-if="generatedUrl" class="space-y-3 animate-in fade-in slide-in-from-top-4 duration-300">
                         <Label class="text-[10px] uppercase font-bold text-muted-foreground">Public URL</Label>
                         <div class="flex gap-2">
@@ -489,7 +513,7 @@
                     </DialogTitle>
                     <DialogDescription>
                         Timeline for <span class="font-mono text-primary font-bold">{{ selectedExplorerItem?.Key
-                            }}</span>
+                        }}</span>
                     </DialogDescription>
                 </DialogHeader>
 
@@ -522,7 +546,7 @@
                                     <div class="flex items-center gap-1">
                                         <span class="text-[10px] font-mono mr-2">{{ v.IsDeleteMarker ? '-' :
                                             formatSize(v.Size)
-                                            }}</span>
+                                        }}</span>
                                         <Button v-if="!v.IsDeleteMarker" variant="outline" size="sm" class="h-7 text-xs"
                                             @click="downloadObject(selectedExplorerItem?.Key, v.VersionID)">
                                             <Download class="w-3 h-3 mr-1" /> Get
@@ -571,7 +595,7 @@
                                     bucket.
                                 </p>
                             </div>
-                            <Switch :modelValue="bucketInfo?.VersioningEnabled"
+                            <Switch :modelValue="bucketInfo?.VersioningEnabled" :disabled="updatingSettings.versioning"
                                 @update:model-value="(v) => toggleVersioning(v)" />
                         </div>
 
@@ -585,6 +609,7 @@
                                     </p>
                                 </div>
                                 <Switch :modelValue="bucketInfo?.SoftDeleteEnabled"
+                                    :disabled="updatingSettings.softDelete"
                                     @update:model-value="(v) => toggleSoftDelete(v)" />
                             </div>
 
@@ -594,6 +619,7 @@
                                     (Days)</Label>
                                 <div class="flex gap-2">
                                     <Input type="number" :modelValue="bucketInfo?.SoftDeleteRetention"
+                                        :disabled="updatingSettings.softDelete"
                                         @update:model-value="(v) => updateSoftDeleteRetention(v)"
                                         class="h-10 w-24 bg-background border-slate-200 dark:border-slate-800" />
                                     <span class="text-xs text-muted-foreground flex items-center">days</span>
@@ -653,7 +679,7 @@
                                     overwritten for a
                                     fixed amount of time.</p>
                             </div>
-                            <Switch :modelValue="bucketInfo?.ObjectLockEnabled"
+                            <Switch :modelValue="bucketInfo?.ObjectLockEnabled" :disabled="updatingSettings.objectLock"
                                 @update:model-value="(v) => toggleObjectLock(v)" />
                         </div>
 
@@ -665,6 +691,7 @@
                                 <div class="space-y-2">
                                     <Label class="text-[10px] font-bold uppercase">Retention Mode</Label>
                                     <select v-model="bucketInfo.DefaultRetentionMode"
+                                        :disabled="updatingSettings.retention"
                                         class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                                         @change="updateDefaultRetention">
                                         <option value="">None</option>
@@ -675,7 +702,8 @@
                                 <div class="space-y-2">
                                     <Label class="text-[10px] font-bold uppercase">Retention Period (Days)</Label>
                                     <Input v-model.number="bucketInfo.DefaultRetentionDays" type="number" min="1"
-                                        class="h-10" @change="updateDefaultRetention" />
+                                        :disabled="updatingSettings.retention" class="h-10"
+                                        @change="updateDefaultRetention" />
                                 </div>
                             </div>
 
@@ -700,7 +728,8 @@
                                 <p class="text-xs text-muted-foreground">Host a static website directly from this
                                     bucket.</p>
                             </div>
-                            <Switch :modelValue="websiteConfig.enabled" @update:model-value="toggleWebsiteHosting" />
+                            <Switch :modelValue="websiteConfig.enabled" :disabled="updatingSettings.website"
+                                @update:model-value="toggleWebsiteHosting" />
                         </div>
 
                         <div v-if="websiteConfig.enabled" class="mt-6 space-y-4 pt-4 border-t">
@@ -727,7 +756,8 @@
                                 </div>
                             </div>
 
-                            <Button @click="saveWebsiteConfig" class="w-full mt-4">
+                            <Button @click="saveWebsiteConfig" :disabled="updatingSettings.website" class="w-full mt-4">
+                                <Loader2 v-if="updatingSettings.website" class="w-4 h-4 mr-2 animate-spin" />
                                 Save Website Configuration
                             </Button>
 
@@ -809,9 +839,11 @@ import { useRoute, useRouter } from 'vue-router'
 import {
     ChevronLeft, Database, Plus, MoreHorizontal, MoreVertical, FolderPlus, Upload,
     Eye, Download, History, LinkIcon, Trash2, Loader2, File, Folder, CornerLeftUp,
-    Inbox, ShieldCheck, ShieldOff, Clock, Lock, ShieldAlert, ChevronDown, File as FileIcon, FolderUp, Search, Tag, Share2,
-    Settings, Webhook, BellOff
+    ExternalLink, Share2, Globe, Lock, Shield, Settings2, Info, ListFilter,
+    ArrowUpRight, Copy, Check, Search, Filter, AlertTriangle, Webhook, BellOff,
+    Settings
 } from 'lucide-vue-next'
+import { debounce } from 'perfect-debounce'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -876,6 +908,13 @@ watch(searchQuery, () => {
 const showBucketSettings = ref(false)
 const activeSettingsTab = ref('general')
 const bucketInfo = ref(null)
+const updatingSettings = ref({
+    versioning: false,
+    softDelete: false,
+    objectLock: false,
+    retention: false,
+    website: false
+})
 const bucketWebhooks = ref([])
 const showAddWebhookDialog = ref(false)
 const newWebhook = ref({
@@ -914,7 +953,7 @@ async function addWebhook() {
     try {
         const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/webhooks`, {
             method: 'POST',
-            body: JSON.stringify(newWebhook.value)
+            body: newWebhook.value
         })
         if (res.ok) {
             toast.success('Webhook registered successfully')
@@ -978,16 +1017,16 @@ async function fetchWebsiteConfig() {
 async function toggleWebsiteHosting(enabled) {
     if (!enabled) {
         // Disable website hosting
-        try {
-            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/website`, {
-                method: 'DELETE'
-            })
-            if (res.ok) {
-                websiteConfig.value.enabled = false
-                toast.success('Website hosting disabled')
-            }
-        } catch (e) {
-            toast.error('Failed to disable website hosting')
+        await updateBucketSetting(
+            'website',
+            `${API_BASE}/admin/buckets/${bucketName.value}/website`,
+            null, // Helper will handle stringify
+            'Website hosting disabled',
+            'Failed to disable website hosting',
+            false // Don't need full refresh here as websiteConfig is local
+        )
+        if (!updatingSettings.value.website) {
+            websiteConfig.value.enabled = false
         }
     } else {
         websiteConfig.value.enabled = true
@@ -1000,106 +1039,118 @@ async function saveWebsiteConfig() {
         toast.error('Index document is required')
         return
     }
+
+    const payload = {
+        index_document: { suffix: websiteConfig.value.indexDocument },
+        error_document: websiteConfig.value.errorDocument ? { key: websiteConfig.value.errorDocument } : null
+    }
+
+    await updateBucketSetting(
+        'website',
+        `${API_BASE}/admin/buckets/${bucketName.value}/website`,
+        payload,
+        'Website configuration saved successfully',
+        'Failed to save website configuration',
+        false
+    )
+}
+
+async function updateBucketSetting(key, url, payload, successMsg, errorMsg, refresh = true) {
+    if (updatingSettings.value[key]) return
+    updatingSettings.value[key] = true
     try {
-        const payload = {
-            index_document: { suffix: websiteConfig.value.indexDocument },
-            error_document: websiteConfig.value.errorDocument ? { key: websiteConfig.value.errorDocument } : null
-        }
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/website`, {
+        const res = await authFetch(url, {
             method: 'PUT',
             body: payload
         })
         if (res.ok) {
-            toast.success('Website configuration saved successfully')
+            if (successMsg) toast.success(successMsg)
+            if (refresh) await fetchBucketInfo()
         } else {
-            toast.error('Failed to save website configuration')
+            const errBody = await res.text()
+            throw new Error(errBody || 'Update failed')
         }
     } catch (e) {
-        toast.error('Failed to save website configuration')
+        toast.error(errorMsg || `Failed to update ${key}`)
+        console.error(`Error updating ${key}:`, e)
+    } finally {
+        updatingSettings.value[key] = false
     }
 }
 
 async function toggleObjectLock(val) {
-    try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/object-lock`, {
-            method: 'PUT',
-            body: JSON.stringify({ enabled: val })
-        })
-        if (res.ok) {
-            toast.success(`Object Lock ${val ? 'enabled' : 'disabled'}`)
-            fetchBucketInfo()
-        }
-    } catch (e) {
-        toast.error('Failed to update Object Lock')
-    }
+    await updateBucketSetting(
+        'objectLock',
+        `${API_BASE}/admin/buckets/${bucketName.value}/object-lock`,
+        { enabled: val },
+        `Object Lock ${val ? 'enabled' : 'disabled'}`,
+        'Failed to update Object Lock'
+    )
 }
 
+const debouncedDefaultRetention = debounce(async () => {
+    await updateBucketSetting(
+        'retention',
+        `${API_BASE}/admin/buckets/${bucketName.value}/retention/default`,
+        {
+            mode: bucketInfo.value.DefaultRetentionMode,
+            days: bucketInfo.value.DefaultRetentionDays
+        },
+        'Default retention updated',
+        'Failed to update default retention',
+        false
+    )
+}, 500)
+
 async function updateDefaultRetention() {
-    try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/retention/default`, {
-            method: 'PUT',
-            body: JSON.stringify({
-                mode: bucketInfo.value.DefaultRetentionMode,
-                days: bucketInfo.value.DefaultRetentionDays
-            })
-        })
-        if (res.ok) {
-            toast.success('Default retention updated')
-        }
-    } catch (e) {
-        toast.error('Failed to update default retention')
-    }
+    await debouncedDefaultRetention()
 }
 
 async function toggleVersioning(val) {
-    try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/versioning`, {
-            method: 'PUT',
-            body: JSON.stringify({ enabled: val })
-        })
-        if (res.ok) {
-            toast.success(`Versioning ${val ? 'enabled' : 'disabled'}`)
-            fetchBucketInfo()
-        }
-    } catch (e) {
-        toast.error('Failed to update versioning')
-    }
+    await updateBucketSetting(
+        'versioning',
+        `${API_BASE}/admin/buckets/${bucketName.value}/versioning`,
+        { enabled: val },
+        `Versioning ${val ? 'enabled' : 'disabled'}`,
+        'Failed to update versioning'
+    )
 }
 
 async function toggleSoftDelete(val) {
-    try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/soft-delete`, {
-            method: 'PUT',
-            body: {
-                enabled: val,
-                retention_days: bucketInfo.value?.SoftDeleteRetention || 30
-            }
-        })
-        if (res.ok) {
-            toast.success(`Soft Delete ${val ? 'enabled' : 'disabled'}`)
-            fetchBucketInfo()
-        }
-    } catch (e) {
-        toast.error('Failed to update soft delete')
-    }
+    await updateBucketSetting(
+        'softDelete',
+        `${API_BASE}/admin/buckets/${bucketName.value}/soft-delete`,
+        {
+            enabled: val,
+            retention_days: bucketInfo.value?.SoftDeleteRetention || 30
+        },
+        `Soft Delete ${val ? 'enabled' : 'disabled'}`,
+        'Failed to update soft delete'
+    )
 }
 
+const debouncedSoftDeleteRetention = debounce(async (val) => {
+    const days = parseInt(val)
+    if (isNaN(days)) return
+
+    await updateBucketSetting(
+        'softDelete',
+        `${API_BASE}/admin/buckets/${bucketName.value}/soft-delete`,
+        {
+            enabled: bucketInfo.value?.SoftDeleteEnabled ?? true,
+            retention_days: days
+        },
+        'Retention period updated',
+        'Failed to update soft delete period'
+    )
+}, 500)
+
 async function updateSoftDeleteRetention(val) {
-    try {
-        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/soft-delete`, {
-            method: 'PUT',
-            body: {
-                enabled: bucketInfo.value?.SoftDeleteEnabled,
-                retention_days: parseInt(val)
-            }
-        })
-        if (res.ok) {
-            toast.success('Retention period updated')
-            fetchBucketInfo()
-        }
-    } catch (e) {
-        toast.error('Failed to update soft delete period')
+    // Immediate local update for UI responsiveness
+    if (bucketInfo.value) {
+        bucketInfo.value.SoftDeleteRetention = parseInt(val) || 0
     }
+    await debouncedSoftDeleteRetention(val)
 }
 
 
@@ -1134,7 +1185,8 @@ const selectedLockObject = ref(null)
 const lockSettings = ref({
     mode: 'GOVERNANCE',
     retainUntilDate: '',
-    legalHold: false
+    legalHold: false,
+    reason: ''
 })
 
 async function fetchObjects() {
@@ -1374,7 +1426,7 @@ async function performMultipartUpload(file, path) {
 
         const completeRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeURIComponent(key)}?uploadId=${UploadId}`, {
             method: 'POST',
-            body: JSON.stringify({ parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) })
+            body: { parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) }
         })
 
         if (completeRes.ok) {
@@ -1534,7 +1586,7 @@ async function saveTags() {
     try {
         const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/tags/${encodeS3Key(selectedTagObject.value.Key)}`, {
             method: 'PUT',
-            body: JSON.stringify(tagMap)
+            body: tagMap
         })
         if (res.ok) {
             toast.success('Tags updated successfully')
@@ -1549,6 +1601,8 @@ async function saveTags() {
 const showShareDialog = ref(false)
 const selectedShareObject = ref(null)
 const shareExpiry = ref('3600')
+const shareAllowedIP = ref('')
+const shareOneTimeUse = ref(false)
 const generatedUrl = ref('')
 
 function openShareDialog(item) {
@@ -1589,23 +1643,21 @@ async function openVersionExplorer(item) {
 
 async function generateShareLink() {
     try {
-        const body = {
-            key: selectedShareObject.value.Key,
-            versionId: selectedShareObject.value.VersionID || null,
-            expirySeconds: parseInt(shareExpiry.value)
-        }
-
         const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/share`, {
             method: 'POST',
-            body: body
+            body: {
+                key: selectedShareObject.value.Key,
+                versionId: selectedShareObject.value.VersionID,
+                expirySeconds: parseInt(shareExpiry.value),
+                allowedIp: shareAllowedIP.value,
+                oneTimeUse: shareOneTimeUse.value
+            }
         })
-
-        if (!res.ok) throw new Error('Failed to generate link')
-        const data = await res.json()
-        generatedUrl.value = data.url
-    } catch (e) {
-        toast.error('Failed to generate link')
-    }
+        if (res.ok) {
+            const data = await res.json()
+            generatedUrl.value = data.url
+        }
+    } catch (e) { toast.error('Failed to generate link') }
 }
 
 function copyToClipboard(text) {
@@ -1644,7 +1696,12 @@ const isLocked = (obj) => obj?.LegalHold || (obj?.RetainUntilDate && new Date(ob
 
 function openLockDialog(obj) {
     selectedLockObject.value = obj
-    lockSettings.value = { mode: obj.LockMode || 'GOVERNANCE', retainUntilDate: obj.RetainUntilDate || '', legalHold: obj.LegalHold || false }
+    lockSettings.value = {
+        mode: obj.LockMode || 'GOVERNANCE',
+        retainUntilDate: obj.RetainUntilDate || '',
+        legalHold: obj.LegalHold || false,
+        reason: obj.LegalHoldReason || ''
+    }
     showLockDialog.value = true
 }
 
@@ -1652,7 +1709,13 @@ async function updateLockSettings() {
     try {
         const key = encodeURIComponent(selectedLockObject.value.Key)
         const vid = selectedLockObject.value.VersionID
-        await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/legal-hold?key=${key}&versionId=${vid}`, { method: 'PUT', body: { hold: lockSettings.value.legalHold } })
+        await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/legal-hold?key=${key}&versionId=${vid}`, {
+            method: 'PUT',
+            body: {
+                hold: lockSettings.value.legalHold,
+                reason: lockSettings.value.reason
+            }
+        })
         if (lockSettings.value.retainUntilDate) {
             await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/retention?key=${key}&versionId=${vid}`, { method: 'PUT', body: { retainUntilDate: new Date(lockSettings.value.retainUntilDate).toISOString(), mode: lockSettings.value.mode } })
         }
