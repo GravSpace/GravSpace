@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -114,7 +113,7 @@ type Storage interface {
 	ListObjects(bucket, prefix, delimiter, search string) ([]Object, []string, error)
 	ListVersions(bucket, key string) ([]Object, error)
 	SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error
-	SetObjectLegalHold(bucket, key, versionID string, hold bool) error
+	SetObjectLegalHold(bucket, key, versionID string, hold bool, reason string) error
 	SetBucketDefaultRetention(bucket, mode string, days int) error
 
 	// Multipart Upload
@@ -148,6 +147,10 @@ type Storage interface {
 	EmptyTrash(bucket string) error
 	RestoreObject(bucket, key, versionID string) error
 	DeleteTrashObject(bucket, key, versionID string) error
+
+	// Signature Tracking
+	IsSignatureUsed(signature string) (bool, error)
+	RecordSignature(signature string, expiresAt time.Time) error
 
 	// Stats
 	StartLifecycleWorker()
@@ -265,14 +268,23 @@ func (s *FileStorage) SetBucketVersioning(name string, enabled bool) error {
 	if s.DB == nil {
 		return fmt.Errorf("database not available")
 	}
-	return s.DB.SetBucketVersioning(name, enabled)
+	err := s.DB.SetBucketVersioning(name, enabled)
+	if err == nil && s.Cache != nil {
+		s.Cache.Delete(cache.BucketInfoKey(name))
+	}
+	return err
 }
 
 func (s *FileStorage) SetBucketObjectLock(name string, enabled bool) error {
 	if s.DB == nil {
 		return fmt.Errorf("database not available")
 	}
-	return s.DB.SetBucketObjectLock(name, enabled)
+	err := s.DB.SetBucketObjectLock(name, enabled)
+	if err == nil && s.Cache != nil {
+		s.Cache.Delete(cache.BucketInfoKey(name))
+		s.Cache.Delete(cache.BucketLockKey(name))
+	}
+	return err
 }
 
 func (s *FileStorage) GetBucketObjectLock(name string) (bool, string, int, error) {
@@ -316,18 +328,37 @@ func (s *FileStorage) SetObjectRetention(bucket, key, versionID string, retainUn
 	return s.DB.SetObjectRetention(bucket, key, versionID, retainUntil, mode)
 }
 
-func (s *FileStorage) SetObjectLegalHold(bucket, key, versionID string, hold bool) error {
+func (s *FileStorage) SetObjectLegalHold(bucket, key, versionID string, hold bool, reason string) error {
 	if s.DB == nil {
 		return fmt.Errorf("database not available")
 	}
-	return s.DB.SetObjectLegalHold(bucket, key, versionID, hold)
+	return s.DB.SetObjectLegalHold(bucket, key, versionID, hold, reason)
+}
+
+func (s *FileStorage) IsSignatureUsed(signature string) (bool, error) {
+	if s.DB == nil {
+		return false, nil // If no DB, we can't track used signatures, fallback to allow
+	}
+	return s.DB.IsSignatureUsed(signature)
+}
+
+func (s *FileStorage) RecordSignature(signature string, expiresAt time.Time) error {
+	if s.DB == nil {
+		return nil
+	}
+	return s.DB.RecordSignature(signature, expiresAt)
 }
 
 func (s *FileStorage) SetBucketDefaultRetention(bucket, mode string, days int) error {
 	if s.DB == nil {
 		return fmt.Errorf("database not available")
 	}
-	return s.DB.SetBucketDefaultRetention(bucket, mode, days)
+	err := s.DB.SetBucketDefaultRetention(bucket, mode, days)
+	if err == nil && s.Cache != nil {
+		s.Cache.Delete(cache.BucketInfoKey(bucket))
+		s.Cache.Delete(cache.BucketLockKey(bucket))
+	}
+	return err
 }
 
 func (s *FileStorage) ListBuckets() ([]string, error) {
@@ -386,6 +417,8 @@ func (s *FileStorage) DeleteBucket(name string) error {
 	// Invalidate caches
 	if s.Cache != nil {
 		s.Cache.Delete(cache.BucketListKey())
+		s.Cache.Delete(cache.BucketInfoKey(name))
+		s.Cache.Delete(cache.BucketLockKey(name))
 		s.Cache.Delete(cache.BucketCORSKey(name))
 		s.Cache.Delete(cache.BucketLifecycleKey(name))
 		s.Cache.Delete(cache.BucketWebsiteKey(name)) // Invalidate website cache
@@ -474,17 +507,26 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		versionID = "simple"
 	}
 
-	file, err := os.Create(path)
+	tmpPath := path + ".tmp-" + versionID
+	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+
+	// Ensure cleanup if anything fails before rename
+	tmpCleanup := true
+	defer func() {
+		if tmpCleanup {
+			tmpFile.Close()
+			os.Remove(tmpPath)
+		}
+	}()
 
 	// Copy data and track size
-	var writeCloser io.WriteCloser = file
+	var writeCloser io.WriteCloser = tmpFile
 	var errW error
 	if encryptionType == "AES256" {
-		writeCloser, errW = crypto.EncryptStream(crypto.GetMasterKey(), file)
+		writeCloser, errW = crypto.EncryptStream(crypto.GetMasterKey(), tmpFile)
 		if errW != nil {
 			return "", errW
 		}
@@ -496,9 +538,17 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 	if err != nil {
 		return "", err
 	}
-	if writeCloser != file {
+
+	if writeCloser != tmpFile {
 		writeCloser.Close()
 	}
+	tmpFile.Close()
+
+	// Atomic rename
+	if err := os.Rename(tmpPath, path); err != nil {
+		return "", err
+	}
+	tmpCleanup = false
 
 	// Update latest pointer only for versioned storage
 	if versioningEnabled {
@@ -748,21 +798,21 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 		srcPath = filepath.Join(srcPath, versionID)
 		trashPath = filepath.Join(trashPath, versionID)
 	} else if versionID == "simple" {
+		// Non-versioned path: stored as 'simple' record in DB but filesystem path is fixed
 		trashPath = filepath.Join(trashPath, "simple")
 	}
 
+	// Filesystem operations (move/delete) carried out concurrently with some safety
+	var fsErr error
 	if softDeleteEnabled {
-		if err := os.MkdirAll(filepath.Dir(trashPath), 0755); err != nil {
-			return err
-		}
-		return os.Rename(srcPath, trashPath)
+		parent := filepath.Dir(trashPath)
+		os.MkdirAll(parent, 0755)
+		fsErr = os.Rename(srcPath, trashPath)
+	} else {
+		fsErr = os.RemoveAll(srcPath)
 	}
 
-	if versionID == "" {
-		// Delete everything for this key if no version specified (recursive)
-		return os.RemoveAll(srcPath)
-	}
-	return os.Remove(srcPath)
+	return fsErr
 }
 
 func (s *FileStorage) RestoreObject(bucket, key, versionID string) error {
@@ -815,7 +865,11 @@ func (s *FileStorage) SetBucketSoftDelete(bucket string, enabled bool, retention
 	if s.DB == nil {
 		return fmt.Errorf("database not available")
 	}
-	return s.DB.SetBucketSoftDelete(bucket, enabled, retentionDays)
+	err := s.DB.SetBucketSoftDelete(bucket, enabled, retentionDays)
+	if err == nil && s.Cache != nil {
+		s.Cache.Delete(cache.BucketInfoKey(bucket))
+	}
+	return err
 }
 
 func (s *FileStorage) ListTrash(bucket, search string) ([]*database.ObjectRow, error) {
@@ -865,26 +919,22 @@ func (s *FileStorage) EmptyTrash(bucket string) error {
 }
 
 func (s *FileStorage) DeleteTrashObject(bucket, key, versionID string) error {
-	trashPath := filepath.Join(s.Root, ".trash", bucket, key)
+	if s.DB != nil {
+		s.DB.DeleteObject(bucket, key, versionID)
+	}
+	return s.DeleteTrashFilesystem(bucket, key, versionID)
+}
 
+func (s *FileStorage) DeleteTrashFilesystem(bucket, key, versionID string) error {
+	trashPath := filepath.Join(s.Root, ".trash", bucket, key)
 	if versionID == "folder" {
-		// Folder placeholders are just the directory itself
+		// Just remove the folder itself
 	} else if versionID != "" && versionID != "simple" {
 		trashPath = filepath.Join(trashPath, versionID)
 	} else if versionID == "simple" {
 		trashPath = filepath.Join(trashPath, "simple")
 	}
-
-	if s.DB != nil {
-		if err := s.DB.DeleteObject(bucket, key, versionID); err != nil {
-			log.Printf("Error deleting object from DB: %v", err)
-		}
-	}
-
-	if versionID == "" {
-		return os.RemoveAll(trashPath)
-	}
-	return os.Remove(trashPath)
+	return os.RemoveAll(trashPath)
 }
 
 func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]Object, []string, error) {

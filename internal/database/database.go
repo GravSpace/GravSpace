@@ -46,6 +46,11 @@ type ObjectRow struct {
 	LegalHold       bool       // Legal hold status
 	LockMode        *string    // COMPLIANCE or GOVERNANCE
 	DeletedAt       *time.Time
+	LegalHoldReason *string
+	ContentHash     *string // SHA-256 hash for deduplication
+	CompressionType *string // zstd, brotli, etc.
+	OriginalSize    *int64  // Size before compression
+	IsDeduplicated  bool    // Flag for CAS storage
 }
 
 type ObjectTag struct {
@@ -251,6 +256,11 @@ func (d *Database) initSchema() error {
 		legal_hold BOOLEAN DEFAULT FALSE,
 		lock_mode TEXT,
 		deleted_at TIMESTAMP,
+		legal_hold_reason TEXT,
+		content_hash TEXT,
+		compression_type TEXT,
+		original_size INTEGER,
+		is_deduplicated BOOLEAN DEFAULT FALSE,
 		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE,
 		UNIQUE(bucket, key, version_id)
 	);
@@ -365,10 +375,16 @@ func (d *Database) initSchema() error {
 	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key ON objects(bucket, key);
 	CREATE INDEX IF NOT EXISTS idx_objects_latest ON objects(bucket, is_latest) WHERE is_latest = TRUE;
 	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key_latest ON objects(bucket, key, is_latest);
-	CREATE INDEX IF NOT EXISTS idx_objects_trash ON objects(bucket, deleted_at) WHERE deleted_at IS NOT NULL;
+	CREATE INDEX IF NOT EXISTS idx_objects_trash_cleanup ON objects(bucket, deleted_at) WHERE deleted_at IS NOT NULL;
+	CREATE INDEX IF NOT EXISTS idx_objects_stats_latest ON objects(is_latest, bucket) WHERE is_latest = TRUE;
+	CREATE INDEX IF NOT EXISTS idx_objects_bucket_key_version ON objects(bucket, key, version_id);
 	CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time ON audit_logs(username, timestamp);
 	CREATE INDEX IF NOT EXISTS idx_storage_snapshots_time_bucket ON storage_snapshots(timestamp, bucket);
 	CREATE INDEX IF NOT EXISTS idx_multipart_bucket_key ON multipart_uploads(bucket, key);
+	CREATE TABLE IF NOT EXISTS used_signatures (
+		signature TEXT PRIMARY KEY,
+		expires_at TIMESTAMP
+	);
 	`
 
 	if _, err := d.db.Exec(schema); err != nil {
@@ -409,6 +425,26 @@ func (d *Database) initSchema() error {
 	}
 	if err := d.addColumnIfNotExists("objects", "deleted_at", "TIMESTAMP"); err != nil {
 		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "legal_hold_reason", "TEXT"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "content_hash", "TEXT"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "compression_type", "TEXT"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "original_size", "INTEGER"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("objects", "is_deduplicated", "BOOLEAN DEFAULT FALSE"); err != nil {
+		return err
+	}
+
+	// Create indexes for deduplication
+	if _, err := d.db.Exec("CREATE INDEX IF NOT EXISTS idx_objects_content_hash ON objects(content_hash) WHERE content_hash IS NOT NULL;"); err != nil {
+		fmt.Printf("Warning: failed to create idx_objects_content_hash: %v\n", err)
 	}
 
 	// Create indexes that might depend on migrated columns
@@ -644,6 +680,26 @@ func (d *Database) DeleteObject(bucket, key, versionID string) error {
 	return err
 }
 
+func (d *Database) DeleteObjectsByID(ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	start := time.Now()
+
+	// Create placeholders ?,?,?
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf("DELETE FROM objects WHERE id IN (%s)", strings.Join(placeholders, ","))
+	_, err := d.db.Exec(query, args...)
+	metrics.RecordDBQuery("DeleteObjectsByID", time.Since(start))
+	return err
+}
+
 func (d *Database) SoftDeleteObject(bucket, key, versionID string) error {
 	start := time.Now()
 	now := time.Now()
@@ -788,12 +844,32 @@ func (d *Database) SetObjectRetention(bucket, key, versionID string, retainUntil
 	return err
 }
 
-func (d *Database) SetObjectLegalHold(bucket, key, versionID string, hold bool) error {
+func (d *Database) SetObjectLegalHold(bucket, key, versionID string, hold bool, reason string) error {
 	start := time.Now()
-	_, err := d.db.Exec(`UPDATE objects SET legal_hold = ? 
-	                      WHERE bucket = ? AND key = ? AND version_id = ?`,
-		hold, bucket, key, versionID)
+	_, err := d.db.Exec("UPDATE objects SET legal_hold = ?, legal_hold_reason = ? WHERE bucket = ? AND key = ? AND version_id = ?", hold, reason, bucket, key, versionID)
 	metrics.RecordDBQuery("SetObjectLegalHold", time.Since(start))
+	return err
+}
+
+func (d *Database) IsSignatureUsed(signature string) (bool, error) {
+	start := time.Now()
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM used_signatures WHERE signature = ?", signature).Scan(&count)
+	metrics.RecordDBQuery("IsSignatureUsed", time.Since(start))
+	return count > 0, err
+}
+
+func (d *Database) RecordSignature(signature string, expiresAt time.Time) error {
+	start := time.Now()
+	_, err := d.db.Exec("INSERT INTO used_signatures (signature, expires_at) VALUES (?, ?)", signature, expiresAt)
+	metrics.RecordDBQuery("RecordSignature", time.Since(start))
+	return err
+}
+
+func (d *Database) CleanupExpiredSignatures() error {
+	start := time.Now()
+	_, err := d.db.Exec("DELETE FROM used_signatures WHERE expires_at < ?", time.Now())
+	metrics.RecordDBQuery("CleanupExpiredSignatures", time.Since(start))
 	return err
 }
 

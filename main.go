@@ -245,7 +245,7 @@ func main() {
 
 	// S3 API Routes (Protected)
 	s3 := e.Group("")
-	s3.Use(auth.S3AuthMiddleware(um, auditLogger))
+	s3.Use(auth.S3AuthMiddleware(um, auditLogger, store))
 
 	// List Buckets
 	s3.GET("/", s3Handler.ListBuckets)
