@@ -57,7 +57,23 @@ func (h *AdminHandler) GetBucketInfo(c echo.Context) error {
 	if info == nil {
 		return c.String(http.StatusNotFound, "Bucket not found")
 	}
-	return c.JSON(http.StatusOK, info)
+
+	// Get current size
+	_, currentSize, _ := h.Storage.GetBucketStats(bucket)
+
+	return c.JSON(http.StatusOK, echo.Map{
+		"Name":                 info.Name,
+		"CreatedAt":            info.CreatedAt,
+		"Owner":                info.Owner,
+		"VersioningEnabled":    info.VersioningEnabled,
+		"ObjectLockEnabled":    info.ObjectLockEnabled,
+		"DefaultRetentionMode": info.DefaultRetentionMode,
+		"DefaultRetentionDays": info.DefaultRetentionDays,
+		"SoftDeleteEnabled":    info.SoftDeleteEnabled,
+		"SoftDeleteRetention":  info.SoftDeleteRetention,
+		"QuotaBytes":           info.QuotaBytes,
+		"CurrentSize":          currentSize,
+	})
 }
 
 func (h *AdminHandler) SetBucketVersioning(c echo.Context) error {
@@ -98,6 +114,20 @@ func (h *AdminHandler) SetBucketDefaultRetention(c echo.Context) error {
 		return c.String(http.StatusBadRequest, "Invalid request")
 	}
 	if err := h.Storage.SetBucketDefaultRetention(bucket, req.Mode, req.Days); err != nil {
+		return c.String(http.StatusInternalServerError, err.Error())
+	}
+	return c.NoContent(http.StatusOK)
+}
+
+func (h *AdminHandler) SetBucketQuota(c echo.Context) error {
+	bucket := c.Param("bucket")
+	var req struct {
+		QuotaBytes int64 `json:"quota_bytes"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.String(http.StatusBadRequest, "Invalid request")
+	}
+	if err := h.Storage.SetBucketQuota(bucket, req.QuotaBytes); err != nil {
 		return c.String(http.StatusInternalServerError, err.Error())
 	}
 	return c.NoContent(http.StatusOK)

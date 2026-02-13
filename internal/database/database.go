@@ -29,6 +29,7 @@ type BucketRow struct {
 	DefaultRetentionDays int
 	SoftDeleteEnabled    bool
 	SoftDeleteRetention  int // in days
+	QuotaBytes           int64
 }
 
 type ObjectRow struct {
@@ -238,7 +239,8 @@ func (d *Database) initSchema() error {
 		default_retention_mode TEXT,
 		default_retention_days INTEGER,
 		soft_delete_enabled BOOLEAN DEFAULT FALSE,
-		soft_delete_retention INTEGER DEFAULT 30
+		soft_delete_retention INTEGER DEFAULT 30,
+		quota_bytes INTEGER DEFAULT 0
 	);
 
 	CREATE TABLE IF NOT EXISTS objects (
@@ -441,6 +443,9 @@ func (d *Database) initSchema() error {
 	if err := d.addColumnIfNotExists("objects", "is_deduplicated", "BOOLEAN DEFAULT FALSE"); err != nil {
 		return err
 	}
+	if err := d.addColumnIfNotExists("buckets", "quota_bytes", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
 
 	// Create indexes for deduplication
 	if _, err := d.db.Exec("CREATE INDEX IF NOT EXISTS idx_objects_content_hash ON objects(content_hash) WHERE content_hash IS NOT NULL;"); err != nil {
@@ -535,8 +540,8 @@ func (d *Database) GetBucket(name string) (*BucketRow, error) {
 	var bucket BucketRow
 	var mode sql.NullString
 	var days sql.NullInt64
-	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled, default_retention_mode, default_retention_days, soft_delete_enabled, soft_delete_retention FROM buckets WHERE name = ?", name).
-		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled, &mode, &days, &bucket.SoftDeleteEnabled, &bucket.SoftDeleteRetention)
+	err := d.db.QueryRow("SELECT name, created_at, owner, versioning_enabled, object_lock_enabled, default_retention_mode, default_retention_days, soft_delete_enabled, soft_delete_retention, quota_bytes FROM buckets WHERE name = ?", name).
+		Scan(&bucket.Name, &bucket.CreatedAt, &bucket.Owner, &bucket.VersioningEnabled, &bucket.ObjectLockEnabled, &mode, &days, &bucket.SoftDeleteEnabled, &bucket.SoftDeleteRetention, &bucket.QuotaBytes)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -567,6 +572,13 @@ func (d *Database) SetBucketDefaultRetention(name string, mode string, days int)
 	start := time.Now()
 	_, err := d.db.Exec("UPDATE buckets SET default_retention_mode = ?, default_retention_days = ? WHERE name = ?", mode, days, name)
 	metrics.RecordDBQuery("SetBucketDefaultRetention", time.Since(start))
+	return err
+}
+
+func (d *Database) SetBucketQuota(name string, quotaBytes int64) error {
+	start := time.Now()
+	_, err := d.db.Exec("UPDATE buckets SET quota_bytes = ? WHERE name = ?", quotaBytes, name)
+	metrics.RecordDBQuery("SetBucketQuota", time.Since(start))
 	return err
 }
 

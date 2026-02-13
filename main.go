@@ -195,6 +195,7 @@ func main() {
 	admin.PUT("/buckets/:bucket/object-lock", adminHandler.SetBucketObjectLock)
 	admin.PUT("/buckets/:bucket/retention", adminHandler.SetObjectRetention)
 	admin.PUT("/buckets/:bucket/retention/default", adminHandler.SetBucketDefaultRetention)
+	admin.PUT("/buckets/:bucket/quota", adminHandler.SetBucketQuota)
 	admin.PUT("/buckets/:bucket/legal-hold", adminHandler.SetObjectLegalHold)
 	admin.GET("/buckets/:bucket/objects", adminHandler.ListObjects)
 	admin.GET("/buckets/:bucket/objects/*", adminHandler.GetObject)

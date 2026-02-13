@@ -115,6 +115,7 @@ type Storage interface {
 	SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error
 	SetObjectLegalHold(bucket, key, versionID string, hold bool, reason string) error
 	SetBucketDefaultRetention(bucket, mode string, days int) error
+	SetBucketQuota(bucket string, quotaBytes int64) error
 
 	// Multipart Upload
 	InitiateMultipartUpload(bucket, key string) (string, error)
@@ -361,6 +362,17 @@ func (s *FileStorage) SetBucketDefaultRetention(bucket, mode string, days int) e
 	return err
 }
 
+func (s *FileStorage) SetBucketQuota(bucket string, quotaBytes int64) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	err := s.DB.SetBucketQuota(bucket, quotaBytes)
+	if err == nil && s.Cache != nil {
+		s.Cache.Delete(cache.BucketInfoKey(bucket))
+	}
+	return err
+}
+
 func (s *FileStorage) ListBuckets() ([]string, error) {
 	// Try cache first
 	var buckets []string
@@ -486,6 +498,17 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}
 
+	// Pre-check bucket quota
+	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil && bucketInfo.QuotaBytes > 0 {
+			_, currentSize, err := s.GetBucketStats(bucket)
+			if err == nil && currentSize >= bucketInfo.QuotaBytes {
+				return "", fmt.Errorf("Bucket quota exceeded (%s limit reached)", formatBytes(bucketInfo.QuotaBytes))
+			}
+		}
+	}
+
 	versionID := fmt.Sprintf("%d", time.Now().UnixNano())
 	var path string
 	var size int64
@@ -543,6 +566,19 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		writeCloser.Close()
 	}
 	tmpFile.Close()
+
+	// Check bucket quota (Post-upload)
+	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil && bucketInfo.QuotaBytes > 0 {
+			_, currentSize, err := s.GetBucketStats(bucket)
+			if err == nil && currentSize+size > bucketInfo.QuotaBytes {
+				os.Remove(tmpPath)
+				tmpCleanup = false
+				return "", fmt.Errorf("Bucket quota exceeded (%s limit reached). Upload of %s rejected.", formatBytes(bucketInfo.QuotaBytes), formatBytes(size))
+			}
+		}
+	}
 
 	// Atomic rename
 	if err := os.Rename(tmpPath, path); err != nil {
@@ -1296,6 +1332,19 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 		return "", err
 	}
 
+	// Check bucket quota (Post-assembly)
+	if s.DB != nil {
+		bucketInfo, err := s.DB.GetBucket(bucket)
+		if err == nil && bucketInfo != nil && bucketInfo.QuotaBytes > 0 {
+			_, currentSize, err := s.GetBucketStats(bucket)
+			if err == nil && currentSize+totalSize > bucketInfo.QuotaBytes {
+				destFile.Close() // Ensure closed
+				os.Remove(targetPath)
+				return "", fmt.Errorf("Bucket quota exceeded (%s limit reached). Multipart upload of %s rejected.", formatBytes(bucketInfo.QuotaBytes), formatBytes(totalSize))
+			}
+		}
+	}
+
 	// 4. Update latest pointer and metadata
 	if versioningEnabled {
 		objectDir := filepath.Join(s.Root, bucket, key)
@@ -1643,4 +1692,17 @@ func (s *FileStorage) ProcessLifecycleRules() {
 			}
 		}
 	}
+}
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

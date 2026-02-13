@@ -32,6 +32,21 @@
                 </div>
             </div>
             <div class="flex items-center gap-3">
+                <!-- Quota Usage Bar -->
+                <div v-if="bucketInfo?.QuotaBytes > 0" class="hidden md:flex flex-col gap-1 w-48 mr-2">
+                    <div class="flex justify-between items-center text-[10px] font-bold uppercase tracking-wider">
+                        <span class="text-slate-500">Usage</span>
+                        <span :class="usagePercentage > 90 ? 'text-rose-500' : 'text-slate-600'">
+                            {{ formatSize(bucketInfo.CurrentSize) }} / {{ formatSize(bucketInfo.QuotaBytes) }}
+                        </span>
+                    </div>
+                    <div
+                        class="h-1.5 w-full bg-slate-200/50 dark:bg-slate-800/50 rounded-full overflow-hidden border border-slate-200/50 dark:border-slate-800/50">
+                        <div class="h-full transition-all duration-700 ease-out" :class="usageColor"
+                            :style="{ width: `${usagePercentage}%` }"></div>
+                    </div>
+                </div>
+
                 <div class="relative w-64 group">
                     <Search
                         class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground group-focus-within:text-primary transition-colors" />
@@ -628,6 +643,36 @@
                                     removed after this period.</p>
                             </div>
                         </div>
+
+                        <!-- Bucket Quota -->
+                        <div class="space-y-4 pt-4 border-t">
+                            <div class="flex items-center justify-between">
+                                <div class="space-y-0.5">
+                                    <Label class="text-sm font-bold">Bucket Quota</Label>
+                                    <p class="text-xs text-muted-foreground">Limit total storage capacity. Current: {{
+                                        formatSize(bucketInfo?.CurrentSize || 0) }} used.</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <Input type="number" v-model="quotaInput"
+                                        class="h-9 w-24 bg-background border-slate-200 dark:border-slate-800"
+                                        placeholder="0" />
+                                    <select v-model="quotaUnit"
+                                        class="h-9 rounded-md border border-slate-200 dark:border-slate-800 bg-background px-2 text-xs focus:ring-1 focus:ring-primary/20 outline-hidden">
+                                        <option value="1048576">MB</option>
+                                        <option value="1073741824">GB</option>
+                                        <option value="1099511627776">TB</option>
+                                    </select>
+                                    <Button size="sm" @click="saveQuota" :disabled="updatingSettings.quota"
+                                        class="h-9 px-4">
+                                        <Loader2 v-if="updatingSettings.quota" class="w-3 h-3 mr-2 animate-spin" />
+                                        Save
+                                    </Button>
+                                </div>
+                            </div>
+                            <p class="text-[10px] text-muted-foreground italic">Set to 0 for unlimited storage. Changes
+                                apply to
+                                future uploads.</p>
+                        </div>
                     </TabsContent>
 
                     <TabsContent value="notifications" class="space-y-4 py-4">
@@ -913,7 +958,23 @@ const updatingSettings = ref({
     softDelete: false,
     objectLock: false,
     retention: false,
-    website: false
+    website: false,
+    quota: false
+})
+
+const quotaInput = ref(0)
+const quotaUnit = ref('1073741824') // GB
+
+const usagePercentage = computed(() => {
+    if (!bucketInfo.value || !bucketInfo.value.QuotaBytes || bucketInfo.value.QuotaBytes <= 0) return 0
+    return Math.min(100, (bucketInfo.value.CurrentSize / bucketInfo.value.QuotaBytes) * 100)
+})
+
+const usageColor = computed(() => {
+    const p = usagePercentage.value
+    if (p < 70) return 'bg-emerald-500'
+    if (p < 90) return 'bg-amber-500'
+    return 'bg-secondary'
 })
 const bucketWebhooks = ref([])
 const showAddWebhookDialog = ref(false)
@@ -928,7 +989,36 @@ async function openBucketSettings() {
     await fetchBucketInfo()
     await fetchWebhooks()
     await fetchWebsiteConfig()
+
+    // Initialize quota inputs from bucket info
+    if (bucketInfo.value && bucketInfo.value.QuotaBytes > 0) {
+        const bytes = bucketInfo.value.QuotaBytes
+        if (bytes >= 1099511627776) {
+            quotaUnit.value = '1099511627776'
+            quotaInput.value = Math.round(bytes / 1099511627776)
+        } else if (bytes >= 1073741824) {
+            quotaUnit.value = '1073741824'
+            quotaInput.value = Math.round(bytes / 1073741824)
+        } else {
+            quotaUnit.value = '1048576'
+            quotaInput.value = Math.round(bytes / 1048576)
+        }
+    } else {
+        quotaInput.value = 0
+    }
+
     showBucketSettings.value = true
+}
+
+async function saveQuota() {
+    const bytes = parseInt(quotaInput.value) * parseInt(quotaUnit.value)
+    await updateBucketSetting(
+        'quota',
+        `${API_BASE}/admin/buckets/${bucketName.value}/quota`,
+        { quota_bytes: bytes },
+        'Bucket quota updated successfully',
+        'Failed to update bucket quota'
+    )
 }
 
 async function fetchBucketInfo() {
