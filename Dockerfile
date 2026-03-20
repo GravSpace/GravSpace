@@ -60,8 +60,9 @@ ENV LD_LIBRARY_PATH=/usr/lib:/usr/local/lib
 # Switch to non-root user
 USER appuser
 
-# Expose port
+# Expose ports
 EXPOSE 8080
+EXPOSE 9000
 
 # Run the application
 CMD ["./storage-server"]

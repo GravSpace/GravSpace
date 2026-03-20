@@ -72,6 +72,17 @@ func (r *RedisCache) Delete(key string) error {
 	return r.client.Del(r.ctx, key).Err()
 }
 
+func (r *RedisCache) DeleteByPrefix(prefix string) error {
+	iter := r.client.Scan(r.ctx, 0, prefix+"*", 0).Iterator()
+	for iter.Next(r.ctx) {
+		err := r.client.Del(r.ctx, iter.Val()).Err()
+		if err != nil {
+			log.Printf("Redis DEL error during DeleteByPrefix for key %s: %v", iter.Val(), err)
+		}
+	}
+	return iter.Err()
+}
+
 func (r *RedisCache) Clear() error {
 	r.stats = CacheStats{}
 	return r.client.FlushDB(r.ctx).Err()

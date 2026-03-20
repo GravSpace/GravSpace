@@ -2,6 +2,7 @@ package cache
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 )
@@ -10,6 +11,7 @@ type Cache interface {
 	Get(key string, target interface{}) bool
 	Set(key string, value interface{}, ttl time.Duration) error
 	Delete(key string) error
+	DeleteByPrefix(prefix string) error
 	Clear() error
 	Stats() CacheStats
 }
@@ -87,6 +89,18 @@ func (c *InMemoryCache) Delete(key string) error {
 	defer c.mu.Unlock()
 
 	delete(c.data, key)
+	return nil
+}
+
+func (c *InMemoryCache) DeleteByPrefix(prefix string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for key := range c.data {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.data, key)
+		}
+	}
 	return nil
 }
 

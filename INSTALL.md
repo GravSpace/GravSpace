@@ -103,7 +103,8 @@ gravspace -v
 # Run server with default settings
 gravspace
 
-# The server will start on :8080
+# The Admin API will start on :8080 (Dashboard, IAM, Settings)
+# The S3 API will start on :9001 (S3 compatible object storage)
 ```
 
 ### Configuration
@@ -155,6 +156,8 @@ RestartSec=5s
 # Environment variables
 Environment="JWT_SECRET=your-secret-key"
 Environment="CORS_ORIGINS=*"
+Environment="ADMIN_PORT=8080"
+Environment="S3_PORT=9001"
 # Add more environment variables as needed
 
 # Security
@@ -380,8 +383,11 @@ export PATH="/usr/local/bin:$PATH"
 ### Port Already in Use
 
 ```bash
-# Find process using port 8080
+# Find process using port 8080 (Admin API)
 sudo lsof -i :8080
+
+# Find process using port 9001 (S3 API)
+sudo lsof -i :9001
 
 # Kill process
 sudo kill -9 <PID>

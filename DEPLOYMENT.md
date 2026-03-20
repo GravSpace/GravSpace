@@ -35,6 +35,7 @@ Edit `.env` file with your settings:
 JWT_SECRET=<generated-secret-from-above>
 CORS_ORIGINS=http://localhost:3000,https://yourdomain.com
 BACKEND_PORT=8080
+S3_PORT=9001
 
 # Frontend Configuration
 NUXT_PUBLIC_API_BASE=http://localhost:8080
@@ -57,7 +58,8 @@ docker-compose logs -f
 ### 4. Access Application
 
 - **Frontend Dashboard**: http://localhost:3000
-- **Backend API**: http://localhost:8080
+- **Admin API**: http://localhost:8080
+- **S3 API**: http://localhost:9001
 - **Health Check**: http://localhost:8080/health/live
 - **Metrics**: http://localhost:8080/metrics
 
@@ -168,6 +170,7 @@ JWT_SECRET=$(openssl rand -base64 32)
 CORS_ORIGINS=https://yourdomain.com
 NUXT_PUBLIC_API_BASE=https://api.yourdomain.com
 BACKEND_PORT=8080
+S3_PORT=9001
 FRONTEND_PORT=3000
 ```
 
