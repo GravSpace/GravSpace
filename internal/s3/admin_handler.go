@@ -16,7 +16,7 @@ import (
 	"github.com/GravSpace/GravSpace/internal/auth"
 	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/storage"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gin-gonic/gin"
 )
 
 type AdminHandler struct {
@@ -25,44 +25,49 @@ type AdminHandler struct {
 	S3Port      string
 }
 
-func (h *AdminHandler) ListBuckets(c *fiber.Ctx) error {
+func (h *AdminHandler) ListBuckets(c *gin.Context) {
 	buckets, err := h.Storage.ListBuckets()
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.JSON(buckets)
+	c.JSON(http.StatusOK, buckets)
 }
 
-func (h *AdminHandler) CreateBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) CreateBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 	if err := h.Storage.CreateBucket(bucket); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusCreated)
+	c.Status(http.StatusCreated)
 }
 
-func (h *AdminHandler) DeleteBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) DeleteBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 	if err := h.Storage.DeleteBucket(bucket); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) GetBucketInfo(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) GetBucketInfo(c *gin.Context) {
+	bucket := c.Param("bucket")
 	info, err := h.Storage.GetBucketInfo(bucket)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 	if info == nil {
-		return c.Status(http.StatusNotFound).SendString("Bucket not found")
+		c.String(http.StatusNotFound, "Bucket not found")
+		return
 	}
 
 	// Get current size
 	_, currentSize, _ := h.Storage.GetBucketStats(bucket)
 
-	return c.JSON(fiber.Map{
+	c.JSON(http.StatusOK, gin.H{
 		"Name":                 info.Name,
 		"CreatedAt":            info.CreatedAt,
 		"Owner":                info.Owner,
@@ -77,65 +82,73 @@ func (h *AdminHandler) GetBucketInfo(c *fiber.Ctx) error {
 	})
 }
 
-func (h *AdminHandler) SetBucketVersioning(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetBucketVersioning(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 	if err := h.Storage.SetBucketVersioning(bucket, req.Enabled); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) SetBucketObjectLock(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetBucketObjectLock(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 	if err := h.Storage.SetBucketObjectLock(bucket, req.Enabled); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return h.SetBucketDefaultRetention(c) // Also allow setting defaults if provided
+	h.SetBucketDefaultRetention(c) // Also allow setting defaults if provided
 }
 
-func (h *AdminHandler) SetBucketDefaultRetention(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetBucketDefaultRetention(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		Mode string `json:"mode"`
 		Days int    `json:"days"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 	if err := h.Storage.SetBucketDefaultRetention(bucket, req.Mode, req.Days); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) SetBucketQuota(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetBucketQuota(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		QuotaBytes int64 `json:"quota_bytes"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 	if err := h.Storage.SetBucketQuota(bucket, req.QuotaBytes); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) SetObjectRetention(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetObjectRetention(c *gin.Context) {
+	bucket := c.Param("bucket")
 	key := c.Query("key")
 	versionID := c.Query("versionId")
 
@@ -143,27 +156,31 @@ func (h *AdminHandler) SetObjectRetention(c *fiber.Ctx) error {
 		RetainUntilDate string `json:"retainUntilDate"` // ISO 8601 format
 		Mode            string `json:"mode"`            // COMPLIANCE or GOVERNANCE
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	retainUntil, err := time.Parse(time.RFC3339, req.RetainUntilDate)
 	if err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid retainUntilDate format")
+		c.String(http.StatusBadRequest, "Invalid retainUntilDate format")
+		return
 	}
 
 	if req.Mode != "COMPLIANCE" && req.Mode != "GOVERNANCE" {
-		return c.Status(http.StatusBadRequest).SendString("Mode must be COMPLIANCE or GOVERNANCE")
+		c.String(http.StatusBadRequest, "Mode must be COMPLIANCE or GOVERNANCE")
+		return
 	}
 
 	if err := h.Storage.SetObjectRetention(bucket, key, versionID, retainUntil, req.Mode); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) SetObjectLegalHold(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetObjectLegalHold(c *gin.Context) {
+	bucket := c.Param("bucket")
 	key := c.Query("key")
 	versionID := c.Query("versionId")
 
@@ -171,18 +188,20 @@ func (h *AdminHandler) SetObjectLegalHold(c *fiber.Ctx) error {
 		Hold   bool   `json:"hold"`
 		Reason string `json:"reason"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	if err := h.Storage.SetObjectLegalHold(bucket, key, versionID, req.Hold, req.Reason); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) ListObjects(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) ListObjects(c *gin.Context) {
+	bucket := c.Param("bucket")
 	prefix := c.Query("prefix")
 	delimiter := c.Query("delimiter")
 	search := c.Query("search")
@@ -190,39 +209,43 @@ func (h *AdminHandler) ListObjects(c *fiber.Ctx) error {
 	if c.Query("versions") != "" {
 		objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter, search)
 		if err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
 		var allVersions []storage.Object
 		for _, o := range objects {
 			versions, _ := h.Storage.ListVersions(bucket, o.Key)
 			allVersions = append(allVersions, versions...)
 		}
-		return c.JSON(fiber.Map{
+		c.JSON(http.StatusOK, gin.H{
 			"versions":        allVersions,
 			"common_prefixes": commonPrefixes,
 		})
+		return
 	}
 
 	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter, search)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.JSON(fiber.Map{
+	c.JSON(http.StatusOK, gin.H{
 		"objects":         objects,
 		"common_prefixes": commonPrefixes,
 	})
 }
 
-func (h *AdminHandler) GetObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *AdminHandler) GetObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
 	reader, obj, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
 		fmt.Printf("DEBUG: GetObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
-		return c.Status(http.StatusNotFound).SendString(fmt.Sprintf("Object not found: %v", err))
+		c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
+		return
 	}
 
 	contentType := mime.TypeByExtension(filepath.Ext(key))
@@ -230,54 +253,46 @@ func (h *AdminHandler) GetObject(c *fiber.Ctx) error {
 		contentType = "application/octet-stream"
 	}
 
-	c.Set("x-amz-version-id", obj.VersionID)
+	c.Header("x-amz-version-id", obj.VersionID)
 	if c.Query("download") == "true" {
-		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
 	}
 
-	c.Type(contentType)
-	return c.SendStream(reader)
+	c.DataFromReader(http.StatusOK, obj.Size, contentType, reader, nil)
 }
 
-func (h *AdminHandler) PutObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *AdminHandler) PutObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 
-	// Defensive check: if the request path ends with a slash but the key parameter doesn't,
-	// it means Fiber's routing or parameter extraction stripped it.
-	if strings.HasSuffix(c.Path(), "/") && !strings.HasSuffix(key, "/") {
+	// Defensive check: if the request path ends with a slash but the key parameter doesn't
+	if strings.HasSuffix(c.Request.URL.Path, "/") && !strings.HasSuffix(key, "/") {
 		key += "/"
 	}
 
 	log.Printf("Admin PUT Object: bucket=%s, key=%s", bucket, key)
 
-	// Fiber's RequestBodyStream might be nil if body is already read or empty
-	reader := c.Context().RequestBodyStream()
-	if reader == nil {
-		body := c.Body()
-		log.Printf("RequestBodyStream is nil, using c.Body() (size: %d)", len(body))
-		reader = strings.NewReader(string(body))
-	}
-
-	vid, err := h.Storage.PutObject(bucket, key, reader, "")
+	vid, err := h.Storage.PutObject(bucket, key, c.Request.Body, "")
 	if err != nil {
 		log.Printf("Error in PutObject: %v", err)
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	c.Set("x-amz-version-id", vid)
+	c.Header("x-amz-version-id", vid)
 	log.Printf("Successfully put object: %s/%s, version: %s", bucket, key, vid)
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) DownloadObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *AdminHandler) DownloadObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
 	reader, obj, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
 		fmt.Printf("DEBUG: DownloadObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
-		return c.Status(http.StatusNotFound).SendString(fmt.Sprintf("Object not found: %v", err))
+		c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
+		return
 	}
 
 	contentType := mime.TypeByExtension(filepath.Ext(key))
@@ -285,152 +300,167 @@ func (h *AdminHandler) DownloadObject(c *fiber.Ctx) error {
 		contentType = "application/octet-stream"
 	}
 
-	c.Set("x-amz-version-id", obj.VersionID)
-	c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
+	c.Header("x-amz-version-id", obj.VersionID)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filepath.Base(key)))
 
-	c.Type(contentType)
-	return c.SendStream(reader)
+	c.DataFromReader(http.StatusOK, obj.Size, contentType, reader, nil)
 }
 
-func (h *AdminHandler) DeleteObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *AdminHandler) DeleteObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 	bypass := c.Query("bypassGovernance") != "false" // Admin by default bypasses unless explicitly false
 
 	if err := h.Storage.DeleteObject(bucket, key, versionID, bypass); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-func (h *AdminHandler) GetObjectTagging(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *AdminHandler) GetObjectTagging(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
 	tags, err := h.Storage.GetObjectTagging(bucket, key, versionID)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.JSON(tags)
+	c.JSON(http.StatusOK, tags)
 }
 
-func (h *AdminHandler) PutObjectTagging(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *AdminHandler) PutObjectTagging(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
 	var tags map[string]string
-	if err := c.BodyParser(&tags); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid tags format")
+	if err := c.ShouldBindJSON(&tags); err != nil {
+		c.String(http.StatusBadRequest, "Invalid tags format")
+		return
 	}
 
 	if err := h.Storage.PutObjectTagging(bucket, key, versionID, tags); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) ListUsers(c *fiber.Ctx) error {
-	return c.JSON(h.UserManager.Users)
+func (h *AdminHandler) ListUsers(c *gin.Context) {
+	c.JSON(http.StatusOK, h.UserManager.Users)
 }
 
-func (h *AdminHandler) CreateUser(c *fiber.Ctx) error {
+func (h *AdminHandler) CreateUser(c *gin.Context) {
 	var req struct {
 		Username string `json:"username"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return err
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	user := h.UserManager.CreateUser(req.Username)
-	return c.Status(http.StatusCreated).JSON(user)
+	c.JSON(http.StatusCreated, user)
 }
 
-func (h *AdminHandler) DeleteUser(c *fiber.Ctx) error {
-	username := c.Params("username")
+func (h *AdminHandler) DeleteUser(c *gin.Context) {
+	username := c.Param("username")
 	h.UserManager.DeleteUser(username)
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) UpdatePassword(c *fiber.Ctx) error {
-	username := c.Params("username")
+func (h *AdminHandler) UpdatePassword(c *gin.Context) {
+	username := c.Param("username")
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return err
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if err := h.UserManager.UpdatePassword(username, req.Password); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) GenerateKey(c *fiber.Ctx) error {
-	username := c.Params("username")
+func (h *AdminHandler) GenerateKey(c *gin.Context) {
+	username := c.Param("username")
 	key := h.UserManager.GenerateKey(username)
 	if key == nil {
-		return c.SendStatus(http.StatusNotFound)
+		c.Status(http.StatusNotFound)
+		return
 	}
-	return c.JSON(key)
+	c.JSON(http.StatusOK, key)
 }
 
-func (h *AdminHandler) DeleteKey(c *fiber.Ctx) error {
-	username := c.Params("username")
-	keyID := c.Params("id")
+func (h *AdminHandler) DeleteKey(c *gin.Context) {
+	username := c.Param("username")
+	keyID := c.Param("id")
 	if err := h.UserManager.DeleteKey(username, keyID); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) AddPolicy(c *fiber.Ctx) error {
-	username := c.Params("username")
+func (h *AdminHandler) AddPolicy(c *gin.Context) {
+	username := c.Param("username")
 	var policy auth.Policy
-	if err := c.BodyParser(&policy); err != nil {
-		return err
+	if err := c.ShouldBindJSON(&policy); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if err := h.UserManager.AddPolicy(username, policy); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) RemovePolicy(c *fiber.Ctx) error {
-	username := c.Params("username")
-	policyName := c.Params("name")
+func (h *AdminHandler) RemovePolicy(c *gin.Context) {
+	username := c.Param("username")
+	policyName := c.Param("name")
 	if err := h.UserManager.RemovePolicy(username, policyName); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) AttachPolicyTemplate(c *fiber.Ctx) error {
-	username := c.Params("username")
+func (h *AdminHandler) AttachPolicyTemplate(c *gin.Context) {
+	username := c.Param("username")
 	var req struct {
 		TemplateName string `json:"templateName"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
 	}
 
 	if err := h.UserManager.AttachPolicyTemplate(username, req.TemplateName); err != nil {
 		if err == os.ErrNotExist {
-			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "User or policy template not found"})
+			c.JSON(http.StatusNotFound, gin.H{"error": "User or policy template not found"})
+			return
 		}
 		if err == os.ErrExist {
-			return c.Status(http.StatusConflict).JSON(fiber.Map{"error": "Policy already attached to user"})
+			c.JSON(http.StatusConflict, gin.H{"error": "Policy already attached to user"})
+			return
 		}
-		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
-	return c.JSON(fiber.Map{"message": "Policy template attached successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Policy template attached successfully"})
 }
 
 var startTime = time.Now()
 
-func (h *AdminHandler) GetSystemStats(c *fiber.Ctx) error {
+func (h *AdminHandler) GetSystemStats(c *gin.Context) {
 	count, size, err := h.Storage.GetGlobalStats()
 	if err != nil {
 		count, size = 0, 0
@@ -442,10 +472,10 @@ func (h *AdminHandler) GetSystemStats(c *fiber.Ctx) error {
 	stats["total_size"] = size
 	stats["uptime"] = time.Since(startTime).String()
 
-	return c.JSON(stats)
+	c.JSON(http.StatusOK, stats)
 }
 
-func (h *AdminHandler) GeneratePresignURL(c *fiber.Ctx) error {
+func (h *AdminHandler) GeneratePresignURL(c *gin.Context) {
 	bucket := c.Query("bucket")
 	key := c.Query("key")
 	expires := c.Query("expires")
@@ -456,7 +486,8 @@ func (h *AdminHandler) GeneratePresignURL(c *fiber.Ctx) error {
 	// For simplicity, we use the first key of the 'admin' user
 	user, ok := h.UserManager.Users["admin"]
 	if !ok || len(user.AccessKeys) == 0 {
-		return c.Status(http.StatusInternalServerError).SendString("No admin user or keys found")
+		c.String(http.StatusInternalServerError, "No admin user or keys found")
+		return
 	}
 	accessKey := user.AccessKeys[0].AccessKeyID
 	secretKey := user.AccessKeys[0].SecretAccessKey
@@ -477,85 +508,92 @@ func (h *AdminHandler) GeneratePresignURL(c *fiber.Ctx) error {
 
 	scheme := "http"
 	// Fiber check for TLS
-	if c.Secure() {
+	if c.Request.TLS != nil {
 		scheme = "https"
 	}
 
 	path := fmt.Sprintf("/%s/%s", bucket, key)
 	headers := http.Header{}
-	headers.Set("Host", c.Hostname())
+	headers.Set("Host", c.Request.Host)
 
 	// Build Signature
-	canonicalRequest := auth.BuildCanonicalRequest("GET", path, params, headers, []string{"host"}, "UNSIGNED-PAYLOAD", c.Hostname())
+	canonicalRequest := auth.BuildCanonicalRequest("GET", path, params, headers, []string{"host"}, "UNSIGNED-PAYLOAD", c.Request.Host)
 	stringToSign := auth.BuildStringToSign(algorithm, now, credentialScope, canonicalRequest)
 	signature := auth.CalculateSignature(secretKey, date, region, service, stringToSign)
 
 	params.Set("X-Amz-Signature", signature)
 
-	presignedURL := fmt.Sprintf("%s://%s%s?%s", scheme, c.Hostname(), path, params.Encode())
+	presignedURL := fmt.Sprintf("%s://%s%s?%s", scheme, c.Request.Host, path, params.Encode())
 
-	return c.JSON(map[string]string{
+	c.JSON(http.StatusOK, map[string]string{
 		"url": presignedURL,
 	})
 }
 
-func (h *AdminHandler) ListPolicies(c *fiber.Ctx) error {
-	return c.JSON(h.UserManager.ListPolicyTemplates())
+func (h *AdminHandler) ListPolicies(c *gin.Context) {
+	c.JSON(http.StatusOK, h.UserManager.ListPolicyTemplates())
 }
 
-func (h *AdminHandler) CreatePolicy(c *fiber.Ctx) error {
+func (h *AdminHandler) CreatePolicy(c *gin.Context) {
 	var policy auth.Policy
-	if err := c.BodyParser(&policy); err != nil {
-		return err
+	if err := c.ShouldBindJSON(&policy); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if err := h.UserManager.CreatePolicyTemplate(policy.Name, policy); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusCreated)
+	c.Status(http.StatusCreated)
 }
 
-func (h *AdminHandler) DeletePolicy(c *fiber.Ctx) error {
-	name := c.Params("name")
+func (h *AdminHandler) DeletePolicy(c *gin.Context) {
+	name := c.Param("name")
 	if err := h.UserManager.DeletePolicyTemplate(name); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
-func (h *AdminHandler) GetObjectLegalHold(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+
+func (h *AdminHandler) GetObjectLegalHold(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
 	obj, err := h.Storage.StatObject(bucket, key, versionID)
 	if err != nil {
-		return c.Status(http.StatusNotFound).SendString(err.Error())
+		c.String(http.StatusNotFound, err.Error())
+		return
 	}
 
-	return c.JSON(fiber.Map{"legalHold": obj.LegalHold})
+	c.JSON(http.StatusOK, gin.H{"legalHold": obj.LegalHold})
 }
 
 // Webhook Handlers
 
-func (h *AdminHandler) ListWebhooks(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) ListWebhooks(c *gin.Context) {
+	bucket := c.Param("bucket")
 	db := h.Storage.(*storage.FileStorage).DB
 	hooks, err := db.ListWebhooks(bucket)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.JSON(hooks)
+	c.JSON(http.StatusOK, hooks)
 }
 
-func (h *AdminHandler) CreateWebhook(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) CreateWebhook(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		URL    string   `json:"url"`
 		Events []string `json:"events"`
 		Secret string   `json:"secret"`
 		Active bool     `json:"active"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	eventsJSON, _ := json.Marshal(req.Events)
@@ -568,25 +606,27 @@ func (h *AdminHandler) CreateWebhook(c *fiber.Ctx) error {
 		Active: req.Active,
 	})
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.Status(http.StatusCreated).JSON(fiber.Map{"id": id})
+	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
-func (h *AdminHandler) DeleteWebhook(c *fiber.Ctx) error {
-	idStr := c.Params("id")
+func (h *AdminHandler) DeleteWebhook(c *gin.Context) {
+	idStr := c.Param("id")
 	var id int64
 	fmt.Sscanf(idStr, "%d", &id)
 
 	db := h.Storage.(*storage.FileStorage).DB
 	if err := db.DeleteWebhook(id); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) GetAuditLogs(c *fiber.Ctx) error {
+func (h *AdminHandler) GetAuditLogs(c *gin.Context) {
 	limitStr := c.Query("limit")
 	offsetStr := c.Query("offset")
 
@@ -599,13 +639,14 @@ func (h *AdminHandler) GetAuditLogs(c *fiber.Ctx) error {
 	db := h.Storage.(*storage.FileStorage).DB
 	logs, err := db.ListAuditLogs(limit, offset)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.JSON(logs)
+	c.JSON(http.StatusOK, logs)
 }
 
-func (h *AdminHandler) GetStorageAnalytics(c *fiber.Ctx) error {
+func (h *AdminHandler) GetStorageAnalytics(c *gin.Context) {
 	daysStr := c.Query("days")
 	days, _ := strconv.Atoi(daysStr)
 	if days == 0 {
@@ -615,13 +656,14 @@ func (h *AdminHandler) GetStorageAnalytics(c *fiber.Ctx) error {
 	db := h.Storage.(*storage.FileStorage).DB
 	history, err := db.GetStorageHistory(days)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.JSON(history)
+	c.JSON(http.StatusOK, history)
 }
 
-func (h *AdminHandler) GetActionAnalytics(c *fiber.Ctx) error {
+func (h *AdminHandler) GetActionAnalytics(c *gin.Context) {
 	daysStr := c.Query("days")
 	days, _ := strconv.Atoi(daysStr)
 	if days == 0 {
@@ -631,111 +673,125 @@ func (h *AdminHandler) GetActionAnalytics(c *fiber.Ctx) error {
 	db := h.Storage.(*storage.FileStorage).DB
 	trends, err := db.GetActionTrends(days)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.JSON(trends)
+	c.JSON(http.StatusOK, trends)
 }
 
-func (h *AdminHandler) GetBucketWebsite(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) GetBucketWebsite(c *gin.Context) {
+	bucket := c.Param("bucket")
 	config, err := h.Storage.GetBucketWebsite(bucket)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 	if config == nil {
-		return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "Website configuration not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Website configuration not found"})
+		return
 	}
-	return c.JSON(config)
+	c.JSON(http.StatusOK, config)
 }
 
-func (h *AdminHandler) SetBucketWebsite(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetBucketWebsite(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var config storage.WebsiteConfiguration
-	if err := c.BodyParser(&config); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid website configuration")
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.String(http.StatusBadRequest, "Invalid website configuration")
+		return
 	}
 
 	if err := h.Storage.PutBucketWebsite(bucket, config); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) DeleteBucketWebsite(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) DeleteBucketWebsite(c *gin.Context) {
+	bucket := c.Param("bucket")
 	if err := h.Storage.DeleteBucketWebsite(bucket); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) SetBucketSoftDelete(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) SetBucketSoftDelete(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		Enabled       bool `json:"enabled"`
-		RetentionDays int  `json:"retention_days"`
+		RetentionDays int  `json:"json:"retention_days""`
 	}
-	if err := c.BodyParser(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("Soft delete bind error: %v", err)
-		return c.Status(http.StatusBadRequest).SendString(fmt.Sprintf("Invalid request: %v", err))
+		c.String(http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
 	}
 	if err := h.Storage.SetBucketSoftDelete(bucket, req.Enabled, req.RetentionDays); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) ListTrash(c *fiber.Ctx) error {
+func (h *AdminHandler) ListTrash(c *gin.Context) {
 	bucket := c.Query("bucket")
 	search := c.Query("search")
 	objects, err := h.Storage.ListTrash(bucket, search)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.JSON(objects)
+	c.JSON(http.StatusOK, objects)
 }
 
-func (h *AdminHandler) EmptyTrash(c *fiber.Ctx) error {
+func (h *AdminHandler) EmptyTrash(c *gin.Context) {
 	bucket := c.Query("bucket")
 	if err := h.Storage.EmptyTrash(bucket); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) RestoreObject(c *fiber.Ctx) error {
+func (h *AdminHandler) RestoreObject(c *gin.Context) {
 	var req struct {
 		Bucket    string `json:"bucket"`
 		Key       string `json:"key"`
 		VersionID string `json:"versionId"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 	if err := h.Storage.RestoreObject(req.Bucket, req.Key, req.VersionID); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) DeleteTrashObject(c *fiber.Ctx) error {
+func (h *AdminHandler) DeleteTrashObject(c *gin.Context) {
 	bucket := c.Query("bucket")
 	key := c.Query("key")
 	versionID := c.Query("versionId")
 
 	if bucket == "" || key == "" {
-		return c.Status(http.StatusBadRequest).SendString("Missing bucket or key")
+		c.String(http.StatusBadRequest, "Missing bucket or key")
+		return
 	}
 
 	// Permanent deletion from trash
 	if err := h.Storage.DeleteTrashObject(bucket, key, versionID); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) BulkRestoreObjects(c *fiber.Ctx) error {
+func (h *AdminHandler) BulkRestoreObjects(c *gin.Context) {
 	var req struct {
 		Items []struct {
 			Bucket    string `json:"bucket"`
@@ -743,17 +799,18 @@ func (h *AdminHandler) BulkRestoreObjects(c *fiber.Ctx) error {
 			VersionID string `json:"versionId"`
 		} `json:"items"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	for _, item := range req.Items {
 		h.Storage.RestoreObject(item.Bucket, item.Key, item.VersionID)
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) BulkDeleteTrashObjects(c *fiber.Ctx) error {
+func (h *AdminHandler) BulkDeleteTrashObjects(c *gin.Context) {
 	var req struct {
 		Items []struct {
 			Bucket    string `json:"bucket"`
@@ -761,8 +818,9 @@ func (h *AdminHandler) BulkDeleteTrashObjects(c *fiber.Ctx) error {
 			VersionID string `json:"versionId"`
 		} `json:"items"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	for _, item := range req.Items {
@@ -776,11 +834,11 @@ func (h *AdminHandler) BulkDeleteTrashObjects(c *fiber.Ctx) error {
 		}
 	}
 
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *AdminHandler) ShareObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *AdminHandler) ShareObject(c *gin.Context) {
+	bucket := c.Param("bucket")
 	var req struct {
 		Key           string `json:"key"`
 		VersionID     string `json:"versionId"`
@@ -788,8 +846,9 @@ func (h *AdminHandler) ShareObject(c *fiber.Ctx) error {
 		AllowedIP     string `json:"allowedIp"`
 		OneTimeUse    bool   `json:"oneTimeUse"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	if req.ExpirySeconds <= 0 {
@@ -798,36 +857,37 @@ func (h *AdminHandler) ShareObject(c *fiber.Ctx) error {
 
 	presignedURL, err := h.GeneratePresignedURL(bucket, req.Key, req.VersionID, time.Duration(req.ExpirySeconds)*time.Second, req.AllowedIP, req.OneTimeUse)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.JSON(fiber.Map{
+	c.JSON(http.StatusOK, gin.H{
 		"url": presignedURL,
 	})
 }
 
-func (h *AdminHandler) VerifyAdminPassword(c *fiber.Ctx) error {
+func (h *AdminHandler) VerifyAdminPassword(c *gin.Context) {
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
 	}
 
-	username, ok := c.Locals("username").(string)
-	if !ok {
-		return c.Status(http.StatusUnauthorized).SendString("User context missing")
+	userInter, exists := c.Get("user")
+	if !exists {
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+	user := userInter.(*auth.User)
+
+	if !h.UserManager.CheckPassword(user.Username, req.Password) {
+		c.Status(http.StatusUnauthorized)
+		return
 	}
 
-	valid, err := h.UserManager.VerifyPassword(username, req.Password)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
-	}
-	if !valid {
-		return c.Status(http.StatusUnauthorized).SendString("Invalid password")
-	}
-
-	return c.JSON(fiber.Map{"valid": true})
+	c.JSON(http.StatusOK, gin.H{"valid": true})
 }
 
 func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expiry time.Duration, allowedIP string, oneTimeUse bool) (string, error) {
@@ -910,38 +970,43 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 	return finalURL, nil
 }
 
-func (h *AdminHandler) GetSystemSettings(c *fiber.Ctx) error {
+func (h *AdminHandler) GetSystemSettings(c *gin.Context) {
 	fs, ok := h.Storage.(*storage.FileStorage)
 	if !ok {
-		return c.Status(http.StatusInternalServerError).SendString("Storage type not supported")
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
 	}
 
 	slackWebhook, err := fs.DB.GetSystemSetting("slack_webhook_url")
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.JSON(fiber.Map{
+	c.JSON(http.StatusOK, gin.H{
 		"slack_webhook_url": slackWebhook,
 	})
 }
 
-func (h *AdminHandler) UpdateSystemSettings(c *fiber.Ctx) error {
+func (h *AdminHandler) UpdateSystemSettings(c *gin.Context) {
 	var req struct {
 		SlackWebhookURL string `json:"slack_webhook_url"`
 	}
-	if err := c.BodyParser(&req); err != nil {
-		return c.Status(http.StatusBadRequest).SendString("Invalid request")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, "Invalid request")
+		return
 	}
 
 	fs, ok := h.Storage.(*storage.FileStorage)
 	if !ok {
-		return c.Status(http.StatusInternalServerError).SendString("Storage type not supported")
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
 	}
 
 	if err := fs.DB.SetSystemSetting("slack_webhook_url", req.SlackWebhookURL); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }

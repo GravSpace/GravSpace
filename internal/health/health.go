@@ -1,10 +1,11 @@
 package health
 
 import (
+	"net/http"
 	"os"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gin-gonic/gin"
 )
 
 type HealthStatus struct {
@@ -24,16 +25,16 @@ func NewHealthChecker() *HealthChecker {
 }
 
 // Liveness probe - indicates if the application is running
-func (h *HealthChecker) LivenessHandler(c *fiber.Ctx) error {
+func (h *HealthChecker) LivenessHandler(c *gin.Context) {
 	status := HealthStatus{
 		Status:    "UP",
 		Timestamp: time.Now(),
 	}
-	return c.JSON(status)
+	c.JSON(http.StatusOK, status)
 }
 
 // Readiness probe - indicates if the application is ready to serve traffic
-func (h *HealthChecker) ReadinessHandler(c *fiber.Ctx) error {
+func (h *HealthChecker) ReadinessHandler(c *gin.Context) {
 	checks := make(map[string]string)
 	allHealthy := true
 
@@ -58,24 +59,25 @@ func (h *HealthChecker) ReadinessHandler(c *fiber.Ctx) error {
 
 	if allHealthy {
 		status.Status = "UP"
-		return c.JSON(status)
+		c.JSON(http.StatusOK, status)
 	} else {
 		status.Status = "DOWN"
-		return c.Status(fiber.StatusServiceUnavailable).JSON(status)
+		c.JSON(http.StatusServiceUnavailable, status)
 	}
 }
 
 // Startup probe - indicates if the application has started successfully
-func (h *HealthChecker) StartupHandler(c *fiber.Ctx) error {
+func (h *HealthChecker) StartupHandler(c *gin.Context) {
 	// Consider the app started if it's been running for at least 5 seconds
 	if time.Since(h.StartTime) < 5*time.Second {
-		return c.Status(fiber.StatusServiceUnavailable).JSON(HealthStatus{
+		c.JSON(http.StatusServiceUnavailable, HealthStatus{
 			Status:    "STARTING",
 			Timestamp: time.Now(),
 		})
+		return
 	}
 
-	return c.JSON(HealthStatus{
+	c.JSON(http.StatusOK, HealthStatus{
 		Status:    "UP",
 		Timestamp: time.Now(),
 	})

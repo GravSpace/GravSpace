@@ -1,7 +1,6 @@
 package s3
 
 import (
-	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -12,7 +11,7 @@ import (
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/storage"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gin-gonic/gin"
 )
 
 func init() {
@@ -202,17 +201,18 @@ type DefaultRetention struct {
 	Days int    `xml:"Days"`
 }
 
-func (h *S3Handler) PostBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) PostBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 
 	// Batch Delete
-	if c.Query("delete") != "" || strings.Contains(c.OriginalURL(), "?delete") {
+	if c.Query("delete") != "" || strings.Contains(c.Request.URL.RawQuery, "delete") {
 		var req DeleteRequest
-		if err := xml.NewDecoder(c.Context().RequestBodyStream()).Decode(&req); err != nil {
-			return c.Status(http.StatusBadRequest).SendString(err.Error())
+		if err := xml.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
 		}
 
-		bypass := c.Get("x-amz-bypass-governance-retention") == "true"
+		bypass := c.GetHeader("x-amz-bypass-governance-retention") == "true"
 		result := DeleteResult{}
 		for _, obj := range req.Objects {
 			if err := h.Storage.DeleteObject(bucket, obj.Key, obj.VersionId, bypass); err != nil {
@@ -229,21 +229,23 @@ func (h *S3Handler) PostBucket(c *fiber.Ctx) error {
 			}
 		}
 
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
-	return c.SendStatus(http.StatusNotFound)
+	c.Status(http.StatusNotFound)
 }
 
-func (h *S3Handler) PutBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) PutBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 
 	// CORS
-	if c.Query("cors") != "" || strings.Contains(c.OriginalURL(), "?cors") {
+	if c.Query("cors") != "" || strings.Contains(c.Request.URL.RawQuery, "cors") {
 		var req CORSConfiguration
-		if err := xml.NewDecoder(c.Context().RequestBodyStream()).Decode(&req); err != nil {
-			return c.Status(http.StatusBadRequest).SendString(err.Error())
+		if err := xml.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
 		}
 
 		config := storage.CORSConfiguration{}
@@ -258,16 +260,19 @@ func (h *S3Handler) PutBucket(c *fiber.Ctx) error {
 		}
 
 		if err := h.Storage.PutBucketCors(bucket, config); err != nil {
-			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			return
 		}
-		return c.SendStatus(http.StatusOK)
+		c.Status(http.StatusOK)
+		return
 	}
 
 	// Lifecycle
-	if c.Query("lifecycle") != "" || strings.Contains(c.OriginalURL(), "?lifecycle") {
+	if c.Query("lifecycle") != "" || strings.Contains(c.Request.URL.RawQuery, "lifecycle") {
 		var req LifecycleConfiguration
-		if err := xml.NewDecoder(c.Context().RequestBodyStream()).Decode(&req); err != nil {
-			return c.Status(http.StatusBadRequest).SendString(err.Error())
+		if err := xml.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
 		}
 
 		config := storage.LifecycleConfiguration{}
@@ -285,51 +290,61 @@ func (h *S3Handler) PutBucket(c *fiber.Ctx) error {
 		}
 
 		if err := h.Storage.PutBucketLifecycle(bucket, config); err != nil {
-			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			return
 		}
-		return c.SendStatus(http.StatusOK)
+		c.Status(http.StatusOK)
+		return
 	}
 
 	// Object Lock
-	if c.Query("object-lock") != "" || strings.Contains(c.OriginalURL(), "?object-lock") {
+	if c.Query("object-lock") != "" || strings.Contains(c.Request.URL.RawQuery, "object-lock") {
 		var req ObjectLockConfiguration
-		if err := xml.NewDecoder(c.Context().RequestBodyStream()).Decode(&req); err != nil {
-			return c.Status(http.StatusBadRequest).SendString(err.Error())
+		if err := xml.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
 		}
 		enabled := req.ObjectLockEnabled == "Enabled"
 		if err := h.Storage.SetBucketObjectLock(bucket, enabled); err != nil {
-			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			return
 		}
 		if req.Rule != nil && req.Rule.DefaultRetention != nil {
 			if err := h.Storage.SetBucketDefaultRetention(bucket, req.Rule.DefaultRetention.Mode, req.Rule.DefaultRetention.Days); err != nil {
-				return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+				h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+				return
 			}
 		}
-		return c.SendStatus(http.StatusOK)
+		c.Status(http.StatusOK)
+		return
 	}
 
 	exists, err := h.Storage.BucketExists(bucket)
 	if err != nil {
-		return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		return
 	}
 	if exists {
-		return c.SendStatus(http.StatusOK)
+		c.Status(http.StatusOK)
+		return
 	}
 	if err := h.Storage.CreateBucket(bucket); err != nil {
-		return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *S3Handler) sendS3Error(c *fiber.Ctx, code, message, bucket, key string) error {
+func (h *S3Handler) sendS3Error(c *gin.Context, code, message, bucket, key string) {
 	// Simple helper to match existing error patterns if any, or just return status
-	return c.Status(http.StatusInternalServerError).SendString(message)
+	c.String(http.StatusInternalServerError, message)
 }
 
-func (h *S3Handler) ListBuckets(c *fiber.Ctx) error {
+func (h *S3Handler) ListBuckets(c *gin.Context) {
 	buckets, err := h.Storage.ListBuckets()
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	result := ListAllMyBucketsResult{
@@ -339,66 +354,72 @@ func (h *S3Handler) ListBuckets(c *fiber.Ctx) error {
 		result.Buckets = append(result.Buckets, Bucket{Name: b, CreationDate: "2026-01-01T00:00:00Z"})
 	}
 
-	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-	return c.XML(result)
+	c.Header("Content-Type", "application/xml")
+	c.XML(http.StatusOK, result)
 }
 
-func (h *S3Handler) CreateBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) CreateBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 	exists, err := h.Storage.BucketExists(bucket)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 	if exists {
-		// S3 returns 200 if you already own it, but for simplicity/clarity
-		// we can keep it as is or return 200. Let's return 200 to be compatible
-		// with "idempotent" create bucket behavior often expected.
-		return c.SendStatus(http.StatusOK)
+		// S3 returns 200 if you already own it
+		c.Status(http.StatusOK)
+		return
 	}
 	if err := h.Storage.CreateBucket(bucket); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *S3Handler) HeadBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) HeadBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 	exists, err := h.Storage.BucketExists(bucket)
 	if err != nil {
-		return c.SendStatus(http.StatusInternalServerError)
+		c.Status(http.StatusInternalServerError)
+		return
 	}
 	if !exists {
-		return c.SendStatus(http.StatusNotFound)
+		c.Status(http.StatusNotFound)
+		return
 	}
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *S3Handler) GetObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *S3Handler) GetObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
-	if c.Query("tagging") != "" || strings.Contains(c.OriginalURL(), "?tagging") {
+	if c.Query("tagging") != "" || strings.Contains(c.Request.URL.RawQuery, "tagging") {
 		tags, err := h.Storage.GetObjectTagging(bucket, key, versionID)
 		if err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
 		result := Tagging{}
 		for k, v := range tags {
 			result.TagSet = append(result.TagSet, Tag{Key: k, Value: v})
 		}
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
 	reader, obj, err := h.Storage.GetObject(bucket, key, versionID)
 	if err != nil {
-		return c.SendStatus(http.StatusNotFound)
+		c.Status(http.StatusNotFound)
+		return
 	}
 
 	// Use metadata directly from Object
 	if obj.EncryptionType != "" {
-		c.Set("x-amz-server-side-encryption", obj.EncryptionType)
+		c.Header("x-amz-server-side-encryption", obj.EncryptionType)
 	}
 
 	contentType := obj.ContentType
@@ -412,12 +433,12 @@ func (h *S3Handler) GetObject(c *fiber.Ctx) error {
 	}
 
 	// Set S3 headers
-	c.Set("x-amz-version-id", obj.VersionID)
-	c.Set("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
-	c.Set("Last-Modified", obj.ModTime.Format(time.RFC1123))
+	c.Header("x-amz-version-id", obj.VersionID)
+	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
+	c.Header("Last-Modified", obj.ModTime.Format(time.RFC1123))
 
 	// Handle Range Request
-	rangeHeader := c.Get("Range")
+	rangeHeader := c.GetHeader("Range")
 	if rangeHeader != "" && strings.HasPrefix(rangeHeader, "bytes=") {
 		var start, end int64
 		fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
@@ -426,36 +447,36 @@ func (h *S3Handler) GetObject(c *fiber.Ctx) error {
 		}
 
 		contentLength := end - start + 1
-		c.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
-		c.Set("Content-Length", fmt.Sprintf("%d", contentLength))
+		c.Header("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
+		c.Header("Content-Length", fmt.Sprintf("%d", contentLength))
 
 		// Skip 'start' bytes
 		io.CopyN(io.Discard, reader, start)
-		c.Type(contentType)
-		return c.Status(http.StatusPartialContent).SendStream(io.LimitReader(reader, contentLength))
+		c.DataFromReader(http.StatusPartialContent, contentLength, contentType, io.LimitReader(reader, contentLength), nil)
+		return
 	}
 
 	// Support response-content-disposition query param
 	if disp := c.Query("response-content-disposition"); disp != "" {
-		c.Set("Content-Disposition", disp)
+		c.Header("Content-Disposition", disp)
 	} else if c.Query("download") == "true" {
 		filename := filepath.Base(key)
-		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	}
 
-	c.Set("Content-Length", fmt.Sprintf("%d", obj.Size))
-	c.Type(contentType)
-	return c.SendStream(reader)
+	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
+	c.DataFromReader(http.StatusOK, obj.Size, contentType, reader, nil)
 }
 
-func (h *S3Handler) HeadObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *S3Handler) HeadObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 
 	obj, err := h.Storage.StatObject(bucket, key, versionID)
 	if err != nil {
-		return c.SendStatus(http.StatusNotFound)
+		c.Status(http.StatusNotFound)
+		return
 	}
 
 	contentType := obj.ContentType
@@ -468,95 +489,98 @@ func (h *S3Handler) HeadObject(c *fiber.Ctx) error {
 		contentType = "application/octet-stream"
 	}
 
-	c.Set(fiber.HeaderContentType, contentType)
-	c.Set(fiber.HeaderContentLength, fmt.Sprintf("%d", obj.Size))
-	c.Set(fiber.HeaderLastModified, obj.ModTime.Format(time.RFC1123))
-	c.Set("x-amz-version-id", obj.VersionID)
-	c.Set("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
+	c.Header("Last-Modified", obj.ModTime.Format(time.RFC1123))
+	c.Header("x-amz-version-id", obj.VersionID)
+	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
 	if obj.EncryptionType != "" {
-		c.Set("x-amz-server-side-encryption", obj.EncryptionType)
+		c.Header("x-amz-server-side-encryption", obj.EncryptionType)
 	}
 
-	return c.SendStatus(http.StatusOK)
+	c.Status(http.StatusOK)
 }
 
-func (h *S3Handler) PutObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *S3Handler) PutObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	uploadID := c.Query("uploadId")
 	partNumber := c.Query("partNumber")
 	versionID := c.Query("versionId")
 
-	if c.Query("tagging") != "" || strings.Contains(c.OriginalURL(), "?tagging") {
+	if c.Query("tagging") != "" || strings.Contains(c.Request.URL.RawQuery, "tagging") {
 		var req Tagging
-		if err := xml.NewDecoder(c.Context().RequestBodyStream()).Decode(&req); err != nil {
-			return c.Status(http.StatusBadRequest).SendString(err.Error())
+		if err := xml.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
 		}
 		tags := make(map[string]string)
 		for _, t := range req.TagSet {
 			tags[t.Key] = t.Value
 		}
 		if err := h.Storage.PutObjectTagging(bucket, key, versionID, tags); err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
-		return c.SendStatus(http.StatusOK)
+		c.Status(http.StatusOK)
+		return
 	}
 
 	if uploadID != "" && partNumber != "" {
 		var pn int
 		fmt.Sscanf(partNumber, "%d", &pn)
-		etag, err := h.Storage.UploadPart(bucket, key, uploadID, pn, c.Context().RequestBodyStream())
+		etag, err := h.Storage.UploadPart(bucket, key, uploadID, pn, c.Request.Body)
 		if err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
-		c.Set("ETag", etag)
-		return c.SendStatus(http.StatusOK)
+		c.Header("ETag", etag)
+		c.Status(http.StatusOK)
+		return
 	}
 
-	encryptionType := c.Get("x-amz-server-side-encryption")
+	encryptionType := c.GetHeader("x-amz-server-side-encryption")
 	
-	// Fallback to c.Body() if RequestBodyStream is nil
-	reader := io.Reader(c.Context().RequestBodyStream())
-	if reader == nil {
-		reader = bytes.NewReader(c.Body())
-	}
-
-	vid, err := h.Storage.PutObject(bucket, key, reader, encryptionType)
+	vid, err := h.Storage.PutObject(bucket, key, c.Request.Body, encryptionType)
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 	if encryptionType != "" {
-		c.Set("x-amz-server-side-encryption", encryptionType)
+		c.Header("x-amz-server-side-encryption", encryptionType)
 	}
-	c.Set("x-amz-version-id", vid)
-	return c.SendStatus(http.StatusOK)
+	c.Header("x-amz-version-id", vid)
+	c.Status(http.StatusOK)
 }
 
-func (h *S3Handler) PostObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *S3Handler) PostObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	uploadID := c.Query("uploadId")
 
 	// Initiate Multipart Upload
-	if c.Query("uploads") != "" || strings.Contains(c.OriginalURL(), "?uploads") {
+	if c.Query("uploads") != "" || strings.Contains(c.Request.URL.RawQuery, "uploads") {
 		uid, err := h.Storage.InitiateMultipartUpload(bucket, key)
 		if err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
 		result := InitiateMultipartUploadResult{
 			Bucket:   bucket,
 			Key:      key,
 			UploadId: uid,
 		}
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
 	// Complete Multipart Upload
 	if uploadID != "" {
 		var req CompleteMultipartUpload
-		if err := xml.NewDecoder(c.Context().RequestBodyStream()).Decode(&req); err != nil {
-			return c.Status(http.StatusBadRequest).SendString(err.Error())
+		if err := xml.NewDecoder(c.Request.Body).Decode(&req); err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
 		}
 
 		var parts []storage.Part
@@ -569,79 +593,90 @@ func (h *S3Handler) PostObject(c *fiber.Ctx) error {
 
 		vid, err := h.Storage.CompleteMultipartUpload(bucket, key, uploadID, parts)
 		if err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
 
 		result := CompleteMultipartUploadResult{
-			Location: fmt.Sprintf("http://%s/%s/%s", c.Hostname(), bucket, key),
+			Location: fmt.Sprintf("http://%s/%s/%s", c.Request.Host, bucket, key),
 			Bucket:   bucket,
 			Key:      key,
 			ETag:     fmt.Sprintf("\"%s\"", vid),
 		}
-		c.Set("x-amz-version-id", vid)
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("x-amz-version-id", vid)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
-	return c.SendStatus(http.StatusNotFound)
+	c.Status(http.StatusNotFound)
 }
 
-func (h *S3Handler) DeleteObject(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	key := c.Params("*")
+func (h *S3Handler) DeleteObject(c *gin.Context) {
+	bucket := c.Param("bucket")
+	key := c.Param("key")
 	versionID := c.Query("versionId")
 	uploadID := c.Query("uploadId")
 
 	if uploadID != "" {
 		if err := h.Storage.AbortMultipartUpload(bucket, key, uploadID); err != nil {
-			return c.Status(http.StatusInternalServerError).SendString(err.Error())
+			c.String(http.StatusInternalServerError, err.Error())
+			return
 		}
-		return c.SendStatus(http.StatusNoContent)
+		c.Status(http.StatusNoContent)
+		return
 	}
 
-	bypass := c.Get("x-amz-bypass-governance-retention") == "true"
+	bypass := c.GetHeader("x-amz-bypass-governance-retention") == "true"
 	if err := h.Storage.DeleteObject(bucket, key, versionID, bypass); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-func (h *S3Handler) DeleteBucket(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) DeleteBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
 
 	// CORS
-	if c.Query("cors") != "" || strings.Contains(c.OriginalURL(), "?cors") {
+	if c.Query("cors") != "" || strings.Contains(c.Request.URL.RawQuery, "cors") {
 		if err := h.Storage.DeleteBucketCors(bucket); err != nil {
-			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			return
 		}
-		return c.SendStatus(http.StatusNoContent)
+		c.Status(http.StatusNoContent)
+		return
 	}
 
 	// Lifecycle
-	if c.Query("lifecycle") != "" || strings.Contains(c.OriginalURL(), "?lifecycle") {
+	if c.Query("lifecycle") != "" || strings.Contains(c.Request.URL.RawQuery, "lifecycle") {
 		if err := h.Storage.DeleteBucketLifecycle(bucket); err != nil {
-			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			return
 		}
-		return c.SendStatus(http.StatusNoContent)
+		c.Status(http.StatusNoContent)
+		return
 	}
 
 	if err := h.Storage.DeleteBucket(bucket); err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
-	return c.SendStatus(http.StatusNoContent)
+	c.Status(http.StatusNoContent)
 }
 
-func (h *S3Handler) ListObjects(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) ListObjects(c *gin.Context) {
+	bucket := c.Param("bucket")
 	prefix := c.Query("prefix")
 	delimiter := c.Query("delimiter")
 	listType := c.Query("list-type")
 
 	// CORS
-	if c.Query("cors") != "" || strings.Contains(c.OriginalURL(), "?cors") {
+	if c.Query("cors") != "" || strings.Contains(c.Request.URL.RawQuery, "cors") {
 		config, err := h.Storage.GetBucketCors(bucket)
 		if err != nil {
-			return h.sendS3Error(c, "NoSuchCORSConfiguration", "The CORS configuration does not exist", bucket, "")
+			h.sendS3Error(c, "NoSuchCORSConfiguration", "The CORS configuration does not exist", bucket, "")
+			return
 		}
 
 		result := CORSConfiguration{}
@@ -655,15 +690,17 @@ func (h *S3Handler) ListObjects(c *fiber.Ctx) error {
 			})
 		}
 
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
 	// Lifecycle
-	if c.Query("lifecycle") != "" || strings.Contains(c.OriginalURL(), "?lifecycle") {
+	if c.Query("lifecycle") != "" || strings.Contains(c.Request.URL.RawQuery, "lifecycle") {
 		config, err := h.Storage.GetBucketLifecycle(bucket)
 		if err != nil {
-			return h.sendS3Error(c, "NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist", bucket, "")
+			h.sendS3Error(c, "NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist", bucket, "")
+			return
 		}
 
 		result := LifecycleConfiguration{}
@@ -680,14 +717,16 @@ func (h *S3Handler) ListObjects(c *fiber.Ctx) error {
 			})
 		}
 
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 	// Object Lock
-	if c.Query("object-lock") != "" || strings.Contains(c.OriginalURL(), "?object-lock") {
+	if c.Query("object-lock") != "" || strings.Contains(c.Request.URL.RawQuery, "object-lock") {
 		enabled, mode, days, err := h.Storage.GetBucketObjectLock(bucket)
 		if err != nil {
-			return h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+			return
 		}
 		result := ObjectLockConfiguration{
 			ObjectLockEnabled: "Disabled",
@@ -703,18 +742,21 @@ func (h *S3Handler) ListObjects(c *fiber.Ctx) error {
 				},
 			}
 		}
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
 	// Check if this is a ListVersions request
-	if c.Query("versions") != "" || strings.Contains(c.OriginalURL(), "?versions") {
-		return h.ListVersions(c)
+	if c.Query("versions") != "" || strings.Contains(c.Request.URL.RawQuery, "versions") {
+		h.ListVersions(c)
+		return
 	}
 
 	objects, commonPrefixes, err := h.Storage.ListObjects(bucket, prefix, delimiter, "")
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	if listType == "2" {
@@ -736,8 +778,9 @@ func (h *S3Handler) ListObjects(c *fiber.Ctx) error {
 				StorageClass: "STANDARD",
 			})
 		}
-		c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-		return c.XML(result)
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
 	}
 
 	result := ListBucketResult{
@@ -756,18 +799,19 @@ func (h *S3Handler) ListObjects(c *fiber.Ctx) error {
 		})
 	}
 
-	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-	return c.XML(result)
+	c.Header("Content-Type", "application/xml")
+	c.XML(http.StatusOK, result)
 }
 
-func (h *S3Handler) ListVersions(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
+func (h *S3Handler) ListVersions(c *gin.Context) {
+	bucket := c.Param("bucket")
 	prefix := c.Query("prefix")
 	delimiter := c.Query("delimiter")
 
 	objects, _, err := h.Storage.ListObjects(bucket, prefix, "", "") // Get all objects first
 	if err != nil {
-		return c.Status(http.StatusInternalServerError).SendString(err.Error())
+		c.String(http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	result := ListVersionsResult{
@@ -792,19 +836,20 @@ func (h *S3Handler) ListVersions(c *fiber.Ctx) error {
 		}
 	}
 
-	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-	return c.XML(result)
+	c.Header("Content-Type", "application/xml")
+	c.XML(http.StatusOK, result)
 }
 
 // ServeWebsite serves static website content from a bucket
-func (h *S3Handler) ServeWebsite(c *fiber.Ctx) error {
-	bucket := c.Params("bucket")
-	path := c.Params("*")
+func (h *S3Handler) ServeWebsite(c *gin.Context) {
+	bucket := c.Param("bucket")
+	path := c.Param("key")
 
 	// Get website configuration
 	config, err := h.Storage.GetBucketWebsite(bucket)
 	if err != nil || config == nil {
-		return c.Status(http.StatusNotFound).SendString("Website configuration not found for this bucket")
+		c.String(http.StatusNotFound, "Website configuration not found for this bucket")
+		return
 	}
 
 	// Determine the key to fetch
@@ -823,17 +868,18 @@ func (h *S3Handler) ServeWebsite(c *fiber.Ctx) error {
 	if err != nil {
 		// Object not found - serve error document if configured
 		if config.ErrorDocument != nil && config.ErrorDocument.Key != "" {
-			errorReader, _, errorErr := h.Storage.GetObject(bucket, config.ErrorDocument.Key, "")
+			errorReader, errorObj, errorErr := h.Storage.GetObject(bucket, config.ErrorDocument.Key, "")
 			if errorErr == nil {
 				contentType := mime.TypeByExtension(filepath.Ext(config.ErrorDocument.Key))
 				if contentType == "" {
 					contentType = "text/html"
 				}
-				c.Type(contentType)
-				return c.Status(http.StatusNotFound).SendStream(errorReader)
+				c.DataFromReader(http.StatusNotFound, errorObj.Size, contentType, errorReader, nil)
+				return
 			}
 		}
-		return c.Status(http.StatusNotFound).SendString("Not Found")
+		c.String(http.StatusNotFound, "Not Found")
+		return
 	}
 
 	// Determine content type
@@ -848,11 +894,10 @@ func (h *S3Handler) ServeWebsite(c *fiber.Ctx) error {
 	}
 
 	// Set headers
-	c.Set("x-amz-version-id", obj.VersionID)
-	c.Set("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
-	c.Set("Last-Modified", obj.ModTime.Format(time.RFC1123))
-	c.Set("Content-Length", fmt.Sprintf("%d", obj.Size))
+	c.Header("x-amz-version-id", obj.VersionID)
+	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
+	c.Header("Last-Modified", obj.ModTime.Format(time.RFC1123))
+	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
 
-	c.Type(contentType)
-	return c.SendStream(reader)
+	c.DataFromReader(http.StatusOK, obj.Size, contentType, reader, nil)
 }

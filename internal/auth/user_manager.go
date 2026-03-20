@@ -524,6 +524,11 @@ func (um *UserManager) VerifyPassword(username, password string) (bool, error) {
 	return um.DB.VerifyPassword(username, password)
 }
 
+func (um *UserManager) CheckPassword(username, password string) bool {
+	valid, _ := um.VerifyPassword(username, password)
+	return valid
+}
+
 func (um *UserManager) GetAccessKeys(username string) ([]AccessKey, error) {
 	um.mu.RLock()
 	defer um.mu.RUnlock()

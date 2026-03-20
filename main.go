@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,14 +18,11 @@ import (
 	"github.com/GravSpace/GravSpace/internal/notifications"
 	"github.com/GravSpace/GravSpace/internal/s3"
 	"github.com/GravSpace/GravSpace/internal/storage"
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
-	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/valyala/fasthttp/fasthttpadaptor"
 )
 
 // Version information (set via ldflags during build)
@@ -54,19 +52,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Initialize Apps
-	adminApp := fiber.New(fiber.Config{
-		DisableStartupMessage: true,
-		AppName:               "GravSpace Admin API",
-		StrictRouting:         true,
-		CaseSensitive:         true,
-	})
-	s3App := fiber.New(fiber.Config{
-		DisableStartupMessage: true,
-		AppName:               "GravSpace S3 API",
-		StrictRouting:         true,
-		CaseSensitive:         true,
-	})
+	// Initialize Apps with Gin
+	gin.SetMode(gin.ReleaseMode)
+	adminApp := gin.Default()
+	s3App := gin.Default()
 
 	// Log startup information
 	log.Printf("Starting GravSpace v%s", Version)
@@ -85,32 +74,33 @@ func main() {
 
 	s3Port := os.Getenv("S3_PORT")
 	if s3Port == "" {
-		// Use 9001 as default to avoid conflict with PHP-FPM (9000)
+		// Use 9000 as default
 		s3Port = "9000"
 	}
 
 	// Middleware config
 	corsOrigins := os.Getenv("CORS_ORIGINS")
-	allowedOrigins := "*"
+	allowedOrigins := []string{"*"}
 	if corsOrigins != "" {
-		allowedOrigins = corsOrigins
+		allowedOrigins = strings.Split(corsOrigins, ",")
 	}
 
 	corsConfig := cors.Config{
 		AllowOrigins:     allowedOrigins,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, x-amz-date, x-amz-content-sha256, x-amz-server-side-encryption",
-		AllowMethods:     "GET, HEAD, PUT, POST, DELETE, OPTIONS",
-		ExposeHeaders:    "x-amz-version-id, x-amz-server-side-encryption, ETag, Content-Length, Last-Modified",
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "x-amz-date", "x-amz-content-sha256", "x-amz-server-side-encryption"},
+		AllowMethods:     []string{"GET", "HEAD", "PUT", "POST", "DELETE", "OPTIONS"},
+		ExposeHeaders:    []string{"x-amz-version-id", "x-amz-server-side-encryption", "ETag", "Content-Length", "Last-Modified"},
 		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
 	}
 
-	// Apply global middleware to both
-	adminApp.Use(recover.New())
-	adminApp.Use(logger.New())
+	// Apply Gin middleware
+	adminApp.Use(gin.Recovery())
+	adminApp.Use(gin.Logger())
 	adminApp.Use(cors.New(corsConfig))
 
-	s3App.Use(recover.New())
-	s3App.Use(logger.New())
+	s3App.Use(gin.Recovery())
+	s3App.Use(gin.Logger())
 	s3App.Use(cors.New(corsConfig))
 
 	// Initialize Database
@@ -178,33 +168,31 @@ func main() {
 	}
 
 	// Health Check Routes (no auth required)
-	adminApp.Get("/health/live", healthChecker.LivenessHandler)
-	adminApp.Get("/health/ready", healthChecker.ReadinessHandler)
-	adminApp.Get("/health/startup", healthChecker.StartupHandler)
+	adminApp.GET("/health/live", healthChecker.LivenessHandler)
+	adminApp.GET("/health/ready", healthChecker.ReadinessHandler)
+	adminApp.GET("/health/startup", healthChecker.StartupHandler)
 
 	// Metrics endpoint (no auth required)
-	adminApp.Get("/metrics", func(c *fiber.Ctx) error {
-		handler := fasthttpadaptor.NewFastHTTPHandler(promhttp.Handler())
-		handler(c.Context())
-		return nil
-	})
+	adminApp.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// Start metrics updater
 	metrics.StartMetricsUpdater()
 
 	// Auth Routes
-	adminApp.Post("/login", func(c *fiber.Ctx) error {
+	adminApp.POST("/login", func(c *gin.Context) {
 		var login struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
 		}
-		if err := c.BodyParser(&login); err != nil {
-			return err
+		if err := c.ShouldBindJSON(&login); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 		}
 
 		user, err := um.Authenticate(login.Username, login.Password)
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Unauthorized"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			return
 		}
 
 		// Create token
@@ -215,23 +203,26 @@ func main() {
 
 		t, err := token.SignedString([]byte(jwtSecret))
 		if err != nil {
-			return err
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
 		}
 
-		return c.JSON(fiber.Map{
+		c.JSON(http.StatusOK, gin.H{
 			"token":    t,
 			"username": user.Username,
 		})
 	})
 
 	// JWT Middleware for Admin
-	jwtMid := func(c *fiber.Ctx) error {
-		authHeader := c.Get("Authorization")
+	jwtMid := func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			authHeader = c.Query("token")
 		}
 		if authHeader == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Missing token"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing token"})
+			c.Abort()
+			return
 		}
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
@@ -240,109 +231,111 @@ func main() {
 		})
 
 		if err != nil || !token.Valid {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Invalid token"})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
 		}
 
-		c.Locals("user", token)
-		return c.Next()
+		c.Set("user", token)
+		c.Next()
 	}
 
 	// Admin Routes
 	admin := adminApp.Group("/admin", jwtMid)
 
 	// General Admin Routes
-	admin.Post("/auth/verify", adminHandler.VerifyAdminPassword)
-	admin.Get("/buckets", adminHandler.ListBuckets)
-	admin.Put("/buckets/:bucket", adminHandler.CreateBucket)
-	admin.Delete("/buckets/:bucket", adminHandler.DeleteBucket)
-	admin.Get("/buckets/:bucket/info", adminHandler.GetBucketInfo)
-	admin.Put("/buckets/:bucket/versioning", adminHandler.SetBucketVersioning)
-	admin.Put("/buckets/:bucket/object-lock", adminHandler.SetBucketObjectLock)
-	admin.Put("/buckets/:bucket/retention", adminHandler.SetObjectRetention)
-	admin.Put("/buckets/:bucket/retention/default", adminHandler.SetBucketDefaultRetention)
-	admin.Put("/buckets/:bucket/quota", adminHandler.SetBucketQuota)
-	admin.Put("/buckets/:bucket/legal-hold", adminHandler.SetObjectLegalHold)
-	admin.Get("/buckets/:bucket/objects", adminHandler.ListObjects)
-	admin.Get("/buckets/:bucket/objects/*", adminHandler.GetObject)
-	admin.Get("/buckets/:bucket/download/*", adminHandler.DownloadObject)
-	admin.Put("/buckets/:bucket/objects/*", adminHandler.PutObject)
-	admin.Delete("/buckets/:bucket/objects/*", adminHandler.DeleteObject)
-	admin.Post("/buckets/:bucket/objects/share", adminHandler.ShareObject)
-	admin.Get("/buckets/:bucket/tags/*", adminHandler.GetObjectTagging)
-	admin.Put("/buckets/:bucket/tags/*", adminHandler.PutObjectTagging)
-	admin.Get("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
-	admin.Post("/buckets/:bucket/webhooks", adminHandler.CreateWebhook)
-	admin.Delete("/buckets/:bucket/webhooks/:id", adminHandler.DeleteWebhook)
-	admin.Get("/buckets/:bucket/website", adminHandler.GetBucketWebsite)
-	admin.Put("/buckets/:bucket/website", adminHandler.SetBucketWebsite)
-	admin.Delete("/buckets/:bucket/website", adminHandler.DeleteBucketWebsite)
-	admin.Put("/buckets/:bucket/soft-delete", adminHandler.SetBucketSoftDelete)
-	admin.Get("/trash", adminHandler.ListTrash)
-	admin.Post("/trash/restore", adminHandler.RestoreObject)
-	admin.Post("/trash/restore-bulk", adminHandler.BulkRestoreObjects)
-	admin.Delete("/trash", adminHandler.DeleteTrashObject)
-	admin.Delete("/trash-bulk", adminHandler.BulkDeleteTrashObjects)
-	admin.Delete("/trash/empty", adminHandler.EmptyTrash)
+	admin.POST("/auth/verify", adminHandler.VerifyAdminPassword)
+	admin.GET("/buckets", adminHandler.ListBuckets)
+	admin.PUT("/buckets/:bucket", adminHandler.CreateBucket)
+	admin.DELETE("/buckets/:bucket", adminHandler.DeleteBucket)
+	admin.GET("/buckets/:bucket/info", adminHandler.GetBucketInfo)
+	admin.PUT("/buckets/:bucket/versioning", adminHandler.SetBucketVersioning)
+	admin.PUT("/buckets/:bucket/object-lock", adminHandler.SetBucketObjectLock)
+	admin.PUT("/buckets/:bucket/retention", adminHandler.SetObjectRetention)
+	admin.PUT("/buckets/:bucket/retention/default", adminHandler.SetBucketDefaultRetention)
+	admin.PUT("/buckets/:bucket/quota", adminHandler.SetBucketQuota)
+	admin.PUT("/buckets/:bucket/legal-hold", adminHandler.SetObjectLegalHold)
+	admin.GET("/buckets/:bucket/objects", adminHandler.ListObjects)
+	admin.GET("/buckets/:bucket/objects/*key", adminHandler.GetObject)
+	admin.GET("/buckets/:bucket/download/*key", adminHandler.DownloadObject)
+	admin.PUT("/buckets/:bucket/objects/*key", adminHandler.PutObject)
+	admin.DELETE("/buckets/:bucket/objects/*key", adminHandler.DeleteObject)
+	admin.POST("/buckets/:bucket/objects/share", adminHandler.ShareObject)
+	admin.GET("/buckets/:bucket/tags/*key", adminHandler.GetObjectTagging)
+	admin.PUT("/buckets/:bucket/tags/*key", adminHandler.PutObjectTagging)
+	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
+	admin.POST("/buckets/:bucket/webhooks", adminHandler.CreateWebhook)
+	admin.DELETE("/buckets/:bucket/webhooks/:id", adminHandler.DeleteWebhook)
+	admin.GET("/buckets/:bucket/website", adminHandler.GetBucketWebsite)
+	admin.PUT("/buckets/:bucket/website", adminHandler.SetBucketWebsite)
+	admin.DELETE("/buckets/:bucket/website", adminHandler.DeleteBucketWebsite)
+	admin.PUT("/buckets/:bucket/soft-delete", adminHandler.SetBucketSoftDelete)
+	admin.GET("/trash", adminHandler.ListTrash)
+	admin.POST("/trash/restore", adminHandler.RestoreObject)
+	admin.POST("/trash/restore-bulk", adminHandler.BulkRestoreObjects)
+	admin.DELETE("/trash", adminHandler.DeleteTrashObject)
+	admin.DELETE("/trash-bulk", adminHandler.BulkDeleteTrashObjects)
+	admin.DELETE("/trash/empty", adminHandler.EmptyTrash)
 
 	// Restricted Admin Routes (IAM & System)
 	iam := admin.Group("", auth.AdminOnlyMiddleware)
 
-	iam.Get("/stats", adminHandler.GetSystemStats)
-	iam.Get("/audit-logs", adminHandler.GetAuditLogs)
-	iam.Get("/analytics/storage", adminHandler.GetStorageAnalytics)
-	iam.Get("/analytics/requests", adminHandler.GetActionAnalytics)
-	iam.Get("/settings", adminHandler.GetSystemSettings)
-	iam.Post("/settings", adminHandler.UpdateSystemSettings)
-	iam.Get("/users", adminHandler.ListUsers)
-	iam.Post("/users", adminHandler.CreateUser)
-	iam.Delete("/users/:username", adminHandler.DeleteUser)
-	iam.Post("/users/:username/password", adminHandler.UpdatePassword)
-	iam.Post("/users/:username/keys", adminHandler.GenerateKey)
-	iam.Delete("/users/:username/keys/:id", adminHandler.DeleteKey)
-	iam.Post("/users/:username/policies", adminHandler.AddPolicy)
-	iam.Post("/users/:username/policies/attach", adminHandler.AttachPolicyTemplate)
-	iam.Delete("/users/:username/policies/:name", adminHandler.RemovePolicy)
-	iam.Get("/presign", adminHandler.GeneratePresignURL)
+	iam.GET("/stats", adminHandler.GetSystemStats)
+	iam.GET("/audit-logs", adminHandler.GetAuditLogs)
+	iam.GET("/analytics/storage", adminHandler.GetStorageAnalytics)
+	iam.GET("/analytics/requests", adminHandler.GetActionAnalytics)
+	iam.GET("/settings", adminHandler.GetSystemSettings)
+	iam.POST("/settings", adminHandler.UpdateSystemSettings)
+	iam.GET("/users", adminHandler.ListUsers)
+	iam.POST("/users", adminHandler.CreateUser)
+	iam.DELETE("/users/:username", adminHandler.DeleteUser)
+	iam.POST("/users/:username/password", adminHandler.UpdatePassword)
+	iam.POST("/users/:username/keys", adminHandler.GenerateKey)
+	iam.DELETE("/users/:username/keys/:id", adminHandler.DeleteKey)
+	iam.POST("/users/:username/policies", adminHandler.AddPolicy)
+	iam.POST("/users/:username/policies/attach", adminHandler.AttachPolicyTemplate)
+	iam.DELETE("/users/:username/policies/:name", adminHandler.RemovePolicy)
+	iam.GET("/presign", adminHandler.GeneratePresignURL)
 
-	iam.Get("/policies", adminHandler.ListPolicies)
-	iam.Post("/policies", adminHandler.CreatePolicy)
-	iam.Delete("/policies/:name", adminHandler.DeletePolicy)
+	iam.GET("/policies", adminHandler.ListPolicies)
+	iam.POST("/policies", adminHandler.CreatePolicy)
+	iam.DELETE("/policies/:name", adminHandler.DeletePolicy)
 
 	// S3 API Routes (Protected)
 	s3Group := s3App.Group("")
 	s3Group.Use(auth.S3AuthMiddleware(um, auditLogger, store))
 
 	// List Buckets
-	s3Group.Get("/", s3Handler.ListBuckets)
+	s3Group.GET("/", s3Handler.ListBuckets)
 
 	// Bucket operations
-	s3Group.Head("/:bucket", s3Handler.HeadBucket)
-	s3Group.Put("/:bucket", s3Handler.PutBucket)
-	s3Group.Delete("/:bucket", s3Handler.DeleteBucket)
-	s3Group.Get("/:bucket", s3Handler.ListObjects)
-	s3Group.Post("/:bucket", s3Handler.PostBucket)
+	s3Group.HEAD("/:bucket", s3Handler.HeadBucket)
+	s3Group.PUT("/:bucket", s3Handler.PutBucket)
+	s3Group.DELETE("/:bucket", s3Handler.DeleteBucket)
+	s3Group.GET("/:bucket", s3Handler.ListObjects)
+	s3Group.POST("/:bucket", s3Handler.PostBucket)
 
 	// Object operations
-	s3Group.Head("/:bucket/*", s3Handler.HeadObject)
-	s3Group.Get("/:bucket/*", s3Handler.GetObject)
-	s3Group.Put("/:bucket/*", s3Handler.PutObject)
-	s3Group.Post("/:bucket/*", s3Handler.PostObject)
-	s3Group.Delete("/:bucket/*", s3Handler.DeleteObject)
+	s3Group.HEAD("/:bucket/*key", s3Handler.HeadObject)
+	s3Group.GET("/:bucket/*key", s3Handler.GetObject)
+	s3Group.PUT("/:bucket/*key", s3Handler.PutObject)
+	s3Group.POST("/:bucket/*key", s3Handler.PostObject)
+	s3Group.DELETE("/:bucket/*key", s3Handler.DeleteObject)
 
 	// Website Static Hosting (Public access handled within handler)
-	s3App.Get("/website/:bucket/*", s3Handler.ServeWebsite)
-	s3App.Get("/website/:bucket", s3Handler.ServeWebsite)
+	s3App.GET("/website/:bucket/*key", s3Handler.ServeWebsite)
+	s3App.GET("/website/:bucket", s3Handler.ServeWebsite)
 
 	// Start both servers
 	go func() {
 		log.Printf("Starting Admin API on :%s", adminPort)
-		if err := adminApp.Listen(":" + adminPort); err != nil {
+		if err := adminApp.Run(":" + adminPort); err != nil {
 			log.Fatalf("Admin API failed: %v", err)
 		}
 	}()
 
 	log.Printf("Starting S3 API on :%s", s3Port)
-	if err := s3App.Listen(":" + s3Port); err != nil {
+	if err := s3App.Run(":" + s3Port); err != nil {
 		log.Fatalf("S3 API failed: %v", err)
 	}
 }

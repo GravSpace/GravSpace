@@ -10,11 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"net/url"
-
 	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/storage"
-	"github.com/gofiber/fiber/v2"
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt"
 )
 
@@ -29,9 +27,9 @@ type S3Error struct {
 	HostId     string   `xml:"HostId"`
 }
 
-func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store storage.Storage) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		authHeader := c.Get("Authorization")
+func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store storage.Storage) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
 		queryCred := c.Query("X-Amz-Credential")
 		querySignature := c.Query("X-Amz-Signature")
 
@@ -46,13 +44,17 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 			user = um.Users["anonymous"]
 			um.mu.RUnlock()
 			if user == nil {
-				return sendS3Error(c, "AccessDenied", "Anonymous access is not enabled", "", "")
+				sendS3Error(c, "AccessDenied", "Anonymous access is not enabled", "", "")
+				c.Abort()
+				return
 			}
 		} else if queryCred != "" {
 			isPresigned = true
 			parts := strings.Split(queryCred, "/")
 			if len(parts) < 1 {
-				return sendS3Error(c, "IncompleteBody", "Invalid Credential parameter", "", "")
+				sendS3Error(c, "IncompleteBody", "Invalid Credential parameter", "", "")
+				c.Abort()
+				return
 			}
 			accessKeyID = parts[0]
 			providedSignature = querySignature
@@ -64,7 +66,9 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				user = um.Users["anonymous"]
 				um.mu.RUnlock()
 				if user == nil {
-					return sendS3Error(c, "InvalidToken", "Invalid Authorization header", "", "")
+					sendS3Error(c, "InvalidToken", "Invalid Authorization header", "", "")
+					c.Abort()
+					return
 				}
 			} else {
 				// Extract Credential and Signature
@@ -88,7 +92,9 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 		if accessKeyID != "" {
 			user, _ = um.GetUserByKey(accessKeyID)
 			if user == nil {
-				return sendS3Error(c, "InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist in our records.", "", "")
+				sendS3Error(c, "InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist in our records.", "", "")
+				c.Abort()
+				return
 			}
 
 			// VERIFY SIGNATURE
@@ -108,9 +114,9 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				algorithm = c.Query("X-Amz-Algorithm")
 				credentialScope = strings.SplitN(queryCred, "/", 2)[1]
 			} else {
-				amzDate = c.Get("X-Amz-Date")
+				amzDate = c.GetHeader("X-Amz-Date")
 				if amzDate == "" {
-					amzDate = c.Get("Date")
+					amzDate = c.GetHeader("Date")
 				}
 				// Parse Auth Header for signed headers
 				authParts := strings.Split(authHeader, ",")
@@ -135,12 +141,16 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 			}
 
 			if credentialScope == "" {
-				return sendS3Error(c, "AuthorizationHeaderMalformed", "The authorization header is malformed; the credential scope is missing.", "", "")
+				sendS3Error(c, "AuthorizationHeaderMalformed", "The authorization header is malformed; the credential scope is missing.", "", "")
+				c.Abort()
+				return
 			}
 
 			scopeParts := strings.Split(credentialScope, "/")
 			if len(scopeParts) < 3 {
-				return sendS3Error(c, "AuthorizationHeaderMalformed", "The authorization header is malformed; invalid credential scope.", "", "")
+				sendS3Error(c, "AuthorizationHeaderMalformed", "The authorization header is malformed; invalid credential scope.", "", "")
+				c.Abort()
+				return
 			}
 			date := scopeParts[0]
 			region := scopeParts[1]
@@ -149,40 +159,36 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 			signedHeaders := strings.Split(signedHeadersStr, ";")
 
 			// Build Canonical Request
-			query := url.Values{}
-			for k, v := range c.Queries() {
-				query.Add(k, v)
-			}
-			path := c.Path()
+			query := c.Request.URL.Query()
+			path := c.Request.URL.Path
 
-			payloadHash := c.Get("X-Amz-Content-Sha256")
+			payloadHash := c.GetHeader("X-Amz-Content-Sha256")
 			if isPresigned || payloadHash == "" {
 				payloadHash = "UNSIGNED-PAYLOAD"
 			}
 
-			headers := http.Header{}
-			for k, vs := range c.GetReqHeaders() {
-				for _, v := range vs {
-					headers.Add(k, v)
-				}
-			}
+			headers := c.Request.Header
 
-			canonicalRequest := BuildCanonicalRequest(c.Method(), path, query, headers, signedHeaders, payloadHash, c.Hostname())
+			canonicalRequest := BuildCanonicalRequest(c.Request.Method, path, query, headers, signedHeaders, payloadHash, c.Request.Host)
 			stringToSign := BuildStringToSign(algorithm, amzDate, credentialScope, canonicalRequest)
 			calculatedSignature := CalculateSignature(secretKey, date, region, service, stringToSign)
 
 			if providedSignature != calculatedSignature {
 				// Fallback: If signature fails but user is anonymous-eligible, we'll check permission later
 				// But usually, if they provided keys, they must be valid.
-				return sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
+				sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
+				c.Abort()
+				return
 			}
 
 			// ADDITIONAL SECURITY CHECKS FOR PRESIGNED URLS
 			if isPresigned {
 				// 1. IP Restriction
 				allowedIP := c.Query("X-Amz-Allowed-IP")
-				if allowedIP != "" && allowedIP != c.IP() {
-					return sendS3Error(c, "AccessDenied", "IP address restricted for this URL", "", "")
+				if allowedIP != "" && allowedIP != c.ClientIP() {
+					sendS3Error(c, "AccessDenied", "IP address restricted for this URL", "", "")
+					c.Abort()
+					return
 				}
 
 				// 2. One-time Use
@@ -190,7 +196,9 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				if isOneTime && store != nil {
 					used, _ := store.IsSignatureUsed(providedSignature)
 					if used {
-						return sendS3Error(c, "AccessDenied", "This one-time use URL has already been used.", "", "")
+						sendS3Error(c, "AccessDenied", "This one-time use URL has already been used.", "", "")
+						c.Abort()
+						return
 					}
 					// Record usage
 					expiresStr := c.Query("X-Amz-Expires")
@@ -209,27 +217,49 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 		if !um.CheckPermission(user, action, resource) {
 			// Special case: if user is not anonymous and access denied, they might need better policies.
 			// If they ARE anonymous, return 403.
-			return sendS3Error(c, "AccessDenied", "Access Denied by IAM Policy", c.Params("bucket"), c.Params("*"))
+			sendS3Error(c, "AccessDenied", "Access Denied by IAM Policy", c.Param("bucket"), c.Param("key"))
+			c.Abort()
+			return
 		}
 
-		c.Locals("user", user)
-		return c.Next()
+		c.Set("user", user)
+		c.Next()
 	}
 }
 
-func AdminOnlyMiddleware(c *fiber.Ctx) error {
-	user := c.Locals("user").(*jwt.Token)
-	claims := user.Claims.(jwt.MapClaims)
-	username := claims["username"].(string)
-
-	if username != "admin" {
-		return c.Status(http.StatusForbidden).JSON(fiber.Map{"error": "Admin access required"})
+func AdminOnlyMiddleware(c *gin.Context) {
+	val, ok := c.Get("user")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		c.Abort()
+		return
 	}
 
-	return c.Next()
+	token, ok := val.(*jwt.Token)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token type"})
+		c.Abort()
+		return
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid claims type"})
+		c.Abort()
+		return
+	}
+
+	username, ok := claims["username"].(string)
+	if !ok || username != "admin" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Admin access required"})
+		c.Abort()
+		return
+	}
+
+	c.Next()
 }
 
-func sendS3Error(c *fiber.Ctx, code, message, bucket, key string) error {
+func sendS3Error(c *gin.Context, code, message, bucket, key string) {
 	reqID := make([]byte, 8)
 	rand.Read(reqID)
 	hostID := make([]byte, 32)
@@ -245,15 +275,14 @@ func sendS3Error(c *fiber.Ctx, code, message, bucket, key string) error {
 		HostId:     hex.EncodeToString(hostID),
 	}
 
-	c.Set(fiber.HeaderContentType, fiber.MIMEApplicationXML)
-	return c.Status(http.StatusForbidden).XML(errRes)
+	c.XML(http.StatusForbidden, errRes)
 }
 
-func determineS3Action(c *fiber.Ctx) (string, string) {
-	method := c.Method()
-	bucket := c.Params("bucket")
-	key := c.Params("*")
-	path := c.Path()
+func determineS3Action(c *gin.Context) (string, string) {
+	method := c.Request.Method
+	bucket := c.Param("bucket")
+	key := c.Param("key") // In Gin, we'll use "key" for the * part
+	path := c.Request.URL.Path
 
 	// Root path
 	if path == "/" || path == "" {
