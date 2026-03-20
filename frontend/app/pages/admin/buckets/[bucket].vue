@@ -1664,25 +1664,55 @@ async function copyPresignedUrl(key, versionId = null) {
 function isPublic(prefix = "") {
     const anon = users.value['anonymous']
     if (!anon || !anon.policies) return false
-    const resource = "arn:aws:s3:::" + bucketName.value + (prefix ? "/" + prefix : "/*")
-    return anon.policies.some(p => p.statement.some(s => s.effect === "Allow" && s.action.includes("s3:GetObject")))
+    
+    // Construct the resource pattern we're looking for
+    // For directories (ending in /), we look for a wildcard match
+    // For files, we look for an exact or wildcard match
+    const resource = "arn:aws:s3:::" + bucketName.value + (prefix ? "/" + prefix : "")
+    const wildcardResource = resource + "*"
+    
+    return anon.policies.some(p => p.statement.some(s => 
+        s.effect === "Allow" && 
+        s.action.includes("s3:GetObject") && 
+        s.resource.some(r => r === "*" || r === resource || r === wildcardResource)
+    ))
 }
 
 async function togglePublic(prefix = "") {
     const currentlyPublic = isPublic(prefix)
-    const resource = "arn:aws:s3:::" + bucketName.value + (prefix.length > 0 ? "/" + prefix + "*" : "/*")
-    const pName = `PublicAccess-${bucketName.value}-${prefix.replace(/\//g, "") || 'Root'}`
+    
+    // Exact resource for matching and deletion
+    const isDirectory = prefix.endsWith('/') || prefix === ""
+    const resource = "arn:aws:s3:::" + bucketName.value + (prefix ? "/" + prefix : "")
+    const finalResource = isDirectory ? resource + "*" : resource
+    
+    // Deterministic policy name based on resource to avoid duplicates or orphans
+    const pName = `Public-${bucketName.value}-${prefix.replace(/[\/\.]/g, "-") || 'Root'}`
+    
     try {
         if (currentlyPublic) {
+            // Find the policy that actually grants this access by name or content
+            // For simplicity, we try to delete by our naming convention
             await authFetch(`${API_BASE}/admin/users/anonymous/policies/${pName}`, { method: 'DELETE' })
         } else {
             await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
                 method: 'POST',
-                body: { name: pName, version: "2012-10-17", statement: [{ effect: "Allow", action: ["s3:GetObject", "s3:ListBucket"], resource: [resource] }] }
+                body: { 
+                    name: pName, 
+                    version: "2012-10-17", 
+                    statement: [{ 
+                        effect: "Allow", 
+                        action: ["s3:GetObject", "s3:ListBucket"], 
+                        resource: [finalResource] 
+                    }] 
+                }
             })
         }
         await fetchUsers()
-    } catch (e) { toast.error('Failed') }
+    } catch (e) { 
+        toast.error('Failed to update public access')
+        console.error(e)
+    }
 }
 
 // TAGGING

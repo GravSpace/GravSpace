@@ -58,10 +58,14 @@ func main() {
 	adminApp := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 		AppName:               "GravSpace Admin API",
+		StrictRouting:         true,
+		CaseSensitive:         true,
 	})
 	s3App := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 		AppName:               "GravSpace S3 API",
+		StrictRouting:         true,
+		CaseSensitive:         true,
 	})
 
 	// Log startup information
