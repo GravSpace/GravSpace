@@ -458,6 +458,17 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 			}
 			s.DB.CreateObject(objectRow)
 		}
+		// Invalidate object list cache for this bucket and all parent prefixes
+		if s.Cache != nil {
+			s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+			// Invalidate cache for all parent directories
+			parts := strings.Split(key, "/")
+			for i := 1; i < len(parts); i++ {
+				prefix := strings.Join(parts[:i], "/") + "/"
+				s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
+			}
+		}
+
 		return "", nil
 	}
 
