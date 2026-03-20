@@ -1,6 +1,11 @@
 export default defineNuxtConfig({
   compatibilityDate: '2026-01-26',
   ssr: false,
+  sourcemap: {
+    client: false,
+    server: false
+  },
+
   nitro: {
     preset: 'node-server'
   },
