@@ -10,6 +10,7 @@ services:
     restart: unless-stopped
     ports:
       - "${PUBLISH_IP:-0.0.0.0}:${BACKEND_PORT:-8080}:8080"
+      - "${PUBLISH_IP:-0.0.0.0}:${S3_PORT:-9000}:9000"
     environment:
       # Required
       - JWT_SECRET=${JWT_SECRET}

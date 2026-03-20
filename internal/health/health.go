@@ -1,11 +1,10 @@
 package health
 
 import (
-	"net/http"
 	"os"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/gofiber/fiber/v2"
 )
 
 type HealthStatus struct {
@@ -25,16 +24,16 @@ func NewHealthChecker() *HealthChecker {
 }
 
 // Liveness probe - indicates if the application is running
-func (h *HealthChecker) LivenessHandler(c echo.Context) error {
+func (h *HealthChecker) LivenessHandler(c *fiber.Ctx) error {
 	status := HealthStatus{
 		Status:    "UP",
 		Timestamp: time.Now(),
 	}
-	return c.JSON(http.StatusOK, status)
+	return c.JSON(status)
 }
 
 // Readiness probe - indicates if the application is ready to serve traffic
-func (h *HealthChecker) ReadinessHandler(c echo.Context) error {
+func (h *HealthChecker) ReadinessHandler(c *fiber.Ctx) error {
 	checks := make(map[string]string)
 	allHealthy := true
 
@@ -59,24 +58,24 @@ func (h *HealthChecker) ReadinessHandler(c echo.Context) error {
 
 	if allHealthy {
 		status.Status = "UP"
-		return c.JSON(http.StatusOK, status)
+		return c.JSON(status)
 	} else {
 		status.Status = "DOWN"
-		return c.JSON(http.StatusServiceUnavailable, status)
+		return c.Status(fiber.StatusServiceUnavailable).JSON(status)
 	}
 }
 
 // Startup probe - indicates if the application has started successfully
-func (h *HealthChecker) StartupHandler(c echo.Context) error {
+func (h *HealthChecker) StartupHandler(c *fiber.Ctx) error {
 	// Consider the app started if it's been running for at least 5 seconds
 	if time.Since(h.StartTime) < 5*time.Second {
-		return c.JSON(http.StatusServiceUnavailable, HealthStatus{
+		return c.Status(fiber.StatusServiceUnavailable).JSON(HealthStatus{
 			Status:    "STARTING",
 			Timestamp: time.Now(),
 		})
 	}
 
-	return c.JSON(http.StatusOK, HealthStatus{
+	return c.JSON(HealthStatus{
 		Status:    "UP",
 		Timestamp: time.Now(),
 	})

@@ -11,6 +11,7 @@ services:
     restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-8080}:8080"
+      - "${S3_PORT:-9000}:9000"
     environment:
       # Required
       - JWT_SECRET=${JWT_SECRET}

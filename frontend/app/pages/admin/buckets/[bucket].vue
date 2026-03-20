@@ -104,7 +104,7 @@
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            <TableRow v-if="currentPrefix" @dblclick="navigateUp"
+                            <TableRow v-if="currentPrefix" @click="navigateUp"
                                 class="cursor-pointer hover:bg-muted/50 transition-colors group italic text-muted-foreground/80">
                                 <TableCell colspan="4" class="py-2 px-4 flex items-center gap-2">
                                     <CornerLeftUp class="w-3.5 h-3.5" />
@@ -161,11 +161,11 @@
                                         <div class="flex items-center gap-3">
                                             <div
                                                 class="p-1.5 rounded bg-blue-500/10 text-blue-500 group-hover:bg-blue-500 group-hover:text-white transition-colors">
-                                                <File class="w-4 h-4" />
+                                                <component :is="getFileIcon(item.Key)" class="w-4 h-4" />
                                             </div>
                                             <div class="flex items-center gap-1.5 min-w-0">
                                                 <span class="truncate" :title="item.Key">{{ item.Key.split('/').pop()
-                                                    }}</span>
+                                                }}</span>
                                                 <div v-if="isLocked(item)" class="flex items-center gap-1 shrink-0">
                                                     <Lock class="w-3 h-3 text-amber-500" />
                                                     <span class="text-[9px] font-bold text-amber-600 uppercase">{{
@@ -528,7 +528,7 @@
                     </DialogTitle>
                     <DialogDescription>
                         Timeline for <span class="font-mono text-primary font-bold">{{ selectedExplorerItem?.Key
-                        }}</span>
+                            }}</span>
                     </DialogDescription>
                 </DialogHeader>
 
@@ -561,7 +561,7 @@
                                     <div class="flex items-center gap-1">
                                         <span class="text-[10px] font-mono mr-2">{{ v.IsDeleteMarker ? '-' :
                                             formatSize(v.Size)
-                                        }}</span>
+                                            }}</span>
                                         <Button v-if="!v.IsDeleteMarker" variant="outline" size="sm" class="h-7 text-xs"
                                             @click="downloadObject(selectedExplorerItem?.Key, v.VersionID)">
                                             <Download class="w-3 h-3 mr-1" /> Get
@@ -886,7 +886,9 @@ import {
     Eye, Download, History, LinkIcon, Trash2, Loader2, File, Folder, CornerLeftUp,
     ExternalLink, Share2, Globe, Lock, Shield, Settings2, Info, ListFilter,
     ArrowUpRight, Copy, Check, Search, Filter, AlertTriangle, Webhook, BellOff,
-    Settings
+    Settings, FileText, FileImage, FileAudio, FileVideo, FileCode, FileArchive,
+    Clock, ShieldAlert, ShieldOff, ShieldCheck, Tag, PlusCircle, UserCircle,
+    UserPlus, UserMinus, Key, ShieldCheck as ShieldCheckIcon, Save
 } from 'lucide-vue-next'
 import { debounce } from 'perfect-debounce'
 import { toast } from 'vue-sonner'
@@ -941,14 +943,61 @@ const fileInput = ref(null)
 const folderInput = ref(null)
 
 const searchQuery = ref('')
-let searchTimeout = null
-
 watch(searchQuery, () => {
     clearTimeout(searchTimeout)
     searchTimeout = setTimeout(() => {
         fetchObjects()
     }, 500)
 })
+
+const getFileIcon = (key) => {
+    const ext = key.split('.').pop().toLowerCase()
+    switch (ext) {
+        case 'jpg':
+        case 'jpeg':
+        case 'png':
+        case 'gif':
+        case 'webp':
+        case 'svg':
+            return FileImage
+        case 'mp4':
+        case 'webm':
+        case 'mov':
+        case 'avi':
+            return FileVideo
+        case 'mp3':
+        case 'wav':
+        case 'ogg':
+        case 'flac':
+            return FileAudio
+        case 'pdf':
+        case 'doc':
+        case 'docx':
+        case 'txt':
+        case 'rtf':
+        case 'md':
+            return FileText
+        case 'zip':
+        case 'rar':
+        case '7z':
+        case 'tar':
+        case 'gz':
+            return FileArchive
+        case 'js':
+        case 'ts':
+        case 'vue':
+        case 'json':
+        case 'html':
+        case 'css':
+        case 'go':
+        case 'py':
+        case 'rs':
+        case 'sql':
+            return FileCode
+        default:
+            return File
+    }
+}
 
 const showBucketSettings = ref(false)
 const activeSettingsTab = ref('general')

@@ -50,7 +50,8 @@ gravspace --version
 # With default settings
 gravspace
 
-# Server will start on :8080
+# Admin API starts on :8080 (Dashboard, IAM, Settings)
+# S3 API starts on :9001 (S3 compatible object storage)
 # Access dashboard at http://localhost:8080
 ```
 
@@ -64,7 +65,7 @@ gravspace
    ```bash
    ./storage-server
    ```
-   The server will start on `:8080`.
+   The Admin API will start on `:8080` and S3 API on `:9001`.
 
 #### Frontend
 1. Ensure you have Node.js installed (v20+).
@@ -95,7 +96,8 @@ The easiest way to deploy GravSpace is using pre-built images from GitHub Contai
 
 4. **Access the application**:
    - Frontend Dashboard: `http://localhost:3000`
-   - Backend API: `http://localhost:8080`
+   - Admin API: `http://localhost:8080`
+   - S3 API: `http://localhost:9001`
 
 > [!NOTE]
 > Pre-built images are automatically built and published to `ghcr.io/gravspace/gravspace-backend` and `ghcr.io/gravspace/gravspace-frontend` on every release. See [.github/DOCKER_REGISTRY.md](.github/DOCKER_REGISTRY.md) for more details.
@@ -124,7 +126,8 @@ If you want to build the images yourself:
 
 5. **Access the application**:
    - Frontend Dashboard: `http://localhost:3000`
-   - Backend API: `http://localhost:8080`
+   - Admin API: `http://localhost:8080`
+   - S3 API: `http://localhost:9001`
    - Health Check: `http://localhost:8080/health/live`
    - Metrics: `http://localhost:8080/metrics`
 
@@ -155,7 +158,7 @@ If you want to build the images yourself:
 #### Backend
 ```bash
 docker build -t gravspace-core:latest .
-docker run -p 8080:8080 \
+docker run -p 8080:8080 -p 9001:9001 \
   -e JWT_SECRET=your-secret-key \
   -e CORS_ORIGINS=http://localhost:3000 \
   -v $(pwd)/data:/app/data \
@@ -284,19 +287,19 @@ aws configure set aws_access_key_id <your-access-key>
 aws configure set aws_secret_access_key <your-secret-key>
 
 # List buckets
-aws --endpoint-url http://localhost:8080 s3 ls
+aws --endpoint-url http://localhost:9001 s3 ls
 
 # Create bucket
-aws --endpoint-url http://localhost:8080 s3 mb s3://my-bucket
+aws --endpoint-url http://localhost:9001 s3 mb s3://my-bucket
 
 # Upload file
-aws --endpoint-url http://localhost:8080 s3 cp file.txt s3://my-bucket/
+aws --endpoint-url http://localhost:9001 s3 cp file.txt s3://my-bucket/
 
 # List objects
-aws --endpoint-url http://localhost:8080 s3 ls s3://my-bucket/
+aws --endpoint-url http://localhost:9001 s3 ls s3://my-bucket/
 
 # Download file
-aws --endpoint-url http://localhost:8080 s3 cp s3://my-bucket/file.txt ./downloaded.txt
+aws --endpoint-url http://localhost:9001 s3 cp s3://my-bucket/file.txt ./downloaded.txt
 ```
 
 ## Production Deployment

@@ -187,6 +187,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 
 	synced := 0
 	errors := 0
+	affectedBuckets := make(map[string]bool)
 
 	// Walk through all buckets
 	buckets, err := os.ReadDir(sw.storage.Root)
@@ -256,6 +257,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 					_, err := sw.storage.DB.CreateObject(objectRow)
 					if err == nil {
 						synced++
+						affectedBuckets[bucketName] = true
 					} else {
 						log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
 						errors++
@@ -265,6 +267,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 					err := sw.storage.DB.RestoreObject(bucketName, relPath, "simple")
 					if err == nil {
 						synced++
+						affectedBuckets[bucketName] = true
 						log.Printf("Ghost object detected: un-deleted %s/%s\n", bucketName, relPath)
 					} else {
 						log.Printf("Sync error restoring ghost object %s: %v\n", relPath, err)
@@ -293,6 +296,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 					}
 					sw.storage.DB.CreateObject(objectRow)
 					synced++
+					affectedBuckets[bucketName] = true
 					log.Printf("Indexed folder placeholder: %s/%s\n", bucketName, folderKey)
 				}
 				return nil
@@ -383,6 +387,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 				_, err := sw.storage.DB.CreateObject(objectRow)
 				if err == nil {
 					synced++
+					affectedBuckets[bucketName] = true
 				} else {
 					log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
 					errors++
@@ -392,6 +397,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 				err := sw.storage.DB.RestoreObject(bucketName, relPath, versionID)
 				if err == nil {
 					synced++
+					affectedBuckets[bucketName] = true
 					log.Printf("Ghost object detected: un-deleted %s/%s\n", bucketName, relPath)
 				} else {
 					log.Printf("Sync error restoring ghost object %s: %v\n", relPath, err)
@@ -402,6 +408,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 				err := sw.storage.DB.UpdateObjectLatest(bucketName, relPath, versionID, true)
 				if err == nil {
 					synced++
+					affectedBuckets[bucketName] = true
 					log.Printf("Fixed is_latest for %s/%s\n", bucketName, relPath)
 				} else {
 					log.Printf("Sync error updating is_latest for %s: %v\n", relPath, err)
@@ -421,18 +428,34 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 	log.Printf("Filesystem sync completed: %d objects synced, %d errors in %v\n", synced, errors, duration)
 
 	// Prune orphaned records
-	sw.pruneOrphanedRecords()
+	prunedCount := sw.pruneOrphanedRecords()
 	sw.pruneOrphanedBuckets()
+
+	// Invalidate cache for affected buckets
+	if sw.storage.Cache != nil {
+		for bucket := range affectedBuckets {
+			// Invalidate all object lists for this bucket
+			sw.storage.Cache.DeleteByPrefix("objects:" + bucket + ":")
+			log.Printf("Invalidated object list cache for bucket: %s\n", bucket)
+		}
+
+		if prunedCount > 0 {
+			// If we pruned objects, we might have affected many buckets.
+			// The pruneOrphanedRecords already invalidates per object but it's better to be safe.
+			// Actually let's make pruneOrphanedRecords return affected buckets too or just call DeleteByPrefix there.
+		}
+	}
 }
 
-func (sw *SyncWorker) pruneOrphanedRecords() {
+func (sw *SyncWorker) pruneOrphanedRecords() int {
 	objs, err := sw.storage.DB.ListAllObjects()
 	if err != nil {
 		log.Printf("Prune error listing objects: %v\n", err)
-		return
+		return 0
 	}
 
 	prunedCount := 0
+	affectedBuckets := make(map[string]bool)
 	for _, obj := range objs {
 		// Skip pruning for soft-deleted objects (they are in .trash, monitored by TrashWorker)
 		if obj.DeletedAt != nil {
@@ -454,13 +477,20 @@ func (sw *SyncWorker) pruneOrphanedRecords() {
 				log.Printf("Prune error deleting %s: %v\n", obj.Key, err)
 			} else {
 				prunedCount++
+				affectedBuckets[obj.Bucket] = true
 			}
 		}
 	}
 
 	if prunedCount > 0 {
 		log.Printf("Filesystem sync: pruned %d orphaned object records\n", prunedCount)
+		if sw.storage.Cache != nil {
+			for bucket := range affectedBuckets {
+				sw.storage.Cache.DeleteByPrefix("objects:" + bucket + ":")
+			}
+		}
 	}
+	return prunedCount
 }
 
 func (sw *SyncWorker) pruneOrphanedBuckets() {

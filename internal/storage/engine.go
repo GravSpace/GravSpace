@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -211,8 +212,6 @@ func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 		}
 	}
 	s.SyncWorker = NewSyncWorker(s, syncInterval)
-	s.SyncWorker.Start()
-	fmt.Printf("Starting filesystem sync worker with interval: %v\n", syncInterval)
 
 	return s, nil
 }
@@ -440,6 +439,7 @@ func (s *FileStorage) DeleteBucket(name string) error {
 }
 
 func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error) {
+	log.Printf("Storage PutObject: bucket=%s, key=%s", bucket, key)
 	// If key is a folder placeholder (ends in /), create directory and add to DB
 	if strings.HasSuffix(key, "/") {
 		objectDir := filepath.Join(s.Root, bucket, key)
