@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/cache"
@@ -136,7 +137,7 @@ func (sw *SyncWorker) watchRecursive(path string) {
 		if info.IsDir() {
 			// Skip special dirs
 			name := info.Name()
-			if name == ".versions" || name == ".trash" || name == ".uploads" {
+			if name == ".versions" || name == ".trash" || name == ".uploads" || strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") {
 				return filepath.SkipDir
 			}
 			sw.watcher.Add(walkPath)
@@ -230,7 +231,8 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 			// Handle regular files (non-versioned)
 			if !info.IsDir() {
 				// Skip special files
-				if info.Name() == "latest" {
+				name := info.Name()
+				if name == "latest" || strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") {
 					return nil
 				}
 

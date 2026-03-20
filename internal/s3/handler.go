@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -513,7 +514,14 @@ func (h *S3Handler) PutObject(c *fiber.Ctx) error {
 	}
 
 	encryptionType := c.Get("x-amz-server-side-encryption")
-	vid, err := h.Storage.PutObject(bucket, key, c.Context().RequestBodyStream(), encryptionType)
+	
+	// Fallback to c.Body() if RequestBodyStream is nil
+	reader := io.Reader(c.Context().RequestBodyStream())
+	if reader == nil {
+		reader = bytes.NewReader(c.Body())
+	}
+
+	vid, err := h.Storage.PutObject(bucket, key, reader, encryptionType)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).SendString(err.Error())
 	}

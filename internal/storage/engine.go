@@ -441,7 +441,10 @@ func (s *FileStorage) DeleteBucket(name string) error {
 }
 
 func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryptionType string) (string, error) {
-	log.Printf("Storage PutObject: bucket=%s, key=%s", bucket, key)
+	if reader == nil {
+		return "", fmt.Errorf("reader is nil")
+	}
+
 	// If key is a folder placeholder (ends in /), create directory and add to DB
 	if strings.HasSuffix(key, "/") {
 		objectDir := filepath.Join(s.Root, bucket, key)
@@ -582,6 +585,7 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 
 	// Check bucket quota (Post-upload)
 	if s.DB != nil {
+		log.Printf("Post-upload quota check for %s", bucket)
 		bucketInfo, err := s.DB.GetBucket(bucket)
 		if err == nil && bucketInfo != nil && bucketInfo.QuotaBytes > 0 {
 			_, currentSize, err := s.GetBucketStats(bucket)

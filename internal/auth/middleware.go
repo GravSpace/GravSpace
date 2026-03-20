@@ -88,9 +88,6 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 		if accessKeyID != "" {
 			user, _ = um.GetUserByKey(accessKeyID)
 			if user == nil {
-				if auditLogger != nil {
-					auditLogger.LogDenied(accessKeyID, "authenticate", "", c.IP(), c.Get("User-Agent"), "Invalid access key")
-				}
 				return sendS3Error(c, "InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist in our records.", "", "")
 			}
 
@@ -177,9 +174,6 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 			if providedSignature != calculatedSignature {
 				// Fallback: If signature fails but user is anonymous-eligible, we'll check permission later
 				// But usually, if they provided keys, they must be valid.
-				if auditLogger != nil {
-					auditLogger.LogDenied(user.Username, "authenticate", "", c.IP(), c.Get("User-Agent"), "Signature mismatch")
-				}
 				return sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
 			}
 
@@ -188,9 +182,6 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				// 1. IP Restriction
 				allowedIP := c.Query("X-Amz-Allowed-IP")
 				if allowedIP != "" && allowedIP != c.IP() {
-					if auditLogger != nil {
-						auditLogger.LogDenied(user.Username, "authenticate", "", c.IP(), c.Get("User-Agent"), "IP restriction failure")
-					}
 					return sendS3Error(c, "AccessDenied", "IP address restricted for this URL", "", "")
 				}
 
@@ -199,9 +190,6 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				if isOneTime && store != nil {
 					used, _ := store.IsSignatureUsed(providedSignature)
 					if used {
-						if auditLogger != nil {
-							auditLogger.LogDenied(user.Username, "authenticate", "", c.IP(), c.Get("User-Agent"), "One-time URL already used")
-						}
 						return sendS3Error(c, "AccessDenied", "This one-time use URL has already been used.", "", "")
 					}
 					// Record usage
@@ -219,17 +207,9 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 		// Policy Enforcement
 		action, resource := determineS3Action(c)
 		if !um.CheckPermission(user, action, resource) {
-			if auditLogger != nil {
-				auditLogger.LogDenied(user.Username, action, resource, c.IP(), c.Get("User-Agent"), "Policy denied")
-			}
 			// Special case: if user is not anonymous and access denied, they might need better policies.
 			// If they ARE anonymous, return 403.
 			return sendS3Error(c, "AccessDenied", "Access Denied by IAM Policy", c.Params("bucket"), c.Params("*"))
-		}
-
-		// Log successful authentication and authorization
-		if auditLogger != nil {
-			auditLogger.LogSuccess(user.Username, action, resource, c.IP(), c.Get("User-Agent"), nil)
 		}
 
 		c.Locals("user", user)
