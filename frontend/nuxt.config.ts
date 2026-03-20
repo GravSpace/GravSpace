@@ -7,6 +7,9 @@ export default defineNuxtConfig({
   css: ['~/assets/css/tailwind.css'],
   modules: ['@nuxtjs/tailwindcss', 'shadcn-nuxt'],
   vite: {
+    build: {
+      sourcemap: false
+    },
     optimizeDeps: {
       include: [
         '@vueuse/core',
