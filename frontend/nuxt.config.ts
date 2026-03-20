@@ -6,6 +6,21 @@ export default defineNuxtConfig({
   },
   css: ['~/assets/css/tailwind.css'],
   modules: ['@nuxtjs/tailwindcss', 'shadcn-nuxt'],
+  vite: {
+    optimizeDeps: {
+      include: [
+        '@vueuse/core',
+        'vue-sonner',
+        'lucide-vue-next',
+        'class-variance-authority',
+        'reka-ui',
+        'clsx',
+        'tailwind-merge',
+        'chart.js',
+        'vue-chartjs',
+      ]
+    }
+  },
   shadcn: {
     /**
      * Prefix for all the imported component.

@@ -276,8 +276,26 @@ func determineS3Action(c *fiber.Ctx) (string, string) {
 	path := c.Path()
 
 	// Root path
-	if path == "/" {
+	if path == "/" || path == "" {
 		return "s3:ListAllMyBuckets", "*"
+	}
+
+	// Manual extraction if params are empty (happens in global middleware before routing)
+	if bucket == "" {
+		parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+		if len(parts) > 0 {
+			if parts[0] == "website" && len(parts) > 1 {
+				bucket = parts[1]
+				if len(parts) > 2 {
+					key = strings.Join(parts[2:], "/")
+				}
+			} else if parts[0] != "website" {
+				bucket = parts[0]
+				if len(parts) > 1 {
+					key = strings.Join(parts[1:], "/")
+				}
+			}
+		}
 	}
 
 	resource := "arn:aws:s3:::" + bucket
@@ -289,7 +307,7 @@ func determineS3Action(c *fiber.Ctx) (string, string) {
 	}
 
 	switch method {
-	case "GET":
+	case "GET", "HEAD":
 		if key == "" {
 			return "s3:ListBucket", resource
 		}
@@ -299,6 +317,11 @@ func determineS3Action(c *fiber.Ctx) (string, string) {
 			return "s3:CreateBucket", resource
 		}
 		return "s3:PutObject", resource
+	case "POST":
+		if key == "" {
+			return "s3:PostBucket", resource
+		}
+		return "s3:PutObject", resource // Post is often used for uploads too
 	case "DELETE":
 		if key == "" {
 			return "s3:DeleteBucket", resource

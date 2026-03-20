@@ -14,6 +14,22 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+func init() {
+	// Register common mime types that might be missing on some systems
+	mime.AddExtensionType(".png", "image/png")
+	mime.AddExtensionType(".jpg", "image/jpeg")
+	mime.AddExtensionType(".jpeg", "image/jpeg")
+	mime.AddExtensionType(".gif", "image/gif")
+	mime.AddExtensionType(".svg", "image/svg+xml")
+	mime.AddExtensionType(".webp", "image/webp")
+	mime.AddExtensionType(".pdf", "application/pdf")
+	mime.AddExtensionType(".txt", "text/plain")
+	mime.AddExtensionType(".html", "text/html")
+	mime.AddExtensionType(".css", "text/css")
+	mime.AddExtensionType(".js", "application/javascript")
+	mime.AddExtensionType(".json", "application/json")
+}
+
 type S3Handler struct {
 	Storage storage.Storage
 }
@@ -384,7 +400,12 @@ func (h *S3Handler) GetObject(c *fiber.Ctx) error {
 		c.Set("x-amz-server-side-encryption", obj.EncryptionType)
 	}
 
-	contentType := mime.TypeByExtension(filepath.Ext(key))
+	contentType := obj.ContentType
+	if contentType == "" || contentType == "application/octet-stream" {
+		if extType := mime.TypeByExtension(filepath.Ext(key)); extType != "" {
+			contentType = extType
+		}
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -436,7 +457,12 @@ func (h *S3Handler) HeadObject(c *fiber.Ctx) error {
 		return c.SendStatus(http.StatusNotFound)
 	}
 
-	contentType := mime.TypeByExtension(filepath.Ext(key))
+	contentType := obj.ContentType
+	if contentType == "" || contentType == "application/octet-stream" {
+		if extType := mime.TypeByExtension(filepath.Ext(key)); extType != "" {
+			contentType = extType
+		}
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -803,7 +829,12 @@ func (h *S3Handler) ServeWebsite(c *fiber.Ctx) error {
 	}
 
 	// Determine content type
-	contentType := mime.TypeByExtension(filepath.Ext(key))
+	contentType := obj.ContentType
+	if contentType == "" || contentType == "application/octet-stream" {
+		if extType := mime.TypeByExtension(filepath.Ext(key)); extType != "" {
+			contentType = extType
+		}
+	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
