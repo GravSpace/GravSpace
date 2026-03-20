@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"os"
 	"path/filepath"
 	"sort"
@@ -33,6 +34,7 @@ type Object struct {
 	RetainUntilDate *time.Time
 	LegalHold       bool
 	LockMode        string
+	ContentType     string
 }
 
 var bufferPool = sync.Pool{
@@ -608,7 +610,10 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 
 	// Save metadata to database
 	if s.DB != nil {
-		contentType := "application/octet-stream"
+		contentType := mime.TypeByExtension(filepath.Ext(key))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
 		// Apply default retention if set
 		var retainUntil *time.Time
 		var lockMode *string
@@ -726,10 +731,16 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 	}
 
 	encryptionType := ""
+	contentType := ""
 	if s.DB != nil {
 		obj, _ := s.DB.GetObject(bucket, key, versionID)
-		if obj != nil && obj.EncryptionType != nil {
-			encryptionType = *obj.EncryptionType
+		if obj != nil {
+			if obj.EncryptionType != nil {
+				encryptionType = *obj.EncryptionType
+			}
+			if obj.ContentType != nil {
+				contentType = *obj.ContentType
+			}
 		}
 	}
 
@@ -740,6 +751,7 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 		IsLatest:       true,
 		ModTime:        info.ModTime(),
 		EncryptionType: encryptionType,
+		ContentType:    contentType,
 	}, nil
 }
 
