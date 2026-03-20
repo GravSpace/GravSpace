@@ -20,40 +20,23 @@ High Performance S3 Compatible Object Storage focused on speed and simplicity.
 
 ## Quick Install
 
-### Binary Installation (Recommended for Production)
+### Docker Deployment (Recommended)
 
-Install GravSpace binary with a single command:
+The easiest way to deploy GravSpace is using pre-built images with Docker Compose:
 
-```bash
-# Linux/macOS - Auto-detect platform
-curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
+1. **Create environment file**:
+   ```bash
+   cp .env.example .env
+   ```
 
-# Or specify version
-VERSION=0.0.2-alpha.2 curl -sSL https://raw.githubusercontent.com/gravspace/gravspace/master/install.sh | bash
+2. **Deploy using pre-built images**:
+   ```bash
+   docker-compose -f docker-compose.ghcr.yml up -d
+   ```
 
-# Or download manually from releases
-# Visit: https://github.com/gravspace/gravspace/releases
-```
-
-**Supported Platforms:**
-- Linux: amd64, arm64 (ARMv7 not supported due to SQLite compatibility)
-- macOS: amd64 (Intel), arm64 (Apple Silicon)
-- Windows: amd64 only (ARM64 not supported due to SQLite compatibility)
-
-**Verify Installation:**
-```bash
-gravspace --version
-```
-
-**Run Server:**
-```bash
-# With default settings
-gravspace
-
-# Admin API starts on :8080 (Dashboard, IAM, Settings)
-# S3 API starts on :9001 (S3 compatible object storage)
-# Access dashboard at http://localhost:8080
-```
+3. **Access the application**:
+   - Dashboard: `http://localhost:3000`
+   - S3 API: `http://localhost:9001`
 
 ## Getting Started
 

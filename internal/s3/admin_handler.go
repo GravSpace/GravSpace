@@ -243,6 +243,12 @@ func (h *AdminHandler) PutObject(c *fiber.Ctx) error {
 	bucket := c.Params("bucket")
 	key := c.Params("*")
 
+	// Defensive check: if the request path ends with a slash but the key parameter doesn't,
+	// it means Fiber's routing or parameter extraction stripped it.
+	if strings.HasSuffix(c.Path(), "/") && !strings.HasSuffix(key, "/") {
+		key += "/"
+	}
+
 	log.Printf("Admin PUT Object: bucket=%s, key=%s", bucket, key)
 
 	// Fiber's RequestBodyStream might be nil if body is already read or empty
