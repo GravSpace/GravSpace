@@ -1,5 +1,5 @@
 # Build stage
-FROM oven/bun:1.2-alpine AS builder
+FROM oven/bun:1.3.14-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -17,7 +17,7 @@ COPY . .
 RUN bun run build
 
 # Runtime stage
-FROM oven/bun:1.2-alpine
+FROM oven/bun:1.3.14-alpine
 
 # Install dumb-init for proper signal handling
 RUN apk add --no-cache dumb-init
