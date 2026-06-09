@@ -46,6 +46,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Downcase image name
+        id: downcase
+        run: |
+          echo "image=$(echo "${{ matrix.image }}" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
       - name: Extract version from tag
         id: version
         run: |
@@ -60,8 +65,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            ${{ env.REGISTRY }}/${{ matrix.image }}:latest
-            ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ steps.downcase.outputs.image }}:latest
+            ${{ env.REGISTRY }}/${{ steps.downcase.outputs.image }}:${{ steps.version.outputs.version }}
           labels: |
             org.opencontainers.image.title=GravSpace ${{ matrix.name }}
             org.opencontainers.image.description=High Performance S3 Compatible Object Storage
@@ -75,7 +80,7 @@ jobs:
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
-          image: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.version.outputs.version }}
+          image: ${{ env.REGISTRY }}/${{ steps.downcase.outputs.image }}:${{ steps.version.outputs.version }}
           format: spdx-json
           output-file: sbom-${{ matrix.name }}.spdx.json
 
