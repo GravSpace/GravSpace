@@ -13,6 +13,7 @@ export interface TransferItem {
 }
 
 const transfers = ref<TransferItem[]>([])
+const showTransferManager = ref(false)
 
 export const useTransfers = () => {
     const addTransfer = (item: Omit<TransferItem, 'progress' | 'status'>) => {
@@ -21,6 +22,7 @@ export const useTransfers = () => {
             progress: 0,
             status: item.type === 'upload' ? 'uploading' : 'downloading'
         })
+        showTransferManager.value = true
     }
 
     const setAbort = (id: string, abort: () => void) => {
@@ -71,6 +73,7 @@ export const useTransfers = () => {
 
     return {
         transfers,
+        showTransferManager,
         addTransfer,
         setAbort,
         updateProgress,

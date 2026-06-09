@@ -5,11 +5,19 @@
         <!-- HEADER -->
         <header class="h-14 px-4 flex items-center justify-between border-b border-white/5 bg-white/2">
             <h2 class="text-sm font-bold text-slate-100 tracking-wide uppercase">Transfers</h2>
-            <button @click="clearCompleted"
-                class="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all group"
-                title="Clear Completed">
-                <XCircle class="w-5 h-5 group-active:scale-95" />
-            </button>
+            <div class="flex items-center gap-1">
+                <button v-if="transfers.some(u => u.status === 'completed' || u.status === 'cancelled')"
+                    @click="clearCompleted"
+                    class="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all group"
+                    title="Clear Completed">
+                    <Trash2 class="w-4 h-4" />
+                </button>
+                <button @click="showTransferManager = false"
+                    class="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all group"
+                    title="Close">
+                    <X class="w-4.5 h-4.5 group-active:scale-95" />
+                </button>
+            </div>
         </header>
 
         <!-- LIST -->
@@ -89,10 +97,10 @@
 </template>
 
 <script setup lang="ts">
-import { CheckCircle, AlertCircle, XCircle, X, ArrowUp, ArrowDown } from 'lucide-vue-next'
+import { CheckCircle, AlertCircle, Trash2, X, ArrowUp, ArrowDown } from 'lucide-vue-next'
 import { useTransfers } from '@/composables/useTransfers'
 
-const { transfers, removeTransfer, clearCompleted, activeTransfersCount } = useTransfers()
+const { transfers, removeTransfer, clearCompleted, activeTransfersCount, showTransferManager } = useTransfers()
 </script>
 
 <style scoped>

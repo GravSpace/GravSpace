@@ -82,6 +82,60 @@
                     </div>
                 </CardContent>
             </Card>
+
+            <!-- BUCKET QUOTAS & CAPACITY ALERTS -->
+            <Card class="border-slate-200 dark:border-slate-800 shadow-sm">
+                <CardHeader>
+                    <CardTitle class="text-sm font-bold flex items-center gap-2">
+                        <ShieldAlert class="w-4 h-4 text-primary" />
+                        Bucket Quotas & Capacity Warnings
+                    </CardTitle>
+                </CardHeader>
+                <CardContent class="p-6 pt-0">
+                    <div v-if="!bucketsInfo || bucketsInfo.length === 0" class="text-center py-6 text-xs text-muted-foreground">
+                        No buckets configured.
+                    </div>
+                    <div v-else class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        <div v-for="b in bucketsInfo" :key="b.Name" 
+                            class="p-4 rounded-xl border bg-card hover:border-primary/30 transition-all flex flex-col justify-between gap-3">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <div class="h-8 w-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center">
+                                        <Database class="w-4 h-4" />
+                                    </div>
+                                    <span class="font-bold text-sm text-slate-800 dark:text-slate-200 font-mono">{{ b.Name }}</span>
+                                </div>
+                                <Badge v-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.9" variant="destructive" class="text-[9px] uppercase font-bold animate-pulse">
+                                    Critical
+                                </Badge>
+                                <Badge v-else-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.75" variant="warning" class="text-[9px] uppercase font-bold">
+                                    Warning
+                                </Badge>
+                                <Badge v-else variant="outline" class="text-[9px] uppercase font-semibold text-emerald-500 border-emerald-500/20 bg-emerald-500/5">
+                                    Healthy
+                                </Badge>
+                            </div>
+                            
+                            <div class="space-y-1">
+                                <div class="flex justify-between text-[10px] text-muted-foreground">
+                                    <span>Usage: {{ formatSize(b.CurrentSize) }}</span>
+                                    <span>Quota: {{ b.QuotaBytes > 0 ? formatSize(b.QuotaBytes) : 'Unlimited' }}</span>
+                                </div>
+                                <div class="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                    <div class="h-full rounded-full transition-all duration-300"
+                                        :class="getQuotaProgressColor(b.CurrentSize, b.QuotaBytes)"
+                                        :style="{ width: getQuotaPercent(b.CurrentSize, b.QuotaBytes) + '%' }">
+                                    </div>
+                                </div>
+                                <div class="flex justify-between items-center text-[9px] mt-1">
+                                    <span class="text-muted-foreground">{{ getQuotaPercent(b.CurrentSize, b.QuotaBytes) }}% utilized</span>
+                                    <span v-if="b.QuotaBytes > 0 && b.CurrentSize >= b.QuotaBytes" class="text-rose-500 font-bold">Quota exceeded!</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
         </main>
     </div>
 </template>
@@ -95,7 +149,7 @@ useSeoMeta({
 })
 import {
     RefreshCw, TrendingUp, Database, Activity, User, Pizza,
-    PieChart, LineChart, FileUp, Download, Trash2
+    PieChart, LineChart, FileUp, Download, Trash2, ShieldAlert
 } from 'lucide-vue-next'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -129,12 +183,34 @@ const loading = ref(false)
 const stats = ref({})
 const rawStorageHistory = ref([])
 const rawRequestTrends = ref({})
+const bucketsInfo = ref([])
+
+function formatSavings(logical, physical) {
+    if (!logical || logical <= 0) return '0 B (0%)'
+    const diff = logical - physical
+    if (diff <= 0) return '0 B (0%)'
+    const percent = Math.min(100, Math.round((diff / logical) * 100))
+    return `${formatSize(diff)} (${percent}%)`
+}
+
+function getQuotaPercent(current, quota) {
+    if (!quota || quota <= 0) return 0
+    return Math.min(100, Math.round((current / quota) * 100))
+}
+
+function getQuotaProgressColor(current, quota) {
+    if (!quota || quota <= 0) return 'bg-emerald-500'
+    const pct = current / quota
+    if (pct >= 0.9) return 'bg-rose-500'
+    if (pct >= 0.75) return 'bg-amber-500'
+    return 'bg-emerald-500'
+}
 
 const topStats = computed(() => [
-    { label: 'Total Objects', value: stats.value.total_objects || 0, icon: Database, sub: 'Currently stored' },
-    { label: 'Total Capacity', value: formatSize(stats.value.total_size || 0), icon: Activity, sub: 'Across all buckets' },
-    { label: 'Total Users', value: stats.value.total_users || 0, icon: User, sub: 'IAM identities' },
-    { label: 'Uptime', value: stats.value.uptime ? stats.value.uptime.split('.')[0] + 's' : '0s', icon: RefreshCw, sub: 'Server stability' }
+    { label: 'Total Objects', value: stats.value.total_objects || 0, icon: Database, sub: stats.value.deduplicated_count ? `${stats.value.deduplicated_count} deduplicated` : 'No duplicates' },
+    { label: 'Logical Capacity', value: formatSize(stats.value.total_size || 0), icon: Activity, sub: 'Virtual S3 size' },
+    { label: 'Physical Disk Space', value: formatSize(stats.value.physical_size || 0), icon: Database, sub: 'Actual space used' },
+    { label: 'Storage Saved', value: formatSavings(stats.value.total_size, stats.value.physical_size), icon: FileUp, sub: 'Deduplication + Gzip' }
 ])
 
 const distributionData = computed(() => {
@@ -283,15 +359,30 @@ const growthOptions = {
 async function fetchAllData() {
     loading.value = true
     try {
-        const [statsRes, storageRes, trendsRes] = await Promise.all([
+        const [statsRes, storageRes, trendsRes, bucketsRes] = await Promise.all([
             authFetch(`${API_BASE}/admin/stats`),
             authFetch(`${API_BASE}/admin/analytics/storage?days=30`),
-            authFetch(`${API_BASE}/admin/analytics/requests?days=30`)
+            authFetch(`${API_BASE}/admin/analytics/requests?days=30`),
+            authFetch(`${API_BASE}/admin/buckets`)
         ])
 
         if (statsRes.ok) stats.value = (await statsRes.json()) || {}
         if (storageRes.ok) rawStorageHistory.value = (await storageRes.json()) || []
         if (trendsRes.ok) rawRequestTrends.value = (await trendsRes.json()) || {}
+        
+        if (bucketsRes.ok) {
+            const bucketNames = (await bucketsRes.json()) || []
+            const details = await Promise.all(bucketNames.map(async name => {
+                try {
+                    const infoRes = await authFetch(`${API_BASE}/admin/buckets/${name}/info`)
+                    if (infoRes.ok) return await infoRes.json()
+                } catch (err) {
+                    console.error(`Failed to fetch bucket info for ${name}`, err)
+                }
+                return null
+            }))
+            bucketsInfo.value = details.filter(Boolean)
+        }
     } catch (e) {
         console.error('Failed to sync analytics', e)
     } finally {

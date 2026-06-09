@@ -1,6 +1,9 @@
 package storage
 
 import (
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,6 +38,8 @@ type Object struct {
 	LegalHold       bool
 	LockMode        string
 	ContentType     string
+	CompressionType string
+	ContentHash     string
 }
 
 var bufferPool = sync.Pool{
@@ -206,6 +211,19 @@ func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 
 	s.Jobs.Start()
 
+	// Clean up any incorrectly scanned dot-prefixed buckets from the database
+	if db != nil {
+		buckets, err := db.ListBuckets()
+		if err == nil {
+			for _, b := range buckets {
+				if strings.HasPrefix(b, ".") {
+					log.Printf("Cleaning up invalid dot-prefixed bucket from DB: %s\n", b)
+					db.DeleteBucket(b)
+				}
+			}
+		}
+	}
+
 	// Initialize and start sync worker (every 5 minutes by default)
 	syncInterval := 5 * time.Minute
 	if intervalEnv := os.Getenv("SYNC_WORKER_INTERVAL"); intervalEnv != "" {
@@ -218,7 +236,24 @@ func NewFileStorage(root string, db *database.Database) (*FileStorage, error) {
 	return s, nil
 }
 
+func (s *FileStorage) invalidateObjectListCache(bucket, key string) {
+	if s.Cache == nil {
+		return
+	}
+	key = strings.TrimPrefix(key, "/")
+	s.Cache.Delete(cache.ObjectListKey(bucket, ""))
+	parts := strings.Split(key, "/")
+	for i := 1; i < len(parts); i++ {
+		prefix := strings.Join(parts[:i], "/") + "/"
+		s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
+	}
+}
+
 func (s *FileStorage) CreateBucket(name string) error {
+	if strings.HasPrefix(name, ".") || len(name) < 3 || len(name) > 63 {
+		return fmt.Errorf("invalid bucket name: must be 3-63 characters and cannot start with a dot")
+	}
+
 	if err := os.MkdirAll(filepath.Join(s.Root, name), 0755); err != nil {
 		return err
 	}
@@ -391,10 +426,16 @@ func (s *FileStorage) ListBuckets() ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		if s.Cache != nil {
-			s.Cache.Set(cache.BucketListKey(), dbBuckets, 15*time.Minute)
+		var filtered []string
+		for _, b := range dbBuckets {
+			if !strings.HasPrefix(b, ".") {
+				filtered = append(filtered, b)
+			}
 		}
-		return dbBuckets, nil
+		if s.Cache != nil {
+			s.Cache.Set(cache.BucketListKey(), filtered, 15*time.Minute)
+		}
+		return filtered, nil
 	}
 
 	// Fallback to filesystem
@@ -404,7 +445,7 @@ func (s *FileStorage) ListBuckets() ([]string, error) {
 	}
 	var results []string
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Name() != ".versions" {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
 			results = append(results, entry.Name())
 		}
 	}
@@ -464,15 +505,7 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 			s.DB.CreateObject(objectRow)
 		}
 		// Invalidate object list cache for this bucket and all parent prefixes
-		if s.Cache != nil {
-			s.Cache.Delete(cache.ObjectListKey(bucket, ""))
-			// Invalidate cache for all parent directories
-			parts := strings.Split(key, "/")
-			for i := 1; i < len(parts); i++ {
-				prefix := strings.Join(parts[:i], "/") + "/"
-				s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
-			}
-		}
+		s.invalidateObjectListCache(bucket, key)
 
 		return "", nil
 	}
@@ -561,6 +594,14 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}()
 
+	contentType := mime.TypeByExtension(filepath.Ext(key))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	hash := sha256.New()
+	teeReader := io.TeeReader(reader, hash)
+
 	// Copy data and track size
 	var writeCloser io.WriteCloser = tmpFile
 	var errW error
@@ -571,13 +612,24 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}
 
+	compressionType := ""
+	var gzipWriter *gzip.Writer
+	if isCompressible(contentType) {
+		gzipWriter = gzip.NewWriter(writeCloser)
+		writeCloser = gzipWriter
+		compressionType = "gzip"
+	}
+
 	buf := bufferPool.Get().([]byte)
-	size, err = io.CopyBuffer(writeCloser, reader, buf)
+	size, err = io.CopyBuffer(writeCloser, teeReader, buf)
 	bufferPool.Put(buf)
 	if err != nil {
 		return "", err
 	}
 
+	if gzipWriter != nil {
+		gzipWriter.Close()
+	}
 	if writeCloser != tmpFile {
 		writeCloser.Close()
 	}
@@ -597,11 +649,44 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 		}
 	}
 
-	// Atomic rename
-	if err := os.Rename(tmpPath, path); err != nil {
+	contentHash := hex.EncodeToString(hash.Sum(nil))
+
+	// Get size on disk
+	fi, err := os.Stat(tmpPath)
+	if err != nil {
 		return "", err
 	}
+	onDiskSize := fi.Size()
+
+	casPath := filepath.Join(s.Root, ".cas", contentHash[:2], contentHash)
+	os.MkdirAll(filepath.Dir(casPath), 0755)
+
+	isDeduplicated := false
+	if s.DB != nil {
+		existingCASObject, _ := s.DB.GetObjectByHash(contentHash)
+		if existingCASObject != nil {
+			isDeduplicated = true
+			os.Remove(tmpPath)
+		}
+	}
+
+	if !isDeduplicated {
+		if _, err := os.Stat(casPath); os.IsNotExist(err) {
+			if err := os.Rename(tmpPath, casPath); err != nil {
+				return "", err
+			}
+		} else {
+			os.Remove(tmpPath)
+		}
+	}
 	tmpCleanup = false
+
+	if _, err := os.Stat(path); err == nil {
+		os.Remove(path)
+	}
+	if err := os.Link(casPath, path); err != nil {
+		return "", fmt.Errorf("failed to create hard link: %w", err)
+	}
 
 	// Update latest pointer only for versioned storage
 	if versioningEnabled {
@@ -614,10 +699,6 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 
 	// Save metadata to database
 	if s.DB != nil {
-		contentType := mime.TypeByExtension(filepath.Ext(key))
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
 		// Apply default retention if set
 		var retainUntil *time.Time
 		var lockMode *string
@@ -639,6 +720,10 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 			EncryptionType:  &encryptionType,
 			RetainUntilDate: retainUntil,
 			LockMode:        lockMode,
+			ContentHash:     &contentHash,
+			CompressionType: &compressionType,
+			OriginalSize:    &onDiskSize,
+			IsDeduplicated:  isDeduplicated,
 		}
 		s.DB.CreateObject(objectRow)
 		metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
@@ -658,15 +743,7 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 	}
 
 	// Invalidate object list cache for this bucket and all parent prefixes
-	if s.Cache != nil {
-		s.Cache.Delete(cache.ObjectListKey(bucket, ""))
-		// Invalidate cache for all parent directories
-		parts := strings.Split(key, "/")
-		for i := 1; i < len(parts); i++ {
-			prefix := strings.Join(parts[:i], "/") + "/"
-			s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
-		}
-	}
+	s.invalidateObjectListCache(bucket, key)
 
 	return versionID, nil
 }
@@ -693,17 +770,27 @@ func (s *FileStorage) GetObject(bucket, key, versionID string) (io.ReadCloser, *
 		return nil, nil, err
 	}
 
+	var readCloser io.ReadCloser = reader
 	// Check if encrypted
 	if obj.EncryptionType == "AES256" {
-		decryptedReader, err := crypto.DecryptStream(crypto.GetMasterKey(), reader)
+		readCloser, err = crypto.DecryptStream(crypto.GetMasterKey(), reader)
 		if err != nil {
 			reader.Close()
 			return nil, nil, err
 		}
-		return decryptedReader, obj, nil
 	}
 
-	return reader, obj, nil
+	// Check if compressed
+	if obj.CompressionType == "gzip" {
+		gzReader, err := gzip.NewReader(readCloser)
+		if err != nil {
+			readCloser.Close()
+			return nil, nil, err
+		}
+		return &gzipReadCloser{gzReader: gzReader, fileCloser: readCloser}, obj, nil
+	}
+
+	return readCloser, obj, nil
 }
 
 func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error) {
@@ -736,26 +823,43 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 
 	encryptionType := ""
 	contentType := ""
+	compressionType := ""
+	contentHash := ""
+	var dbSize int64
 	if s.DB != nil {
 		obj, _ := s.DB.GetObject(bucket, key, versionID)
 		if obj != nil {
+			dbSize = obj.Size
 			if obj.EncryptionType != nil {
 				encryptionType = *obj.EncryptionType
 			}
 			if obj.ContentType != nil {
 				contentType = *obj.ContentType
 			}
+			if obj.CompressionType != nil {
+				compressionType = *obj.CompressionType
+			}
+			if obj.ContentHash != nil {
+				contentHash = *obj.ContentHash
+			}
 		}
 	}
 
+	size := dbSize
+	if size == 0 {
+		size = info.Size()
+	}
+
 	return &Object{
-		Key:            key,
-		VersionID:      versionID,
-		Size:           info.Size(),
-		IsLatest:       true,
-		ModTime:        info.ModTime(),
-		EncryptionType: encryptionType,
-		ContentType:    contentType,
+		Key:             key,
+		VersionID:       versionID,
+		Size:            size,
+		IsLatest:        true,
+		ModTime:         info.ModTime(),
+		EncryptionType:  encryptionType,
+		ContentType:     contentType,
+		CompressionType: compressionType,
+		ContentHash:     contentHash,
 	}, nil
 }
 
@@ -769,6 +873,8 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 			softDeleteEnabled = bucketInfo.SoftDeleteEnabled
 		}
 	}
+
+	var contentHash string
 
 	// Delete from database
 	if s.DB != nil {
@@ -808,6 +914,10 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 					}
 				}
 
+				if obj.ContentHash != nil {
+					contentHash = *obj.ContentHash
+				}
+
 				metrics.ObjectsTotal.WithLabelValues(bucket).Dec()
 				metrics.StorageBytes.WithLabelValues(bucket).Sub(float64(obj.Size))
 
@@ -841,15 +951,9 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 	}
 
 	// Invalidate cache for this bucket and all parent prefixes
+	s.invalidateObjectListCache(bucket, key)
 	if s.Cache != nil {
-		s.Cache.Delete(cache.ObjectListKey(bucket, ""))
 		s.Cache.Delete(cache.ObjectMetadataKey(bucket, key, versionID))
-		// Invalidate cache for all parent directories
-		parts := strings.Split(key, "/")
-		for i := 1; i < len(parts); i++ {
-			prefix := strings.Join(parts[:i], "/") + "/"
-			s.Cache.Delete(cache.ObjectListKey(bucket, prefix))
-		}
 	}
 
 	srcPath := filepath.Join(s.Root, bucket, key)
@@ -873,6 +977,10 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 		fsErr = os.Rename(srcPath, trashPath)
 	} else {
 		fsErr = os.RemoveAll(srcPath)
+	}
+
+	if !softDeleteEnabled && contentHash != "" {
+		s.cleanOrphanedCAS(contentHash)
 	}
 
 	return fsErr
@@ -918,9 +1026,7 @@ func (s *FileStorage) RestoreObject(bucket, key, versionID string) error {
 	}
 
 	// Invalidate cache
-	if s.Cache != nil {
-		s.Cache.Delete(cache.ObjectListKey(bucket, ""))
-	}
+	s.invalidateObjectListCache(bucket, key)
 	return nil
 }
 
@@ -953,6 +1059,8 @@ func (s *FileStorage) EmptyTrash(bucket string) error {
 		return err
 	}
 
+	hashesToCheck := make(map[string]bool)
+
 	for _, obj := range objects {
 		// Calculate physical path in the .trash directory
 		var physicalPath string
@@ -968,6 +1076,10 @@ func (s *FileStorage) EmptyTrash(bucket string) error {
 			physicalPath = filepath.Join(objectDir, obj.VersionID)
 		}
 
+		if obj.ContentHash != nil && *obj.ContentHash != "" {
+			hashesToCheck[*obj.ContentHash] = true
+		}
+
 		// Delete version file from filesystem
 		os.RemoveAll(physicalPath)
 
@@ -978,14 +1090,29 @@ func (s *FileStorage) EmptyTrash(bucket string) error {
 	}
 
 	// 2. Purge records from database
-	return s.DB.EmptyTrash(bucket)
+	err = s.DB.EmptyTrash(bucket)
+	if err == nil {
+		for hash := range hashesToCheck {
+			s.cleanOrphanedCAS(hash)
+		}
+	}
+	return err
 }
 
 func (s *FileStorage) DeleteTrashObject(bucket, key, versionID string) error {
+	var contentHash string
 	if s.DB != nil {
+		obj, _ := s.DB.GetObjectIncludeDeleted(bucket, key, versionID)
+		if obj != nil && obj.ContentHash != nil {
+			contentHash = *obj.ContentHash
+		}
 		s.DB.DeleteObject(bucket, key, versionID)
 	}
-	return s.DeleteTrashFilesystem(bucket, key, versionID)
+	err := s.DeleteTrashFilesystem(bucket, key, versionID)
+	if contentHash != "" {
+		s.cleanOrphanedCAS(contentHash)
+	}
+	return err
 }
 
 func (s *FileStorage) DeleteTrashFilesystem(bucket, key, versionID string) error {
@@ -1312,29 +1439,49 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 		versionID = "simple"
 	}
 
-	destFile, err := os.Create(targetPath)
+	tmpPath := targetPath + ".tmp-" + versionID
+	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
 		return "", err
 	}
-	defer destFile.Close()
+
+	tmpCleanup := true
+	defer func() {
+		if tmpCleanup {
+			tmpFile.Close()
+			os.Remove(tmpPath)
+		}
+	}()
 
 	// 2. Setup streaming sink (with encryption if needed)
-	// For multipart, encryption type should ideally come from initiation.
-	// For now we'll assume standard or inherit from bucket.
-	var writer io.WriteCloser = destFile
+	var writer io.WriteCloser = tmpFile
 	encryptionType := "" // Could be passed or retrieved from session
 	if encryptionType == "AES256" {
-		writer, err = crypto.EncryptStream(crypto.GetMasterKey(), destFile)
+		writer, err = crypto.EncryptStream(crypto.GetMasterKey(), tmpFile)
 		if err != nil {
 			return "", err
 		}
 	}
 
-	// 3. Stream parts directly
+	contentType := mime.TypeByExtension(filepath.Ext(key))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	compressionType := ""
+	var gzipWriter *gzip.Writer
+	if isCompressible(contentType) {
+		gzipWriter = gzip.NewWriter(writer)
+		writer = gzipWriter
+		compressionType = "gzip"
+	}
+
+	// 3. Stream parts directly, hashing original data
 	sort.Slice(parts, func(i, j int) bool {
 		return parts[i].PartNumber < parts[j].PartNumber
 	})
 
+	hash := sha256.New()
 	buf := bufferPool.Get().([]byte)
 	defer bufferPool.Put(buf)
 
@@ -1346,7 +1493,8 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 			writer.Close()
 			return "", fmt.Errorf("part %d missing: %w", p.PartNumber, err)
 		}
-		n, err := io.CopyBuffer(writer, pf, buf)
+		tr := io.TeeReader(pf, hash)
+		n, err := io.CopyBuffer(writer, tr, buf)
 		pf.Close()
 		if err != nil {
 			writer.Close()
@@ -1355,9 +1503,13 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 		totalSize += n
 	}
 
-	if err := writer.Close(); err != nil {
-		return "", err
+	if gzipWriter != nil {
+		gzipWriter.Close()
 	}
+	if writer != tmpFile {
+		writer.Close()
+	}
+	tmpFile.Close()
 
 	// Check bucket quota (Post-assembly)
 	if s.DB != nil {
@@ -1365,11 +1517,50 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 		if err == nil && bucketInfo != nil && bucketInfo.QuotaBytes > 0 {
 			_, currentSize, err := s.GetBucketStats(bucket)
 			if err == nil && currentSize+totalSize > bucketInfo.QuotaBytes {
-				destFile.Close() // Ensure closed
-				os.Remove(targetPath)
+				os.Remove(tmpPath)
+				tmpCleanup = false
 				return "", fmt.Errorf("Bucket quota exceeded (%s limit reached). Multipart upload of %s rejected.", formatBytes(bucketInfo.QuotaBytes), formatBytes(totalSize))
 			}
 		}
+	}
+
+	contentHash := hex.EncodeToString(hash.Sum(nil))
+
+	// Get size on disk
+	fi, err := os.Stat(tmpPath)
+	if err != nil {
+		return "", err
+	}
+	onDiskSize := fi.Size()
+
+	casPath := filepath.Join(s.Root, ".cas", contentHash[:2], contentHash)
+	os.MkdirAll(filepath.Dir(casPath), 0755)
+
+	isDeduplicated := false
+	if s.DB != nil {
+		existingCASObject, _ := s.DB.GetObjectByHash(contentHash)
+		if existingCASObject != nil {
+			isDeduplicated = true
+			os.Remove(tmpPath)
+		}
+	}
+
+	if !isDeduplicated {
+		if _, err := os.Stat(casPath); os.IsNotExist(err) {
+			if err := os.Rename(tmpPath, casPath); err != nil {
+				return "", err
+			}
+		} else {
+			os.Remove(tmpPath)
+		}
+	}
+	tmpCleanup = false
+
+	if _, err := os.Stat(targetPath); err == nil {
+		os.Remove(targetPath)
+	}
+	if err := os.Link(casPath, targetPath); err != nil {
+		return "", fmt.Errorf("failed to create hard link for completed multipart upload: %w", err)
 	}
 
 	// 4. Update latest pointer and metadata
@@ -1379,7 +1570,6 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 	}
 
 	if s.DB != nil {
-		contentType := "application/octet-stream"
 		var retainUntil *time.Time
 		var lockMode *string
 		if defaultRetentionMode != "" && defaultRetentionDays > 0 {
@@ -1400,6 +1590,10 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 			EncryptionType:  &encryptionType,
 			RetainUntilDate: retainUntil,
 			LockMode:        lockMode,
+			ContentHash:     &contentHash,
+			CompressionType: &compressionType,
+			OriginalSize:    &onDiskSize,
+			IsDeduplicated:  isDeduplicated,
 		})
 		metrics.ObjectsTotal.WithLabelValues(bucket).Inc()
 		metrics.StorageBytes.WithLabelValues(bucket).Add(float64(totalSize))
@@ -1416,6 +1610,9 @@ func (s *FileStorage) CompleteMultipartUpload(bucket, key, uploadID string, part
 			EventName: "ObjectCreated:CompleteMultipartUpload",
 		})
 	}
+
+	// Invalidate cache for completed multipart upload
+	s.invalidateObjectListCache(bucket, key)
 
 	return versionID, nil
 }
@@ -1733,3 +1930,46 @@ func formatBytes(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
+
+func isCompressible(contentType string) bool {
+	ct := strings.ToLower(contentType)
+	return strings.HasPrefix(ct, "text/") ||
+		ct == "application/json" ||
+		ct == "application/javascript" ||
+		ct == "application/x-javascript" ||
+		ct == "application/xml" ||
+		ct == "application/xhtml+xml" ||
+		ct == "image/svg+xml"
+}
+
+func (s *FileStorage) cleanOrphanedCAS(hash string) {
+	if hash == "" || s.DB == nil {
+		return
+	}
+	count, err := s.DB.CountObjectHashReferences(hash)
+	if err == nil && count == 0 {
+		casPath := filepath.Join(s.Root, ".cas", hash[:2], hash)
+		os.Remove(casPath)
+		os.Remove(filepath.Dir(casPath)) // Clean parent folder if empty
+	}
+}
+
+
+type gzipReadCloser struct {
+	gzReader   *gzip.Reader
+	fileCloser io.Closer
+}
+
+func (g *gzipReadCloser) Read(p []byte) (n int, err error) {
+	return g.gzReader.Read(p)
+}
+
+func (g *gzipReadCloser) Close() error {
+	err1 := g.gzReader.Close()
+	err2 := g.fileCloser.Close()
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+

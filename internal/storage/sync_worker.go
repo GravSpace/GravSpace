@@ -119,7 +119,7 @@ func (sw *SyncWorker) setupWatcher() {
 	}
 
 	for _, d := range buckets {
-		if d.IsDir() && d.Name() != ".versions" && d.Name() != ".trash" {
+		if d.IsDir() && !strings.HasPrefix(d.Name(), ".") {
 			sw.watchRecursive(filepath.Join(sw.storage.Root, d.Name()))
 		}
 	}
@@ -198,7 +198,7 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 	}
 
 	for _, bucketEntry := range buckets {
-		if !bucketEntry.IsDir() || bucketEntry.Name() == ".versions" || bucketEntry.Name() == ".trash" {
+		if !bucketEntry.IsDir() || strings.HasPrefix(bucketEntry.Name(), ".") {
 			continue
 		}
 

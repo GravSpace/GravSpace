@@ -1,6 +1,10 @@
 package s3
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -466,10 +470,27 @@ func (h *AdminHandler) GetSystemStats(c *gin.Context) {
 		count, size = 0, 0
 	}
 
+	var physicalSize int64
+	var deduplicatedCount int64
+	db := h.Storage.(*storage.FileStorage).DB
+	if db != nil {
+		db.GetDB().QueryRow(`
+			SELECT 
+				COALESCE(SUM(CASE WHEN is_deduplicated = 0 OR is_deduplicated IS NULL THEN COALESCE(original_size, size) ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN is_deduplicated = 1 THEN 1 ELSE 0 END), 0)
+			FROM objects
+			WHERE is_latest = 1
+		`).Scan(&physicalSize, &deduplicatedCount)
+	} else {
+		physicalSize = size
+	}
+
 	stats := map[string]interface{}{}
 	stats["total_users"] = len(h.UserManager.Users)
 	stats["total_objects"] = count
 	stats["total_size"] = size
+	stats["physical_size"] = physicalSize
+	stats["deduplicated_count"] = deduplicatedCount
 	stats["uptime"] = time.Since(startTime).String()
 
 	c.JSON(http.StatusOK, stats)
@@ -934,7 +955,6 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 	query.Set("X-Amz-SignedHeaders", "host")
 	if versionID != "" && versionID != "simple" && versionID != "folder" {
 		query.Set("versionId", versionID)
-		endpoint += "?versionId=" + versionID
 	}
 
 	if allowedIP != "" {
@@ -1010,3 +1030,97 @@ func (h *AdminHandler) UpdateSystemSettings(c *gin.Context) {
 
 	c.Status(http.StatusOK)
 }
+
+func (h *AdminHandler) ListWebhookDLQ(c *gin.Context) {
+	bucket := c.Param("bucket")
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
+	}
+
+	dlq, err := fs.DB.ListWebhookDLQ(bucket)
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, dlq)
+}
+
+func (h *AdminHandler) DeleteWebhookDLQ(c *gin.Context) {
+	idStr := c.Param("id")
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
+	}
+
+	if err := fs.DB.DeleteWebhookDLQ(id); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func (h *AdminHandler) RetryWebhookDLQ(c *gin.Context) {
+	idStr := c.Param("id")
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
+	}
+
+	record, err := fs.DB.GetWebhookDLQ(id)
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if record == nil {
+		c.String(http.StatusNotFound, "DLQ record not found")
+		return
+	}
+
+	// Try sending the webhook payload again
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", record.URL, bytes.NewBuffer([]byte(record.Payload)))
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "GravSpace-Webhook-Dispatcher/1.0")
+	req.Header.Set("X-GravSpace-Event", record.EventName)
+	req.Header.Set("X-GravSpace-Retry", "true")
+
+	webhook, _ := fs.DB.GetWebhook(record.WebhookID)
+	if webhook != nil && webhook.Secret != "" {
+		mac := hmac.New(sha256.New, []byte(webhook.Secret))
+		mac.Write([]byte(record.Payload))
+		signature := hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-GravSpace-Signature", signature)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		c.String(http.StatusBadGateway, fmt.Sprintf("Retry failed: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		c.String(resp.StatusCode, fmt.Sprintf("Target returned error status: %d", resp.StatusCode))
+		return
+	}
+
+	// Delete from DLQ on successful retry
+	fs.DB.DeleteWebhookDLQ(id)
+	c.Status(http.StatusOK)
+}
+
