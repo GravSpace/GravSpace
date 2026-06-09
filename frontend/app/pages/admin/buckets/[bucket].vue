@@ -165,7 +165,7 @@
                                             </div>
                                             <div class="flex items-center gap-1.5 min-w-0">
                                                 <span class="truncate" :title="item.Key">{{ item.Key.split('/').pop()
-                                                    }}</span>
+                                                }}</span>
                                                 <div v-if="isLocked(item)" class="flex items-center gap-1 shrink-0">
                                                     <Lock class="w-3 h-3 text-amber-500" />
                                                     <span class="text-[9px] font-bold text-amber-600 uppercase">{{
@@ -532,6 +532,15 @@
                                 <LinkIcon class="w-4 h-4" />
                             </Button>
                         </div>
+                        <!-- QR Code generator card -->
+                        <div v-if="qrCodeDataUrl"
+                            class="flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+                            <span class="text-[10px] uppercase font-bold text-muted-foreground font-bold">Scan to
+                                Download</span>
+                            <div class="p-2 bg-white rounded-lg border border-slate-200 shadow-xs">
+                                <img :src="qrCodeDataUrl" alt="QR Code" class="w-40 h-40" />
+                            </div>
+                        </div>
                         <p class="text-[10px] text-muted-foreground italic text-center">Copy this link to share the
                             file. It
                             will expire automatically.</p>
@@ -558,7 +567,7 @@
                     </DialogTitle>
                     <DialogDescription>
                         Timeline for <span class="font-mono text-primary font-bold">{{ selectedExplorerItem?.Key
-                        }}</span>
+                            }}</span>
                     </DialogDescription>
                 </DialogHeader>
 
@@ -591,10 +600,17 @@
                                     <div class="flex items-center gap-1">
                                         <span class="text-[10px] font-mono mr-2">{{ v.IsDeleteMarker ? '-' :
                                             formatSize(v.Size)
-                                        }}</span>
+                                            }}</span>
                                         <Button v-if="!v.IsDeleteMarker" variant="outline" size="sm" class="h-7 text-xs"
                                             @click="downloadObject(selectedExplorerItem?.Key, v.VersionID)">
                                             <Download class="w-3 h-3 mr-1" /> Get
+                                        </Button>
+                                        <Button
+                                            v-if="!v.IsDeleteMarker && !v.IsLatest && (getPreviewType(selectedExplorerItem?.Key) === 'text' || getPreviewType(selectedExplorerItem?.Key) === 'markdown')"
+                                            variant="outline" size="sm"
+                                            class="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
+                                            @click="openDiff(selectedExplorerItem?.Key, v.VersionID)">
+                                            Diff
                                         </Button>
                                     </div>
                                 </div>
@@ -625,11 +641,12 @@
                 </DialogHeader>
 
                 <Tabs v-model="activeSettingsTab" class="mt-4">
-                    <TabsList class="grid w-full grid-cols-4">
+                    <TabsList class="grid w-full grid-cols-5">
                         <TabsTrigger value="general">General</TabsTrigger>
                         <TabsTrigger value="notifications">Webhooks</TabsTrigger>
                         <TabsTrigger value="security">Security</TabsTrigger>
                         <TabsTrigger value="website">Website</TabsTrigger>
+                        <TabsTrigger value="cors">CORS</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="general" class="space-y-6 py-4">
@@ -925,6 +942,104 @@
                             </div>
                         </div>
                     </TabsContent>
+                    <TabsContent value="cors"
+                        class="space-y-6 py-4 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar animate-in fade-in duration-200">
+                        <div class="flex items-center justify-between border-b pb-3">
+                            <div>
+                                <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200">Cross-Origin Resource
+                                    Sharing
+                                    (CORS)</h3>
+                                <p class="text-xs text-muted-foreground">Configure access permissions from other
+                                    domains.</p>
+                            </div>
+                            <Button variant="outline" size="sm" @click="addCorsRule" class="h-8 border-dashed">
+                                <Plus class="w-3.5 h-3.5 mr-1.5" /> Add Rule
+                            </Button>
+                        </div>
+
+                        <div v-if="corsRules.length === 0"
+                            class="flex flex-col items-center justify-center py-8 text-center text-muted-foreground bg-muted/20 border border-dashed rounded-xl">
+                            <Globe class="w-8 h-8 opacity-20 mb-2 animate-pulse text-indigo-500" />
+                            <span class="text-xs font-semibold">No CORS Configuration Active</span>
+                            <p class="text-[10px] text-muted-foreground/60 max-w-xs mt-1">Configure CORS rules to allow
+                                requests
+                                from external web clients.</p>
+                        </div>
+
+                        <div v-else class="space-y-6">
+                            <div v-for="(rule, index) in corsRules" :key="index"
+                                class="p-4 rounded-xl border bg-card/50 relative group/rule hover:border-primary/20 transition-all space-y-4 shadow-2xs">
+                                <div class="absolute top-4 right-4 flex items-center gap-2">
+                                    <span
+                                        class="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-semibold">Rule
+                                        #{{ index + 1 }}</span>
+                                    <Button variant="ghost" size="icon" @click="removeCorsRule(index)"
+                                        class="h-7 w-7 text-muted-foreground hover:text-destructive">
+                                        <Trash2 class="w-3.5 h-3.5" />
+                                    </Button>
+                                </div>
+
+                                <div class="grid gap-4 md:grid-cols-2">
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed
+                                            Origins</Label>
+                                        <Input v-model="rule.originsInput" placeholder="e.g. *, https://example.com"
+                                            class="h-9" />
+                                        <p class="text-[9px] text-muted-foreground italic">Comma-separated domains or *
+                                        </p>
+                                    </div>
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed
+                                            Headers</Label>
+                                        <Input v-model="rule.headersInput"
+                                            placeholder="e.g. *, Authorization, Content-Type" class="h-9" />
+                                        <p class="text-[9px] text-muted-foreground italic">Comma-separated headers or *
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div class="space-y-2">
+                                    <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed
+                                        Methods</Label>
+                                    <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+                                        <label v-for="m in ['GET', 'PUT', 'POST', 'DELETE', 'HEAD']" :key="m"
+                                            class="flex items-center gap-2 cursor-pointer text-xs">
+                                            <input type="checkbox" :value="m" v-model="rule.allowed_methods"
+                                                class="rounded border-slate-300 dark:border-slate-700 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer bg-white" />
+                                            <span class="font-bold text-slate-700 dark:text-slate-300">{{ m }}</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="grid gap-4 md:grid-cols-2">
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Max Age
+                                            (Seconds)</Label>
+                                        <Input type="number" v-model.number="rule.max_age_seconds" placeholder="3000"
+                                            class="h-9" />
+                                    </div>
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Expose
+                                            Headers
+                                            (Optional)</Label>
+                                        <Input v-model="rule.exposeHeadersInput"
+                                            placeholder="e.g. ETag, x-amz-request-id" class="h-9" />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center justify-between border-t pt-4">
+                                <Button variant="outline" size="sm" @click="deleteCors"
+                                    class="h-9 text-destructive border-destructive/20 hover:bg-destructive/10">
+                                    Remove CORS Policy
+                                </Button>
+                                <Button @click="saveCors" :disabled="savingCorsState" class="h-9 font-bold">
+                                    <Loader2 v-if="savingCorsState" class="w-3.5 h-3.5 mr-2 animate-spin" />
+                                    Save CORS Configuration
+                                </Button>
+                            </div>
+                        </div>
+                    </TabsContent>
                 </Tabs>
             </DialogContent>
         </Dialog>
@@ -997,7 +1112,9 @@ import {
     Settings, FileText, FileImage, FileAudio, FileVideo, FileCode, FileArchive,
     Clock, ShieldAlert, ShieldOff, ShieldCheck, Tag, PlusCircle, UserCircle,
     UserPlus, UserMinus, Key, ShieldCheck as ShieldCheckIcon, Save,
-    Music, File as FileIcon
+    Music, File as FileIcon, Inbox,
+    FolderUp,
+    ChevronDown
 } from 'lucide-vue-next'
 import { debounce } from 'perfect-debounce'
 import { toast } from 'vue-sonner'
@@ -1022,11 +1139,12 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 import { useTransfers } from '@/composables/useTransfers'
+import QRCode from 'qrcode'
 
 const config = useRuntimeConfig()
 const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
-const { addTransfer, updateProgress, setAbort, setError, activeTransfersCount } = useTransfers()
+const { addTransfer, updateProgress, setAbort, setError, activeTransfersCount, setPauseResume } = useTransfers()
 const route = useRoute()
 const router = useRouter()
 
@@ -1206,6 +1324,7 @@ async function openBucketSettings() {
     await fetchBucketInfo()
     await fetchWebhooks()
     await fetchWebsiteConfig()
+    await fetchCorsConfig()
     await fetchDLQ()
 
     // Initialize quota inputs from bucket info
@@ -1671,7 +1790,7 @@ async function performMultipartUpload(file, path) {
     const sanitizedPath = path.split('/').map(p => p.trim().replace(/\s+/g, '_')).join('/')
     const key = currentPrefix.value + sanitizedPath
 
-    addTransfer({ id: transferId, name: sanitizedPath, bucket: bucketName.value, size: file.size, type: 'upload' })
+    addTransfer({ id: transferId, name: sanitizedPath, bucket: bucketName.value, size: file.size, type: 'upload', isMultipart: true })
 
     try {
         const initRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploads=`, { method: 'POST' })
@@ -1683,67 +1802,112 @@ async function performMultipartUpload(file, path) {
         const parts = []
         let uploadedSize = 0
         const CONCURRENCY = 3
-        let currentPartIdx = 0
-        let isAborted = false
         const activeXhrs = new Set()
+        let isAborted = false
+        let isPaused = false
+
+        // Generate part indices
+        const pendingParts = Array.from({ length: totalParts }, (_, idx) => idx)
 
         setAbort(transferId, () => {
             isAborted = true
             activeXhrs.forEach(xhr => xhr.abort())
+            activeXhrs.clear()
         })
 
+        const pauseHandler = () => {
+            isPaused = true
+            activeXhrs.forEach(xhr => xhr.abort())
+            activeXhrs.clear()
+        }
+
+        const resumeHandler = () => {
+            isPaused = false
+            runUpload().catch(err => setError(transferId, err.message))
+        }
+
+        setPauseResume(transferId, pauseHandler, resumeHandler)
+
         async function uploadWorker() {
-            while (currentPartIdx < totalParts && !isAborted) {
-                const i = currentPartIdx++
+            while (pendingParts.length > 0 && !isAborted && !isPaused) {
+                const i = pendingParts.shift()
                 const partNumber = i + 1
                 const start = i * CHUNK_SIZE
                 const end = Math.min((i + 1) * CHUNK_SIZE, file.size)
                 const chunk = file.slice(start, end)
 
-                const chunkEtag = await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest()
-                    activeXhrs.add(xhr)
-                    xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploadId=${UploadId}&partNumber=${partNumber}`)
-                    const token = authState.value.token
-                    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+                try {
+                    const chunkEtag = await new Promise((resolve, reject) => {
+                        const xhr = new XMLHttpRequest()
+                        activeXhrs.add(xhr)
+                        xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploadId=${UploadId}&partNumber=${partNumber}`)
+                        const token = authState.value.token
+                        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
 
-                    xhr.onload = () => {
-                        activeXhrs.delete(xhr)
-                        if (xhr.status >= 200 && xhr.status < 300) {
-                            uploadedSize += (end - start)
-                            updateProgress(transferId, (uploadedSize / file.size) * 100)
-                            resolve(xhr.getResponseHeader('ETag'))
-                        } else reject(new Error(`Part ${partNumber} failed`))
+                        xhr.onload = () => {
+                            activeXhrs.delete(xhr)
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                resolve(xhr.getResponseHeader('ETag'))
+                            } else reject(new Error(`Part ${partNumber} failed: ${xhr.status}`))
+                        }
+                        xhr.onerror = () => {
+                            activeXhrs.delete(xhr)
+                            reject(new Error(`Network error on part ${partNumber}`))
+                        }
+                        xhr.onabort = () => {
+                            activeXhrs.delete(xhr)
+                            reject(new Error('aborted'))
+                        }
+                        xhr.send(chunk)
+                    })
+
+                    if (!isAborted) {
+                        parts.push({ PartNumber: partNumber, ETag: chunkEtag })
+                        uploadedSize += (end - start)
+                        updateProgress(transferId, (uploadedSize / file.size) * 100)
                     }
-                    xhr.onerror = () => {
-                        activeXhrs.delete(xhr)
-                        reject(new Error(`Network error on part ${partNumber}`))
+                } catch (err) {
+                    if (isPaused || err.message === 'aborted') {
+                        pendingParts.unshift(i)
+                        return
+                    } else {
+                        throw err
                     }
-                    xhr.send(chunk)
-                })
-                if (!isAborted) parts.push({ PartNumber: partNumber, ETag: chunkEtag })
+                }
             }
         }
 
-        // Start workers
-        const workers = []
-        for (let w = 0; w < Math.min(CONCURRENCY, totalParts); w++) {
-            workers.push(uploadWorker())
-        }
-        await Promise.all(workers)
+        async function runUpload() {
+            const workers = []
+            for (let w = 0; w < Math.min(CONCURRENCY, pendingParts.length); w++) {
+                workers.push(uploadWorker())
+            }
+            await Promise.all(workers)
 
-        const completeRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeURIComponent(key)}?uploadId=${UploadId}`, {
-            method: 'POST',
-            body: { parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) }
-        })
+            if (isAborted) return
+            if (isPaused) return
 
-        if (completeRes.ok) {
-            updateProgress(transferId, 100)
-            if (bucketName.value === route.params.bucket) fetchObjects()
-        } else {
-            throw new Error('Failed to complete upload')
+            if (parts.length === totalParts) {
+                const completeRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeURIComponent(key)}?uploadId=${UploadId}`, {
+                    method: 'POST',
+                    body: { parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) }
+                })
+
+                if (completeRes.ok) {
+                    updateProgress(transferId, 100)
+                    if (bucketName.value === route.params.bucket) fetchObjects()
+                } else {
+                    throw new Error('Failed to complete upload')
+                }
+            }
         }
-    } catch (err) { setError(transferId, err.message) }
+
+        // Start upload
+        await runUpload()
+
+    } catch (err) {
+        setError(transferId, err.message)
+    }
 }
 
 async function downloadObject(key, versionId = '') {
@@ -1942,11 +2106,13 @@ const shareExpiry = ref('3600')
 const shareAllowedIP = ref('')
 const shareOneTimeUse = ref(false)
 const generatedUrl = ref('')
+const qrCodeDataUrl = ref('')
 
 function openShareDialog(item) {
     selectedShareObject.value = item
     shareExpiry.value = '3600'
     generatedUrl.value = ''
+    qrCodeDataUrl.value = ''
     showShareDialog.value = true
 }
 
@@ -1994,6 +2160,19 @@ async function generateShareLink() {
         if (res.ok) {
             const data = await res.json()
             generatedUrl.value = data.url
+            try {
+                qrCodeDataUrl.value = await QRCode.toDataURL(data.url, {
+                    width: 200,
+                    margin: 2,
+                    color: {
+                        dark: '#0f172a',
+                        light: '#ffffff'
+                    }
+                })
+            } catch (err) {
+                console.error('Failed to generate QR Code:', err)
+                qrCodeDataUrl.value = ''
+            }
         }
     } catch (e) { toast.error('Failed to generate link') }
 }
@@ -2118,5 +2297,190 @@ async function updateLockSettings() {
         showLockDialog.value = false
         fetchObjects()
     } catch (e) { toast.error('Failed') }
+}
+
+// ==========================================
+// CORS CONFIGURATION
+// ==========================================
+const corsRules = ref([])
+const savingCorsState = ref(false)
+
+function addCorsRule() {
+    corsRules.value.push({
+        originsInput: '*',
+        headersInput: '*',
+        allowed_methods: ['GET'],
+        max_age_seconds: 3000,
+        exposeHeadersInput: ''
+    })
+}
+
+function removeCorsRule(index) {
+    corsRules.value.splice(index, 1)
+}
+
+async function fetchCorsConfig() {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/cors`)
+        if (res.ok) {
+            const data = await res.json()
+            if (data && data.cors_rules) {
+                corsRules.value = data.cors_rules.map(rule => ({
+                    originsInput: (rule.allowed_origins || []).join(', '),
+                    headersInput: (rule.allowed_headers || []).join(', '),
+                    allowed_methods: rule.allowed_methods || [],
+                    max_age_seconds: rule.max_age_seconds || 3000,
+                    exposeHeadersInput: (rule.expose_headers || []).join(', ')
+                }))
+            } else {
+                corsRules.value = []
+            }
+        } else {
+            corsRules.value = []
+        }
+    } catch (e) {
+        corsRules.value = []
+    }
+}
+
+async function saveCors() {
+    savingCorsState.value = true
+    try {
+        const rules = corsRules.value.map(rule => ({
+            allowed_origins: rule.originsInput.split(',').map(s => s.trim()).filter(Boolean),
+            allowed_methods: rule.allowed_methods,
+            allowed_headers: rule.headersInput.split(',').map(s => s.trim()).filter(Boolean),
+            max_age_seconds: parseInt(rule.max_age_seconds) || 3000,
+            expose_headers: rule.exposeHeadersInput.split(',').map(s => s.trim()).filter(Boolean)
+        }))
+
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/cors`, {
+            method: 'PUT',
+            body: { cors_rules: rules }
+        })
+        if (res.ok) {
+            toast.success('CORS Configuration saved successfully')
+            await fetchCorsConfig()
+        } else {
+            const err = await res.text()
+            throw new Error(err || 'Failed to save CORS configuration')
+        }
+    } catch (e) {
+        toast.error(e.message)
+    } finally {
+        savingCorsState.value = false
+    }
+}
+
+async function deleteCors() {
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/cors`, {
+                method: 'DELETE'
+            })
+            if (!res.ok) throw new Error('Failed to delete CORS configuration')
+            corsRules.value = []
+        },
+        {
+            loading: 'Deleting CORS Policy...',
+            success: 'CORS Policy deleted successfully',
+            error: 'Failed to delete CORS configuration'
+        }
+    )
+}
+
+// ==========================================
+// VERSION DIFF VIEWER
+// ==========================================
+const showDiffDialog = ref(false)
+const diffLoading = ref(false)
+const diffRows = ref([])
+const diffInfo = ref({
+    key: '',
+    oldVersion: '',
+    newVersion: 'Current'
+})
+
+function computeDiff(oldText, newText) {
+    const oldLines = oldText.split('\n')
+    const newLines = newText.split('\n')
+
+    const m = oldLines.length
+    const n = newLines.length
+
+    const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (oldLines[i - 1] === newLines[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+            }
+        }
+    }
+
+    let i = m, j = n
+    const diff = []
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+            diff.unshift({
+                type: 'equal',
+                oldLine: oldLines[i - 1],
+                newLine: newLines[j - 1],
+                oldNum: i,
+                newNum: j
+            })
+            i--
+            j--
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            diff.unshift({
+                type: 'added',
+                oldLine: '',
+                newLine: newLines[j - 1],
+                oldNum: null,
+                newNum: j
+            })
+            j--
+        } else {
+            diff.unshift({
+                type: 'removed',
+                oldLine: oldLines[i - 1],
+                newLine: '',
+                oldNum: i,
+                newNum: null
+            })
+            i--
+        }
+    }
+    return diff
+}
+
+async function openDiff(key, oldVersionId) {
+    showDiffDialog.value = true
+    diffLoading.value = true
+    diffRows.value = []
+    diffInfo.value = {
+        key: key,
+        oldVersion: oldVersionId.slice(0, 12) + '...',
+        newVersion: 'Current'
+    }
+
+    try {
+        const oldRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?versionId=${oldVersionId}`)
+        if (!oldRes.ok) throw new Error('Failed to fetch historical version')
+        const oldText = await oldRes.text()
+
+        const newRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}`)
+        if (!newRes.ok) throw new Error('Failed to fetch current version')
+        const newText = await newRes.text()
+
+        diffRows.value = computeDiff(oldText, newText)
+    } catch (e) {
+        toast.error('Failed to compute version diff: ' + e.message)
+        showDiffDialog.value = false
+    } finally {
+        diffLoading.value = false
+    }
 }
 </script>

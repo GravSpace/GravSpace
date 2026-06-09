@@ -5,11 +5,14 @@ export interface TransferItem {
     name: string
     bucket: string
     progress: number
-    status: 'uploading' | 'downloading' | 'completed' | 'error' | 'cancelled'
+    status: 'uploading' | 'downloading' | 'completed' | 'error' | 'cancelled' | 'paused'
     type: 'upload' | 'download'
     error?: string
     size: number
     abort?: () => void
+    isMultipart?: boolean
+    pause?: () => void
+    resume?: () => void
 }
 
 const transfers = ref<TransferItem[]>([])
@@ -71,6 +74,30 @@ export const useTransfers = () => {
         transfers.value.filter(u => u.status === 'uploading' || u.status === 'downloading').length
     )
 
+    const setPauseResume = (id: string, pause: () => void, resume: () => void) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item) {
+            item.pause = pause
+            item.resume = resume
+        }
+    }
+
+    const pauseTransfer = (id: string) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item && item.pause && item.status === 'uploading') {
+            item.pause()
+            item.status = 'paused'
+        }
+    }
+
+    const resumeTransfer = (id: string) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item && item.resume && item.status === 'paused') {
+            item.status = 'uploading'
+            item.resume()
+        }
+    }
+
     return {
         transfers,
         showTransferManager,
@@ -80,6 +107,9 @@ export const useTransfers = () => {
         setError,
         removeTransfer,
         clearCompleted,
-        activeTransfersCount
+        activeTransfersCount,
+        setPauseResume,
+        pauseTransfer,
+        resumeTransfer
     }
 }

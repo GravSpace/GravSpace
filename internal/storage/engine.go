@@ -165,6 +165,7 @@ type Storage interface {
 	StartLifecycleWorker()
 	GetGlobalStats() (count int, size int64, err error)
 	GetBucketStats(bucket string) (count int, size int64, err error)
+	GetContentTypeBreakdown() ([]*database.ContentTypeBreakdown, error)
 }
 
 // FileStorage implements Storage using the local filesystem
@@ -1679,6 +1680,13 @@ func (s *FileStorage) GetBucketStats(bucket string) (count int, size int64, err 
 		return 0, 0, fmt.Errorf("database not initialized")
 	}
 	return s.DB.GetBucketStats(bucket)
+}
+
+func (s *FileStorage) GetContentTypeBreakdown() ([]*database.ContentTypeBreakdown, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not initialized")
+	}
+	return s.DB.GetContentTypeBreakdown()
 }
 
 func (s *FileStorage) PutBucketCors(bucket string, cors CORSConfiguration) error {

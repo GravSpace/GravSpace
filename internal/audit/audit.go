@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/database"
+	"github.com/gorilla/websocket"
 )
 
 type AuditLog struct {
@@ -24,6 +26,8 @@ type AuditLog struct {
 type AuditLogger struct {
 	logFile *os.File
 	db      *database.Database
+	clients map[*websocket.Conn]bool
+	mu      sync.Mutex
 }
 
 func NewAuditLogger(logPath string, db *database.Database) (*AuditLogger, error) {
@@ -42,7 +46,35 @@ func NewAuditLogger(logPath string, db *database.Database) (*AuditLogger, error)
 	return &AuditLogger{
 		logFile: file,
 		db:      db,
+		clients: make(map[*websocket.Conn]bool),
 	}, nil
+}
+
+func (a *AuditLogger) RegisterClient(ws *websocket.Conn) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.clients[ws] = true
+}
+
+func (a *AuditLogger) UnregisterClient(ws *websocket.Conn) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.clients[ws]; ok {
+		delete(a.clients, ws)
+		ws.Close()
+	}
+}
+
+func (a *AuditLogger) BroadcastLog(jsonData []byte) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for client := range a.clients {
+		err := client.WriteMessage(websocket.TextMessage, jsonData)
+		if err != nil {
+			client.Close()
+			delete(a.clients, client)
+		}
+	}
 }
 
 func (a *AuditLogger) Log(entry AuditLog) error {
@@ -72,6 +104,9 @@ func (a *AuditLogger) Log(entry AuditLog) error {
 			Details:   string(detailsJSON),
 		})
 	}
+
+	// Broadcast to active WebSocket clients
+	a.BroadcastLog(jsonData)
 
 	// Also print to stdout for container logs
 	fmt.Println(string(jsonData))
@@ -107,6 +142,12 @@ func (a *AuditLogger) LogDenied(user, action, resource, ip, userAgent, reason st
 }
 
 func (a *AuditLogger) Close() error {
+	a.mu.Lock()
+	for client := range a.clients {
+		client.Close()
+	}
+	a.mu.Unlock()
+
 	if a.logFile != nil {
 		return a.logFile.Close()
 	}

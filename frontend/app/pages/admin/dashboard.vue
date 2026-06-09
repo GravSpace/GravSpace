@@ -32,7 +32,7 @@
                 </Card>
             </div>
 
-            <div class="grid gap-6 md:grid-cols-2 h-[450px]">
+            <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 lg:h-[450px]">
                 <!-- STORAGE DISTRIBUTION -->
                 <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
                     <CardHeader>
@@ -46,6 +46,23 @@
                         <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
                             <PieChart class="w-12 h-12" />
                             <span class="text-xs italic">Gathering distribution data...</span>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <!-- CONTENT-TYPE BREAKDOWN -->
+                <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
+                    <CardHeader>
+                        <CardTitle class="text-sm font-bold flex items-center gap-2">
+                            <PieChart class="w-4 h-4 text-primary" />
+                            Content-Type Breakdown (by Size)
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent class="flex-1 flex items-center justify-center p-6 pt-0 min-h-0">
+                        <Doughnut v-if="contentTypeData" :data="contentTypeData" :options="contentTypeOptions" />
+                        <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
+                            <PieChart class="w-12 h-12" />
+                            <span class="text-xs italic">Gathering breakdown data...</span>
                         </div>
                     </CardContent>
                 </Card>
@@ -79,6 +96,62 @@
                     <Line v-if="growthData" :data="growthData" :options="growthOptions" />
                     <div v-else class="flex h-full items-center justify-center opacity-20">
                         <Database class="w-12 h-12" />
+                    </div>
+                </CardContent>
+            </Card>
+
+            <!-- LIVE AUDIT TRAIL LOGS -->
+            <Card class="border-slate-200 dark:border-slate-800 shadow-sm flex flex-col h-[400px] overflow-hidden">
+                <CardHeader class="flex flex-row items-center justify-between pb-3 border-b">
+                    <CardTitle class="text-sm font-bold flex items-center gap-2">
+                        <Activity class="w-4 h-4 text-primary" />
+                        Live Audit Trail & S3 Events
+                    </CardTitle>
+                    <div class="flex items-center gap-4">
+                        <!-- Connection Status -->
+                        <div class="flex items-center gap-1.5 text-xs font-semibold select-none">
+                            <span class="relative flex h-2 w-2">
+                                <span :class="[
+                                    'absolute inline-flex h-full w-full rounded-full opacity-75',
+                                    wsStatus === 'connected' ? 'animate-ping bg-emerald-400' : '',
+                                    wsStatus === 'connecting' ? 'animate-ping bg-amber-400' : '',
+                                    wsStatus === 'disconnected' ? 'bg-rose-400' : ''
+                                ]"></span>
+                                <span :class="[
+                                    'relative inline-flex rounded-full h-2 w-2',
+                                    wsStatus === 'connected' ? 'bg-emerald-500' : '',
+                                    wsStatus === 'connecting' ? 'bg-amber-500' : '',
+                                    wsStatus === 'disconnected' ? 'bg-rose-500' : ''
+                                ]"></span>
+                            </span>
+                            <span :class="[
+                                'text-[10px] uppercase tracking-wider font-bold',
+                                wsStatus === 'connected' ? 'text-emerald-500' : '',
+                                wsStatus === 'connecting' ? 'text-amber-500' : '',
+                                wsStatus === 'disconnected' ? 'text-rose-500' : ''
+                            ]">{{ wsStatus }}</span>
+                        </div>
+                        <Button variant="ghost" size="xs" @click="auditLogs = []" class="h-7 text-[10px] uppercase font-bold tracking-wider">
+                            Clear Feed
+                        </Button>
+                    </div>
+                </CardHeader>
+                <CardContent class="flex-1 bg-slate-950 p-4 font-mono text-[11px] leading-5 text-slate-300 overflow-y-auto custom-scrollbar select-text">
+                    <div v-if="auditLogs.length === 0" class="flex flex-col items-center justify-center h-full text-slate-500 select-none">
+                        <Activity class="w-8 h-8 opacity-20 mb-2 animate-pulse" />
+                        <span class="italic">Waiting for S3 events...</span>
+                    </div>
+                    <div v-else class="space-y-1">
+                        <div v-for="(log, idx) in auditLogs" :key="idx" class="flex items-start gap-3 hover:bg-white/5 py-0.5 px-1 rounded transition-colors animate-in fade-in duration-300">
+                            <span class="text-slate-600 select-none shrink-0">{{ new Date(log.timestamp).toLocaleTimeString() }}</span>
+                            <span :class="[
+                                'px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0',
+                                log.result === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            ]">{{ log.action.split(':').pop() }}</span>
+                            <span class="text-slate-400 truncate flex-1" :title="log.resource">{{ log.resource }}</span>
+                            <span class="text-slate-500 shrink-0">{{ log.user || 'anonymous' }}</span>
+                            <span class="text-slate-600 shrink-0 font-bold tracking-tighter">{{ log.ip }}</span>
+                        </div>
                     </div>
                 </CardContent>
             </Card>
@@ -141,7 +214,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 
 useSeoMeta({
     title: 'Analytics Dashboard | GravSpace',
@@ -175,7 +248,7 @@ ChartJS.register(
     PointElement, LinearScale, CategoryScale, Filler
 )
 
-const { authFetch } = useAuth()
+const { authState, authFetch } = useAuth()
 const config = useRuntimeConfig()
 const API_BASE = config.public.apiBase
 
@@ -183,6 +256,7 @@ const loading = ref(false)
 const stats = ref({})
 const rawStorageHistory = ref([])
 const rawRequestTrends = ref({})
+const rawContentTypeBreakdown = ref([])
 const bucketsInfo = ref([])
 
 function formatSavings(logical, physical) {
@@ -238,6 +312,49 @@ const distributionData = computed(() => {
         }]
     }
 })
+
+const contentTypeData = computed(() => {
+    if (!rawContentTypeBreakdown.value || rawContentTypeBreakdown.value.length === 0) return null
+
+    const labels = rawContentTypeBreakdown.value.map(item => item.category)
+    const sizes = rawContentTypeBreakdown.value.map(item => item.totalSize)
+    if (labels.length === 0) return null
+
+    return {
+        labels,
+        datasets: [{
+            data: sizes,
+            backgroundColor: [
+                '#3b82f6', // blue (Images)
+                '#10b981', // emerald (Videos)
+                '#f59e0b', // amber (Audio)
+                '#6366f1', // indigo (Documents)
+                '#8b5cf6', // violet (Code & Config)
+                '#ec4899', // pink (Archives)
+                '#64748b'  // slate (Other)
+            ],
+            borderWidth: 0,
+            hoverOffset: 15
+        }]
+    }
+})
+
+const contentTypeOptions = computed(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: '75%',
+    plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 15, font: { size: 10 } } },
+        tooltip: {
+            callbacks: {
+                label: (context) => {
+                    const value = context.raw
+                    return ` ${context.label}: ${formatSize(value)}`
+                }
+            }
+        }
+    }
+}))
 
 const trendsData = computed(() => {
     if (!rawRequestTrends.value || Object.keys(rawRequestTrends.value).length === 0) return null
@@ -359,12 +476,17 @@ const growthOptions = {
 async function fetchAllData() {
     loading.value = true
     try {
-        const [statsRes, storageRes, trendsRes, bucketsRes] = await Promise.all([
+        const [statsRes, storageRes, trendsRes, bucketsRes, contentTypeRes] = await Promise.all([
             authFetch(`${API_BASE}/admin/stats`),
             authFetch(`${API_BASE}/admin/analytics/storage?days=30`),
             authFetch(`${API_BASE}/admin/analytics/requests?days=30`),
-            authFetch(`${API_BASE}/admin/buckets`)
+            authFetch(`${API_BASE}/admin/buckets`),
+            authFetch(`${API_BASE}/admin/analytics/content-types`)
         ])
+
+        if (contentTypeRes && contentTypeRes.ok) {
+            rawContentTypeBreakdown.value = (await contentTypeRes.json()) || []
+        }
 
         if (statsRes.ok) stats.value = (await statsRes.json()) || {}
         if (storageRes.ok) rawStorageHistory.value = (await storageRes.json()) || []
@@ -398,7 +520,78 @@ function formatSize(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+const wsStatus = ref('disconnected')
+const auditLogs = ref([])
+let wsConn = null
+
+function connectWS() {
+    if (wsConn) {
+        try {
+            wsConn.close()
+        } catch(e){}
+    }
+
+    wsStatus.value = 'connecting'
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const token = authState.value?.token || ''
+
+    let wsUrl = ''
+    if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
+        const host = API_BASE.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        wsUrl = `${protocol}//${host}/admin/audit/stream`
+    } else {
+        // API_BASE is relative (e.g. /api or /)
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            // Local dev environment: connect directly to Go backend on port 8080
+            wsUrl = `${protocol}//localhost:8080/admin/audit/stream`
+        } else {
+            // Production: connect relative to current host
+            const cleanApiBase = API_BASE.startsWith('/') ? API_BASE : '/' + API_BASE
+            const host = window.location.host + cleanApiBase.replace(/\/$/, '')
+            wsUrl = `${protocol}//${host}/admin/audit/stream`
+        }
+    }
+
+    wsConn = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`)
+
+    wsConn.onopen = () => {
+        wsStatus.value = 'connected'
+    }
+
+    wsConn.onmessage = (event) => {
+        try {
+            const logEntry = JSON.parse(event.data)
+            auditLogs.value.push(logEntry)
+            if (auditLogs.value.length > 50) {
+                auditLogs.value.shift()
+            }
+        } catch (e) {
+            console.error('Failed to parse audit event:', e)
+        }
+    }
+
+    wsConn.onclose = () => {
+        wsStatus.value = 'disconnected'
+        setTimeout(() => {
+            if (wsConn && wsConn.readyState === WebSocket.CLOSED) {
+                connectWS()
+            }
+        }, 3000)
+    }
+
+    wsConn.onerror = () => {
+        wsStatus.value = 'disconnected'
+    }
+}
+
 onMounted(() => {
     fetchAllData()
+    connectWS()
+})
+
+onUnmounted(() => {
+    if (wsConn) {
+        wsConn.close()
+    }
 })
 </script>

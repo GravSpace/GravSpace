@@ -215,15 +215,42 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 		// Policy Enforcement
 		action, resource := determineS3Action(c)
 		if !um.CheckPermission(user, action, resource) {
-			// Special case: if user is not anonymous and access denied, they might need better policies.
-			// If they ARE anonymous, return 403.
+			// Audit log the denial
+			if auditLogger != nil {
+				auditLogger.LogDenied(user.Username, action, resource, c.ClientIP(), c.GetHeader("User-Agent"), "IAM Policy Denied")
+			}
 			sendS3Error(c, "AccessDenied", "Access Denied by IAM Policy", c.Param("bucket"), c.Param("key"))
 			c.Abort()
 			return
 		}
 
+		// Store action & resource for post-request audit
 		c.Set("user", user)
+		c.Set("s3_action", action)
+		c.Set("s3_resource", resource)
+
 		c.Next()
+
+		// After handler completes, log the successful operation
+		if auditLogger != nil {
+			statusCode := c.Writer.Status()
+			result := "success"
+			if statusCode >= 400 {
+				result = "error"
+			}
+			auditLogger.Log(audit.AuditLog{
+				User:      user.Username,
+				Action:    action,
+				Resource:  resource,
+				Result:    result,
+				IP:        c.ClientIP(),
+				UserAgent: c.GetHeader("User-Agent"),
+				Details: map[string]string{
+					"method":      c.Request.Method,
+					"status_code": fmt.Sprintf("%d", statusCode),
+				},
+			})
+		}
 	}
 }
 

@@ -1580,3 +1580,65 @@ func (d *Database) DeleteWebhookDLQ(id int64) error {
 	metrics.RecordDBQuery("DeleteWebhookDLQ", time.Since(start))
 	return err
 }
+
+type ContentTypeBreakdown struct {
+	Category  string `json:"category"`
+	TotalSize int64  `json:"totalSize"`
+	Count     int    `json:"count"`
+}
+
+func (d *Database) GetContentTypeBreakdown() ([]*ContentTypeBreakdown, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`SELECT COALESCE(content_type, 'application/octet-stream') as ct, SUM(size) as total_size, COUNT(*) as count 
+	                          FROM objects 
+	                          WHERE is_latest = 1 AND deleted_at IS NULL 
+	                          GROUP BY ct`)
+	metrics.RecordDBQuery("GetContentTypeBreakdown", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	breakdowns := []*ContentTypeBreakdown{}
+	for rows.Next() {
+		var ct string
+		var totalSize int64
+		var count int
+		if err := rows.Scan(&ct, &totalSize, &count); err != nil {
+			return nil, err
+		}
+
+		category := "Other"
+		if strings.HasPrefix(ct, "image/") {
+			category = "Images"
+		} else if strings.HasPrefix(ct, "video/") {
+			category = "Videos"
+		} else if strings.HasPrefix(ct, "audio/") {
+			category = "Audio"
+		} else if strings.HasPrefix(ct, "text/") || ct == "application/pdf" || ct == "application/msword" || ct == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
+			category = "Documents"
+		} else if ct == "application/json" || ct == "application/xml" || ct == "application/javascript" || ct == "application/x-yaml" {
+			category = "Code & Config"
+		} else if ct == "application/zip" || ct == "application/x-tar" || ct == "application/x-gzip" || ct == "application/x-bzip2" {
+			category = "Archives"
+		}
+
+		found := false
+		for _, b := range breakdowns {
+			if b.Category == category {
+				b.TotalSize += totalSize
+				b.Count += count
+				found = true
+				break
+			}
+		}
+		if !found {
+			breakdowns = append(breakdowns, &ContentTypeBreakdown{
+				Category:  category,
+				TotalSize: totalSize,
+				Count:     count,
+			})
+		}
+	}
+	return breakdowns, nil
+}
