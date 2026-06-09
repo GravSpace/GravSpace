@@ -32,7 +32,7 @@
                 </Card>
             </div>
 
-            <div class="grid gap-6 md:grid-cols-2 h-[450px]">
+            <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 lg:h-[450px]">
                 <!-- STORAGE DISTRIBUTION -->
                 <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
                     <CardHeader>
@@ -46,6 +46,23 @@
                         <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
                             <PieChart class="w-12 h-12" />
                             <span class="text-xs italic">Gathering distribution data...</span>
+                        </div>
+                    </CardContent>
+                </Card>
+
+                <!-- CONTENT-TYPE BREAKDOWN -->
+                <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
+                    <CardHeader>
+                        <CardTitle class="text-sm font-bold flex items-center gap-2">
+                            <PieChart class="w-4 h-4 text-primary" />
+                            Content-Type Breakdown (by Size)
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent class="flex-1 flex items-center justify-center p-6 pt-0 min-h-0">
+                        <Doughnut v-if="contentTypeData" :data="contentTypeData" :options="contentTypeOptions" />
+                        <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
+                            <PieChart class="w-12 h-12" />
+                            <span class="text-xs italic">Gathering breakdown data...</span>
                         </div>
                     </CardContent>
                 </Card>
@@ -82,12 +99,122 @@
                     </div>
                 </CardContent>
             </Card>
+
+            <!-- LIVE AUDIT TRAIL LOGS -->
+            <Card class="border-slate-200 dark:border-slate-800 shadow-sm flex flex-col h-[400px] overflow-hidden">
+                <CardHeader class="flex flex-row items-center justify-between pb-3 border-b">
+                    <CardTitle class="text-sm font-bold flex items-center gap-2">
+                        <Activity class="w-4 h-4 text-primary" />
+                        Live Audit Trail & S3 Events
+                    </CardTitle>
+                    <div class="flex items-center gap-4">
+                        <!-- Connection Status -->
+                        <div class="flex items-center gap-1.5 text-xs font-semibold select-none">
+                            <span class="relative flex h-2 w-2">
+                                <span :class="[
+                                    'absolute inline-flex h-full w-full rounded-full opacity-75',
+                                    wsStatus === 'connected' ? 'animate-ping bg-emerald-400' : '',
+                                    wsStatus === 'connecting' ? 'animate-ping bg-amber-400' : '',
+                                    wsStatus === 'disconnected' ? 'bg-rose-400' : ''
+                                ]"></span>
+                                <span :class="[
+                                    'relative inline-flex rounded-full h-2 w-2',
+                                    wsStatus === 'connected' ? 'bg-emerald-500' : '',
+                                    wsStatus === 'connecting' ? 'bg-amber-500' : '',
+                                    wsStatus === 'disconnected' ? 'bg-rose-500' : ''
+                                ]"></span>
+                            </span>
+                            <span :class="[
+                                'text-[10px] uppercase tracking-wider font-bold',
+                                wsStatus === 'connected' ? 'text-emerald-500' : '',
+                                wsStatus === 'connecting' ? 'text-amber-500' : '',
+                                wsStatus === 'disconnected' ? 'text-rose-500' : ''
+                            ]">{{ wsStatus }}</span>
+                        </div>
+                        <Button variant="ghost" size="xs" @click="auditLogs = []" class="h-7 text-[10px] uppercase font-bold tracking-wider">
+                            Clear Feed
+                        </Button>
+                    </div>
+                </CardHeader>
+                <CardContent class="flex-1 bg-slate-950 p-4 font-mono text-[11px] leading-5 text-slate-300 overflow-y-auto custom-scrollbar select-text">
+                    <div v-if="auditLogs.length === 0" class="flex flex-col items-center justify-center h-full text-slate-500 select-none">
+                        <Activity class="w-8 h-8 opacity-20 mb-2 animate-pulse" />
+                        <span class="italic">Waiting for S3 events...</span>
+                    </div>
+                    <div v-else class="space-y-1">
+                        <div v-for="(log, idx) in auditLogs" :key="idx" class="flex items-start gap-3 hover:bg-white/5 py-0.5 px-1 rounded transition-colors animate-in fade-in duration-300">
+                            <span class="text-slate-600 select-none shrink-0">{{ new Date(log.timestamp).toLocaleTimeString() }}</span>
+                            <span :class="[
+                                'px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0',
+                                log.result === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            ]">{{ log.action.split(':').pop() }}</span>
+                            <span class="text-slate-400 truncate flex-1" :title="log.resource">{{ log.resource }}</span>
+                            <span class="text-slate-500 shrink-0">{{ log.user || 'anonymous' }}</span>
+                            <span class="text-slate-600 shrink-0 font-bold tracking-tighter">{{ log.ip }}</span>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+
+            <!-- BUCKET QUOTAS & CAPACITY ALERTS -->
+            <Card class="border-slate-200 dark:border-slate-800 shadow-sm">
+                <CardHeader>
+                    <CardTitle class="text-sm font-bold flex items-center gap-2">
+                        <ShieldAlert class="w-4 h-4 text-primary" />
+                        Bucket Quotas & Capacity Warnings
+                    </CardTitle>
+                </CardHeader>
+                <CardContent class="p-6 pt-0">
+                    <div v-if="!bucketsInfo || bucketsInfo.length === 0" class="text-center py-6 text-xs text-muted-foreground">
+                        No buckets configured.
+                    </div>
+                    <div v-else class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                        <div v-for="b in bucketsInfo" :key="b.Name" 
+                            class="p-4 rounded-xl border bg-card hover:border-primary/30 transition-all flex flex-col justify-between gap-3">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <div class="h-8 w-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center">
+                                        <Database class="w-4 h-4" />
+                                    </div>
+                                    <span class="font-bold text-sm text-slate-800 dark:text-slate-200 font-mono">{{ b.Name }}</span>
+                                </div>
+                                <Badge v-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.9" variant="destructive" class="text-[9px] uppercase font-bold animate-pulse">
+                                    Critical
+                                </Badge>
+                                <Badge v-else-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.75" variant="warning" class="text-[9px] uppercase font-bold">
+                                    Warning
+                                </Badge>
+                                <Badge v-else variant="outline" class="text-[9px] uppercase font-semibold text-emerald-500 border-emerald-500/20 bg-emerald-500/5">
+                                    Healthy
+                                </Badge>
+                            </div>
+                            
+                            <div class="space-y-1">
+                                <div class="flex justify-between text-[10px] text-muted-foreground">
+                                    <span>Usage: {{ formatSize(b.CurrentSize) }}</span>
+                                    <span>Quota: {{ b.QuotaBytes > 0 ? formatSize(b.QuotaBytes) : 'Unlimited' }}</span>
+                                </div>
+                                <div class="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                    <div class="h-full rounded-full transition-all duration-300"
+                                        :class="getQuotaProgressColor(b.CurrentSize, b.QuotaBytes)"
+                                        :style="{ width: getQuotaPercent(b.CurrentSize, b.QuotaBytes) + '%' }">
+                                    </div>
+                                </div>
+                                <div class="flex justify-between items-center text-[9px] mt-1">
+                                    <span class="text-muted-foreground">{{ getQuotaPercent(b.CurrentSize, b.QuotaBytes) }}% utilized</span>
+                                    <span v-if="b.QuotaBytes > 0 && b.CurrentSize >= b.QuotaBytes" class="text-rose-500 font-bold">Quota exceeded!</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
         </main>
     </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 
 useSeoMeta({
     title: 'Analytics Dashboard | GravSpace',
@@ -95,7 +222,7 @@ useSeoMeta({
 })
 import {
     RefreshCw, TrendingUp, Database, Activity, User, Pizza,
-    PieChart, LineChart, FileUp, Download, Trash2
+    PieChart, LineChart, FileUp, Download, Trash2, ShieldAlert
 } from 'lucide-vue-next'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -121,7 +248,7 @@ ChartJS.register(
     PointElement, LinearScale, CategoryScale, Filler
 )
 
-const { authFetch } = useAuth()
+const { authState, authFetch } = useAuth()
 const config = useRuntimeConfig()
 const API_BASE = config.public.apiBase
 
@@ -129,12 +256,35 @@ const loading = ref(false)
 const stats = ref({})
 const rawStorageHistory = ref([])
 const rawRequestTrends = ref({})
+const rawContentTypeBreakdown = ref([])
+const bucketsInfo = ref([])
+
+function formatSavings(logical, physical) {
+    if (!logical || logical <= 0) return '0 B (0%)'
+    const diff = logical - physical
+    if (diff <= 0) return '0 B (0%)'
+    const percent = Math.min(100, Math.round((diff / logical) * 100))
+    return `${formatSize(diff)} (${percent}%)`
+}
+
+function getQuotaPercent(current, quota) {
+    if (!quota || quota <= 0) return 0
+    return Math.min(100, Math.round((current / quota) * 100))
+}
+
+function getQuotaProgressColor(current, quota) {
+    if (!quota || quota <= 0) return 'bg-emerald-500'
+    const pct = current / quota
+    if (pct >= 0.9) return 'bg-rose-500'
+    if (pct >= 0.75) return 'bg-amber-500'
+    return 'bg-emerald-500'
+}
 
 const topStats = computed(() => [
-    { label: 'Total Objects', value: stats.value.total_objects || 0, icon: Database, sub: 'Currently stored' },
-    { label: 'Total Capacity', value: formatSize(stats.value.total_size || 0), icon: Activity, sub: 'Across all buckets' },
-    { label: 'Total Users', value: stats.value.total_users || 0, icon: User, sub: 'IAM identities' },
-    { label: 'Uptime', value: stats.value.uptime ? stats.value.uptime.split('.')[0] + 's' : '0s', icon: RefreshCw, sub: 'Server stability' }
+    { label: 'Total Objects', value: stats.value.total_objects || 0, icon: Database, sub: stats.value.deduplicated_count ? `${stats.value.deduplicated_count} deduplicated` : 'No duplicates' },
+    { label: 'Logical Capacity', value: formatSize(stats.value.total_size || 0), icon: Activity, sub: 'Virtual S3 size' },
+    { label: 'Physical Disk Space', value: formatSize(stats.value.physical_size || 0), icon: Database, sub: 'Actual space used' },
+    { label: 'Storage Saved', value: formatSavings(stats.value.total_size, stats.value.physical_size), icon: FileUp, sub: 'Deduplication + Gzip' }
 ])
 
 const distributionData = computed(() => {
@@ -162,6 +312,49 @@ const distributionData = computed(() => {
         }]
     }
 })
+
+const contentTypeData = computed(() => {
+    if (!rawContentTypeBreakdown.value || rawContentTypeBreakdown.value.length === 0) return null
+
+    const labels = rawContentTypeBreakdown.value.map(item => item.category)
+    const sizes = rawContentTypeBreakdown.value.map(item => item.totalSize)
+    if (labels.length === 0) return null
+
+    return {
+        labels,
+        datasets: [{
+            data: sizes,
+            backgroundColor: [
+                '#3b82f6', // blue (Images)
+                '#10b981', // emerald (Videos)
+                '#f59e0b', // amber (Audio)
+                '#6366f1', // indigo (Documents)
+                '#8b5cf6', // violet (Code & Config)
+                '#ec4899', // pink (Archives)
+                '#64748b'  // slate (Other)
+            ],
+            borderWidth: 0,
+            hoverOffset: 15
+        }]
+    }
+})
+
+const contentTypeOptions = computed(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: '75%',
+    plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 15, font: { size: 10 } } },
+        tooltip: {
+            callbacks: {
+                label: (context) => {
+                    const value = context.raw
+                    return ` ${context.label}: ${formatSize(value)}`
+                }
+            }
+        }
+    }
+}))
 
 const trendsData = computed(() => {
     if (!rawRequestTrends.value || Object.keys(rawRequestTrends.value).length === 0) return null
@@ -283,15 +476,35 @@ const growthOptions = {
 async function fetchAllData() {
     loading.value = true
     try {
-        const [statsRes, storageRes, trendsRes] = await Promise.all([
+        const [statsRes, storageRes, trendsRes, bucketsRes, contentTypeRes] = await Promise.all([
             authFetch(`${API_BASE}/admin/stats`),
             authFetch(`${API_BASE}/admin/analytics/storage?days=30`),
-            authFetch(`${API_BASE}/admin/analytics/requests?days=30`)
+            authFetch(`${API_BASE}/admin/analytics/requests?days=30`),
+            authFetch(`${API_BASE}/admin/buckets`),
+            authFetch(`${API_BASE}/admin/analytics/content-types`)
         ])
+
+        if (contentTypeRes && contentTypeRes.ok) {
+            rawContentTypeBreakdown.value = (await contentTypeRes.json()) || []
+        }
 
         if (statsRes.ok) stats.value = (await statsRes.json()) || {}
         if (storageRes.ok) rawStorageHistory.value = (await storageRes.json()) || []
         if (trendsRes.ok) rawRequestTrends.value = (await trendsRes.json()) || {}
+        
+        if (bucketsRes.ok) {
+            const bucketNames = (await bucketsRes.json()) || []
+            const details = await Promise.all(bucketNames.map(async name => {
+                try {
+                    const infoRes = await authFetch(`${API_BASE}/admin/buckets/${name}/info`)
+                    if (infoRes.ok) return await infoRes.json()
+                } catch (err) {
+                    console.error(`Failed to fetch bucket info for ${name}`, err)
+                }
+                return null
+            }))
+            bucketsInfo.value = details.filter(Boolean)
+        }
     } catch (e) {
         console.error('Failed to sync analytics', e)
     } finally {
@@ -307,7 +520,78 @@ function formatSize(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+const wsStatus = ref('disconnected')
+const auditLogs = ref([])
+let wsConn = null
+
+function connectWS() {
+    if (wsConn) {
+        try {
+            wsConn.close()
+        } catch(e){}
+    }
+
+    wsStatus.value = 'connecting'
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const token = authState.value?.token || ''
+
+    let wsUrl = ''
+    if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
+        const host = API_BASE.replace(/^https?:\/\//, '').replace(/\/$/, '')
+        wsUrl = `${protocol}//${host}/admin/audit/stream`
+    } else {
+        // API_BASE is relative (e.g. /api or /)
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            // Local dev environment: connect directly to Go backend on port 8080
+            wsUrl = `${protocol}//localhost:8080/admin/audit/stream`
+        } else {
+            // Production: connect relative to current host
+            const cleanApiBase = API_BASE.startsWith('/') ? API_BASE : '/' + API_BASE
+            const host = window.location.host + cleanApiBase.replace(/\/$/, '')
+            wsUrl = `${protocol}//${host}/admin/audit/stream`
+        }
+    }
+
+    wsConn = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`)
+
+    wsConn.onopen = () => {
+        wsStatus.value = 'connected'
+    }
+
+    wsConn.onmessage = (event) => {
+        try {
+            const logEntry = JSON.parse(event.data)
+            auditLogs.value.push(logEntry)
+            if (auditLogs.value.length > 50) {
+                auditLogs.value.shift()
+            }
+        } catch (e) {
+            console.error('Failed to parse audit event:', e)
+        }
+    }
+
+    wsConn.onclose = () => {
+        wsStatus.value = 'disconnected'
+        setTimeout(() => {
+            if (wsConn && wsConn.readyState === WebSocket.CLOSED) {
+                connectWS()
+            }
+        }, 3000)
+    }
+
+    wsConn.onerror = () => {
+        wsStatus.value = 'disconnected'
+    }
+}
+
 onMounted(() => {
     fetchAllData()
+    connectWS()
+})
+
+onUnmounted(() => {
+    if (wsConn) {
+        wsConn.close()
+    }
 })
 </script>

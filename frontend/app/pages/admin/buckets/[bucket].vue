@@ -206,9 +206,9 @@
                                                     <DropdownMenuItem @click="openVersionExplorer(item)">
                                                         <Clock class="w-4 h-4 mr-2" /> Timeline Explorer
                                                     </DropdownMenuItem>
-                                                    <DropdownMenuItem @click="copyPresignedUrl(item.Key)">
+                                                    <!-- <DropdownMenuItem @click="copyPresignedUrl(item.Key)">
                                                         <LinkIcon class="w-4 h-4 mr-2" /> Quick Copy Link
-                                                    </DropdownMenuItem>
+                                                    </DropdownMenuItem> -->
                                                     <DropdownMenuItem @click="openTagDialog(item)">
                                                         <Tag class="w-4 h-4 mr-2" /> Edit Tags
                                                     </DropdownMenuItem>
@@ -316,39 +316,69 @@
         </Dialog>
 
         <Dialog :open="!!previewObject" @update:open="previewObject = null">
-            <DialogContent class=" p-0 overflow-hidden bg-white/95 border-0 rounded-xl shadow-2xl">
-                <DialogHeader class="sr-only">
-                    <DialogTitle>Object Preview</DialogTitle>
-                    <DialogDescription>Viewing preview for {{ previewObject?.Key }}</DialogDescription>
-                </DialogHeader>
-                <div class="relative h-[85vh] flex items-center justify-center">
-                    <div v-if="!previewUrl" class="flex flex-col items-center gap-4 animate-pulse">
-                        <Loader2 class="w-10 h-10 animate-spin text-primary" />
-                        <span class="text-sm font-medium tracking-wide">SECURE STREAMING IN PROGRESS...</span>
+            <DialogContent
+                class="max-w-4xl p-0 overflow-hidden bg-white/98 dark:bg-slate-950/98 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl">
+                <DialogHeader
+                    class="px-6 py-4 border-b border-slate-200/50 dark:border-slate-800/50 flex flex-row items-center justify-between">
+                    <div>
+                        <DialogTitle
+                            class="text-sm font-bold font-mono text-slate-800 dark:text-slate-200 truncate max-w-lg">{{
+                                previewObject?.Key.split('/').pop() }}</DialogTitle>
+                        <DialogDescription class="text-[10px] text-muted-foreground font-mono">{{ previewObject?.Key }}
+                        </DialogDescription>
                     </div>
-                    <img v-else :src="previewUrl" class="max-w-full max-h-full object-contain p-4" />
+                    <div class="flex items-center gap-2">
+                        <Button size="xs" variant="outline" class="h-7 text-[10px] font-bold"
+                            @click="downloadObject(previewObject?.Key, previewObject?.VersionID)">
+                            <Download class="w-3 h-3 mr-1.5" /> Download
+                        </Button>
+                    </div>
+                </DialogHeader>
+                <div class="relative h-[65vh] bg-slate-900/5 dark:bg-slate-950/50 flex items-center justify-center p-4">
+                    <div v-if="!previewType" class="flex flex-col items-center gap-4 animate-pulse">
+                        <Loader2 class="w-10 h-10 animate-spin text-primary" />
+                        <span class="text-xs font-bold tracking-widest text-slate-600 uppercase">Securing data
+                            stream...</span>
+                    </div>
 
-                    <div
-                        class="absolute bottom-0 left-1 right-0 p-6 bg-linear-to-t from-white via-white/80 to-transparent">
-                        <div class="flex flex-col items-center justify-between">
-                            <div class="flex items-center gap-4">
-                                <div class="flex flex-col justify-center max-w-[70%]">
-                                    <span
-                                        class="text-[10px] font-bold text-primary tracking-widest uppercase mb-1">Preview
-                                        Mode</span>
-                                    <span class="text-sm font-mono truncate">{{ previewObject?.Key }}</span>
-                                </div>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                <Button size="sm" variant="secondary" class="font-bold border-0 h-9"
-                                    @click="downloadObject(previewObject?.Key, previewObject?.VersionID)">
-                                    <Download class="w-4 h-4 mr-2" /> Download
-                                </Button>
-                                <Button size="sm" variant="ghost" @click="previewObject = null">
-                                    Dismiss
-                                </Button>
-                            </div>
-                        </div>
+                    <!-- Images -->
+                    <img v-else-if="previewType === 'image'" :src="previewUrl"
+                        class="max-w-full max-h-full object-contain rounded-lg shadow-sm border border-slate-200/50 dark:border-slate-800/50" />
+
+                    <!-- Audio -->
+                    <div v-else-if="previewType === 'audio'"
+                        class="w-full max-w-md p-6 bg-card rounded-2xl border flex flex-col items-center gap-4">
+                        <Music class="w-12 h-12 text-primary" />
+                        <audio controls :src="previewUrl" class="w-full"></audio>
+                    </div>
+
+                    <!-- Video -->
+                    <video v-else-if="previewType === 'video'" controls :src="previewUrl"
+                        class="max-w-full max-h-full rounded-lg shadow-md border"></video>
+
+                    <!-- PDF -->
+                    <iframe v-else-if="previewType === 'pdf'" :src="previewUrl"
+                        class="w-full h-full border-0 rounded-lg"></iframe>
+
+                    <!-- Text / Code -->
+                    <pre v-else-if="previewType === 'text'"
+                        class="w-full h-full p-4 overflow-auto font-mono text-xs text-slate-800 dark:text-emerald-400 bg-slate-950 border border-slate-800 rounded-lg select-text">
+                {{ previewTextContent }}</pre>
+
+                    <!-- Markdown -->
+                    <div v-else-if="previewType === 'markdown'"
+                        class="w-full h-full p-6 overflow-auto bg-card rounded-lg border prose dark:prose-invert max-w-none text-sm select-text">
+                        <pre class="font-mono text-xs whitespace-pre-wrap">{{ previewTextContent }}</pre>
+                    </div>
+
+                    <div v-else-if="previewType === 'error'" class="flex flex-col items-center gap-2 text-rose-500">
+                        <ShieldAlert class="w-10 h-10" />
+                        <span class="text-xs font-bold">Failed to load preview for this file.</span>
+                    </div>
+
+                    <div v-else class="flex flex-col items-center gap-2 text-slate-400">
+                        <FileIcon class="w-10 h-10" />
+                        <span class="text-xs font-semibold">Preview not supported for this file type.</span>
                     </div>
                 </div>
             </DialogContent>
@@ -502,6 +532,15 @@
                                 <LinkIcon class="w-4 h-4" />
                             </Button>
                         </div>
+                        <!-- QR Code generator card -->
+                        <div v-if="qrCodeDataUrl"
+                            class="flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+                            <span class="text-[10px] uppercase font-bold text-muted-foreground font-bold">Scan to
+                                Download</span>
+                            <div class="p-2 bg-white rounded-lg border border-slate-200 shadow-xs">
+                                <img :src="qrCodeDataUrl" alt="QR Code" class="w-40 h-40" />
+                            </div>
+                        </div>
                         <p class="text-[10px] text-muted-foreground italic text-center">Copy this link to share the
                             file. It
                             will expire automatically.</p>
@@ -566,6 +605,13 @@
                                             @click="downloadObject(selectedExplorerItem?.Key, v.VersionID)">
                                             <Download class="w-3 h-3 mr-1" /> Get
                                         </Button>
+                                        <Button
+                                            v-if="!v.IsDeleteMarker && !v.IsLatest && (getPreviewType(selectedExplorerItem?.Key) === 'text' || getPreviewType(selectedExplorerItem?.Key) === 'markdown')"
+                                            variant="outline" size="sm"
+                                            class="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
+                                            @click="openDiff(selectedExplorerItem?.Key, v.VersionID)">
+                                            Diff
+                                        </Button>
                                     </div>
                                 </div>
 
@@ -595,11 +641,12 @@
                 </DialogHeader>
 
                 <Tabs v-model="activeSettingsTab" class="mt-4">
-                    <TabsList class="grid w-full grid-cols-4">
+                    <TabsList class="grid w-full grid-cols-5">
                         <TabsTrigger value="general">General</TabsTrigger>
                         <TabsTrigger value="notifications">Webhooks</TabsTrigger>
                         <TabsTrigger value="security">Security</TabsTrigger>
                         <TabsTrigger value="website">Website</TabsTrigger>
+                        <TabsTrigger value="cors">CORS</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="general" class="space-y-6 py-4">
@@ -714,6 +761,84 @@
                                 </div>
                             </div>
                         </div>
+
+                        <!-- Webhook DLQ Manager -->
+                        <div class="space-y-4 pt-4 border-t mt-4">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <h4 class="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                                        Dead-Letter
+                                        Queue (DLQ)</h4>
+                                    <Badge variant="destructive" class="text-[9px] px-1.5 py-0.5 rounded-full"
+                                        v-if="dlqRecords.length > 0">
+                                        {{ dlqRecords.length }} failed
+                                    </Badge>
+                                </div>
+                                <Button size="xs" variant="outline" @click="fetchDLQ"
+                                    class="h-7 text-[10px]">Refresh</Button>
+                            </div>
+
+                            <div class="border rounded-lg overflow-hidden bg-card/50">
+                                <div v-if="dlqRecords.length === 0"
+                                    class="p-6 text-center text-xs text-muted-foreground">
+                                    No failed webhook deliveries in DLQ.
+                                </div>
+                                <div v-else class="max-h-[30vh] overflow-y-auto divide-y">
+                                    <div v-for="record in dlqRecords" :key="record.id"
+                                        class="p-3 text-xs flex flex-col gap-2 hover:bg-muted/30 transition-colors">
+                                        <div class="flex items-center justify-between">
+                                            <div class="flex items-center gap-1.5 flex-wrap">
+                                                <Badge variant="outline"
+                                                    class="text-[8px] border-rose-500/20 text-rose-500 bg-rose-500/5">
+                                                    {{ record.event_name }}
+                                                </Badge>
+                                                <span
+                                                    class="font-mono text-[10px] text-muted-foreground truncate max-w-[180px]"
+                                                    :title="record.url">
+                                                    {{ record.url }}
+                                                </span>
+                                            </div>
+                                            <div class="flex items-center gap-1.5">
+                                                <Button size="xs" variant="ghost"
+                                                    class="h-6 px-2 text-primary hover:text-primary hover:bg-primary/5 font-bold"
+                                                    @click="retryDLQ(record.id)">
+                                                    Retry
+                                                </Button>
+                                                <Button size="xs" variant="ghost"
+                                                    class="h-6 px-2 text-destructive hover:text-destructive hover:bg-destructive/5 font-bold"
+                                                    @click="deleteDLQ(record.id)">
+                                                    Delete
+                                                </Button>
+                                            </div>
+                                        </div>
+
+                                        <div class="grid grid-cols-1 gap-1 text-[10px]">
+                                            <div class="flex gap-1.5 items-start">
+                                                <span
+                                                    class="font-semibold text-muted-foreground whitespace-nowrap">Error:</span>
+                                                <span class="text-rose-600 dark:text-rose-400 font-mono break-all">{{
+                                                    record.error_message }}</span>
+                                            </div>
+                                            <div class="flex gap-1.5 items-center">
+                                                <span class="font-semibold text-muted-foreground">Time:</span>
+                                                <span class="text-muted-foreground font-mono">{{ new
+                                                    Date(record.failed_at).toLocaleString() }}</span>
+                                            </div>
+                                        </div>
+
+                                        <details class="cursor-pointer group">
+                                            <summary
+                                                class="text-[9px] text-muted-foreground hover:text-foreground select-none flex items-center gap-1">
+                                                Show Payload
+                                            </summary>
+                                            <pre
+                                                class="mt-1 p-2 rounded bg-slate-950 text-emerald-400 font-mono text-[9px] overflow-x-auto max-h-[100px] select-text">
+                                        {{ formatPayload(record.payload) }}</pre>
+                                        </details>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </TabsContent>
 
                     <TabsContent value="security" class="space-y-6 py-4">
@@ -817,6 +942,104 @@
                             </div>
                         </div>
                     </TabsContent>
+                    <TabsContent value="cors"
+                        class="space-y-6 py-4 max-h-[50vh] overflow-y-auto pr-2 custom-scrollbar animate-in fade-in duration-200">
+                        <div class="flex items-center justify-between border-b pb-3">
+                            <div>
+                                <h3 class="text-sm font-bold text-slate-800 dark:text-slate-200">Cross-Origin Resource
+                                    Sharing
+                                    (CORS)</h3>
+                                <p class="text-xs text-muted-foreground">Configure access permissions from other
+                                    domains.</p>
+                            </div>
+                            <Button variant="outline" size="sm" @click="addCorsRule" class="h-8 border-dashed">
+                                <Plus class="w-3.5 h-3.5 mr-1.5" /> Add Rule
+                            </Button>
+                        </div>
+
+                        <div v-if="corsRules.length === 0"
+                            class="flex flex-col items-center justify-center py-8 text-center text-muted-foreground bg-muted/20 border border-dashed rounded-xl">
+                            <Globe class="w-8 h-8 opacity-20 mb-2 animate-pulse text-indigo-500" />
+                            <span class="text-xs font-semibold">No CORS Configuration Active</span>
+                            <p class="text-[10px] text-muted-foreground/60 max-w-xs mt-1">Configure CORS rules to allow
+                                requests
+                                from external web clients.</p>
+                        </div>
+
+                        <div v-else class="space-y-6">
+                            <div v-for="(rule, index) in corsRules" :key="index"
+                                class="p-4 rounded-xl border bg-card/50 relative group/rule hover:border-primary/20 transition-all space-y-4 shadow-2xs">
+                                <div class="absolute top-4 right-4 flex items-center gap-2">
+                                    <span
+                                        class="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground font-semibold">Rule
+                                        #{{ index + 1 }}</span>
+                                    <Button variant="ghost" size="icon" @click="removeCorsRule(index)"
+                                        class="h-7 w-7 text-muted-foreground hover:text-destructive">
+                                        <Trash2 class="w-3.5 h-3.5" />
+                                    </Button>
+                                </div>
+
+                                <div class="grid gap-4 md:grid-cols-2">
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed
+                                            Origins</Label>
+                                        <Input v-model="rule.originsInput" placeholder="e.g. *, https://example.com"
+                                            class="h-9" />
+                                        <p class="text-[9px] text-muted-foreground italic">Comma-separated domains or *
+                                        </p>
+                                    </div>
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed
+                                            Headers</Label>
+                                        <Input v-model="rule.headersInput"
+                                            placeholder="e.g. *, Authorization, Content-Type" class="h-9" />
+                                        <p class="text-[9px] text-muted-foreground italic">Comma-separated headers or *
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div class="space-y-2">
+                                    <Label class="text-[10px] uppercase font-bold text-muted-foreground">Allowed
+                                        Methods</Label>
+                                    <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+                                        <label v-for="m in ['GET', 'PUT', 'POST', 'DELETE', 'HEAD']" :key="m"
+                                            class="flex items-center gap-2 cursor-pointer text-xs">
+                                            <input type="checkbox" :value="m" v-model="rule.allowed_methods"
+                                                class="rounded border-slate-300 dark:border-slate-700 text-primary focus:ring-primary h-3.5 w-3.5 cursor-pointer bg-white" />
+                                            <span class="font-bold text-slate-700 dark:text-slate-300">{{ m }}</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="grid gap-4 md:grid-cols-2">
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Max Age
+                                            (Seconds)</Label>
+                                        <Input type="number" v-model.number="rule.max_age_seconds" placeholder="3000"
+                                            class="h-9" />
+                                    </div>
+                                    <div class="space-y-1.5">
+                                        <Label class="text-[10px] uppercase font-bold text-muted-foreground">Expose
+                                            Headers
+                                            (Optional)</Label>
+                                        <Input v-model="rule.exposeHeadersInput"
+                                            placeholder="e.g. ETag, x-amz-request-id" class="h-9" />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center justify-between border-t pt-4">
+                                <Button variant="outline" size="sm" @click="deleteCors"
+                                    class="h-9 text-destructive border-destructive/20 hover:bg-destructive/10">
+                                    Remove CORS Policy
+                                </Button>
+                                <Button @click="saveCors" :disabled="savingCorsState" class="h-9 font-bold">
+                                    <Loader2 v-if="savingCorsState" class="w-3.5 h-3.5 mr-2 animate-spin" />
+                                    Save CORS Configuration
+                                </Button>
+                            </div>
+                        </div>
+                    </TabsContent>
                 </Tabs>
             </DialogContent>
         </Dialog>
@@ -888,7 +1111,10 @@ import {
     ArrowUpRight, Copy, Check, Search, Filter, AlertTriangle, Webhook, BellOff,
     Settings, FileText, FileImage, FileAudio, FileVideo, FileCode, FileArchive,
     Clock, ShieldAlert, ShieldOff, ShieldCheck, Tag, PlusCircle, UserCircle,
-    UserPlus, UserMinus, Key, ShieldCheck as ShieldCheckIcon, Save
+    UserPlus, UserMinus, Key, ShieldCheck as ShieldCheckIcon, Save,
+    Music, File as FileIcon, Inbox,
+    FolderUp,
+    ChevronDown
 } from 'lucide-vue-next'
 import { debounce } from 'perfect-debounce'
 import { toast } from 'vue-sonner'
@@ -913,11 +1139,12 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/composables/useAuth'
 import { useTransfers } from '@/composables/useTransfers'
+import QRCode from 'qrcode'
 
 const config = useRuntimeConfig()
 const API_BASE = config.public.apiBase
 const { authState, authFetch } = useAuth()
-const { addTransfer, updateProgress, setAbort, setError, activeTransfersCount } = useTransfers()
+const { addTransfer, updateProgress, setAbort, setError, activeTransfersCount, setPauseResume } = useTransfers()
 const route = useRoute()
 const router = useRouter()
 
@@ -936,6 +1163,8 @@ const users = ref({})
 
 const previewObject = ref(null)
 const previewUrl = ref(null)
+const previewTextContent = ref('')
+const previewType = ref('')
 
 const showCreateFolderDialog = ref(false)
 const newFolderName = ref('')
@@ -1034,10 +1263,69 @@ const newWebhook = ref({
     active: true
 })
 
+const dlqRecords = ref([])
+
+function formatPayload(payload) {
+    if (!payload) return ''
+    try {
+        return JSON.stringify(JSON.parse(payload), null, 2)
+    } catch (e) {
+        return payload
+    }
+}
+
+async function fetchDLQ() {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/webhooks/dlq`)
+        if (res.ok) dlqRecords.value = (await res.json()) || []
+    } catch (e) {
+        toast.error('Failed to load webhook DLQ')
+    }
+}
+
+async function retryDLQ(id) {
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/webhooks/dlq/${id}/retry`, {
+                method: 'POST'
+            })
+            if (!res.ok) {
+                const errText = await res.text()
+                throw new Error(errText || 'Failed to retry webhook')
+            }
+            await fetchDLQ()
+        },
+        {
+            loading: 'Retrying webhook delivery...',
+            success: 'Webhook retried successfully',
+            error: (err) => `Failed: ${err.message}`
+        }
+    )
+}
+
+async function deleteDLQ(id) {
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/webhooks/dlq/${id}`, {
+                method: 'DELETE'
+            })
+            if (!res.ok) throw new Error('Failed to remove DLQ record')
+            await fetchDLQ()
+        },
+        {
+            loading: 'Removing record from DLQ...',
+            success: 'Record removed from DLQ',
+            error: 'Failed to remove DLQ record'
+        }
+    )
+}
+
 async function openBucketSettings() {
     await fetchBucketInfo()
     await fetchWebhooks()
     await fetchWebsiteConfig()
+    await fetchCorsConfig()
+    await fetchDLQ()
 
     // Initialize quota inputs from bucket info
     if (bucketInfo.value && bucketInfo.value.QuotaBytes > 0) {
@@ -1502,7 +1790,7 @@ async function performMultipartUpload(file, path) {
     const sanitizedPath = path.split('/').map(p => p.trim().replace(/\s+/g, '_')).join('/')
     const key = currentPrefix.value + sanitizedPath
 
-    addTransfer({ id: transferId, name: sanitizedPath, bucket: bucketName.value, size: file.size, type: 'upload' })
+    addTransfer({ id: transferId, name: sanitizedPath, bucket: bucketName.value, size: file.size, type: 'upload', isMultipart: true })
 
     try {
         const initRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploads=`, { method: 'POST' })
@@ -1514,67 +1802,112 @@ async function performMultipartUpload(file, path) {
         const parts = []
         let uploadedSize = 0
         const CONCURRENCY = 3
-        let currentPartIdx = 0
-        let isAborted = false
         const activeXhrs = new Set()
+        let isAborted = false
+        let isPaused = false
+
+        // Generate part indices
+        const pendingParts = Array.from({ length: totalParts }, (_, idx) => idx)
 
         setAbort(transferId, () => {
             isAborted = true
             activeXhrs.forEach(xhr => xhr.abort())
+            activeXhrs.clear()
         })
 
+        const pauseHandler = () => {
+            isPaused = true
+            activeXhrs.forEach(xhr => xhr.abort())
+            activeXhrs.clear()
+        }
+
+        const resumeHandler = () => {
+            isPaused = false
+            runUpload().catch(err => setError(transferId, err.message))
+        }
+
+        setPauseResume(transferId, pauseHandler, resumeHandler)
+
         async function uploadWorker() {
-            while (currentPartIdx < totalParts && !isAborted) {
-                const i = currentPartIdx++
+            while (pendingParts.length > 0 && !isAborted && !isPaused) {
+                const i = pendingParts.shift()
                 const partNumber = i + 1
                 const start = i * CHUNK_SIZE
                 const end = Math.min((i + 1) * CHUNK_SIZE, file.size)
                 const chunk = file.slice(start, end)
 
-                const chunkEtag = await new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest()
-                    activeXhrs.add(xhr)
-                    xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploadId=${UploadId}&partNumber=${partNumber}`)
-                    const token = authState.value.token
-                    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+                try {
+                    const chunkEtag = await new Promise((resolve, reject) => {
+                        const xhr = new XMLHttpRequest()
+                        activeXhrs.add(xhr)
+                        xhr.open('PUT', `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?uploadId=${UploadId}&partNumber=${partNumber}`)
+                        const token = authState.value.token
+                        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
 
-                    xhr.onload = () => {
-                        activeXhrs.delete(xhr)
-                        if (xhr.status >= 200 && xhr.status < 300) {
-                            uploadedSize += (end - start)
-                            updateProgress(transferId, (uploadedSize / file.size) * 100)
-                            resolve(xhr.getResponseHeader('ETag'))
-                        } else reject(new Error(`Part ${partNumber} failed`))
+                        xhr.onload = () => {
+                            activeXhrs.delete(xhr)
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                resolve(xhr.getResponseHeader('ETag'))
+                            } else reject(new Error(`Part ${partNumber} failed: ${xhr.status}`))
+                        }
+                        xhr.onerror = () => {
+                            activeXhrs.delete(xhr)
+                            reject(new Error(`Network error on part ${partNumber}`))
+                        }
+                        xhr.onabort = () => {
+                            activeXhrs.delete(xhr)
+                            reject(new Error('aborted'))
+                        }
+                        xhr.send(chunk)
+                    })
+
+                    if (!isAborted) {
+                        parts.push({ PartNumber: partNumber, ETag: chunkEtag })
+                        uploadedSize += (end - start)
+                        updateProgress(transferId, (uploadedSize / file.size) * 100)
                     }
-                    xhr.onerror = () => {
-                        activeXhrs.delete(xhr)
-                        reject(new Error(`Network error on part ${partNumber}`))
+                } catch (err) {
+                    if (isPaused || err.message === 'aborted') {
+                        pendingParts.unshift(i)
+                        return
+                    } else {
+                        throw err
                     }
-                    xhr.send(chunk)
-                })
-                if (!isAborted) parts.push({ PartNumber: partNumber, ETag: chunkEtag })
+                }
             }
         }
 
-        // Start workers
-        const workers = []
-        for (let w = 0; w < Math.min(CONCURRENCY, totalParts); w++) {
-            workers.push(uploadWorker())
-        }
-        await Promise.all(workers)
+        async function runUpload() {
+            const workers = []
+            for (let w = 0; w < Math.min(CONCURRENCY, pendingParts.length); w++) {
+                workers.push(uploadWorker())
+            }
+            await Promise.all(workers)
 
-        const completeRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeURIComponent(key)}?uploadId=${UploadId}`, {
-            method: 'POST',
-            body: { parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) }
-        })
+            if (isAborted) return
+            if (isPaused) return
 
-        if (completeRes.ok) {
-            updateProgress(transferId, 100)
-            if (bucketName.value === route.params.bucket) fetchObjects()
-        } else {
-            throw new Error('Failed to complete upload')
+            if (parts.length === totalParts) {
+                const completeRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeURIComponent(key)}?uploadId=${UploadId}`, {
+                    method: 'POST',
+                    body: { parts: parts.sort((a, b) => a.PartNumber - b.PartNumber) }
+                })
+
+                if (completeRes.ok) {
+                    updateProgress(transferId, 100)
+                    if (bucketName.value === route.params.bucket) fetchObjects()
+                } else {
+                    throw new Error('Failed to complete upload')
+                }
+            }
         }
-    } catch (err) { setError(transferId, err.message) }
+
+        // Start upload
+        await runUpload()
+
+    } catch (err) {
+        setError(transferId, err.message)
+    }
 }
 
 async function downloadObject(key, versionId = '') {
@@ -1664,31 +1997,31 @@ async function copyPresignedUrl(key, versionId = null) {
 function isPublic(prefix = "") {
     const anon = users.value['anonymous']
     if (!anon || !anon.policies) return false
-    
+
     // Construct the resource pattern we're looking for
     // For directories (ending in /), we look for a wildcard match
     // For files, we look for an exact or wildcard match
     const resource = "arn:aws:s3:::" + bucketName.value + (prefix ? "/" + prefix : "")
     const wildcardResource = resource + "*"
-    
-    return anon.policies.some(p => p.statement.some(s => 
-        s.effect === "Allow" && 
-        s.action.includes("s3:GetObject") && 
+
+    return anon.policies.some(p => p.statement.some(s =>
+        s.effect === "Allow" &&
+        s.action.includes("s3:GetObject") &&
         s.resource.some(r => r === "*" || r === resource || r === wildcardResource)
     ))
 }
 
 async function togglePublic(prefix = "") {
     const currentlyPublic = isPublic(prefix)
-    
+
     // Exact resource for matching and deletion
     const isDirectory = prefix.endsWith('/') || prefix === ""
     const resource = "arn:aws:s3:::" + bucketName.value + (prefix ? "/" + prefix : "")
     const finalResource = isDirectory ? resource + "*" : resource
-    
+
     // Deterministic policy name based on resource to avoid duplicates or orphans
     const pName = `Public-${bucketName.value}-${prefix.replace(/[\/\.]/g, "-") || 'Root'}`
-    
+
     try {
         if (currentlyPublic) {
             // Find the policy that actually grants this access by name or content
@@ -1697,19 +2030,19 @@ async function togglePublic(prefix = "") {
         } else {
             await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
                 method: 'POST',
-                body: { 
-                    name: pName, 
-                    version: "2012-10-17", 
-                    statement: [{ 
-                        effect: "Allow", 
-                        action: ["s3:GetObject", "s3:ListBucket"], 
-                        resource: [finalResource] 
-                    }] 
+                body: {
+                    name: pName,
+                    version: "2012-10-17",
+                    statement: [{
+                        effect: "Allow",
+                        action: ["s3:GetObject", "s3:ListBucket"],
+                        resource: [finalResource]
+                    }]
                 }
             })
         }
         await fetchUsers()
-    } catch (e) { 
+    } catch (e) {
         toast.error('Failed to update public access')
         console.error(e)
     }
@@ -1773,11 +2106,13 @@ const shareExpiry = ref('3600')
 const shareAllowedIP = ref('')
 const shareOneTimeUse = ref(false)
 const generatedUrl = ref('')
+const qrCodeDataUrl = ref('')
 
 function openShareDialog(item) {
     selectedShareObject.value = item
     shareExpiry.value = '3600'
     generatedUrl.value = ''
+    qrCodeDataUrl.value = ''
     showShareDialog.value = true
 }
 
@@ -1825,6 +2160,19 @@ async function generateShareLink() {
         if (res.ok) {
             const data = await res.json()
             generatedUrl.value = data.url
+            try {
+                qrCodeDataUrl.value = await QRCode.toDataURL(data.url, {
+                    width: 200,
+                    margin: 2,
+                    color: {
+                        dark: '#0f172a',
+                        light: '#ffffff'
+                    }
+                })
+            } catch (err) {
+                console.error('Failed to generate QR Code:', err)
+                qrCodeDataUrl.value = ''
+            }
         }
     } catch (e) { toast.error('Failed to generate link') }
 }
@@ -1849,13 +2197,70 @@ function isImage(key) {
     return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(key?.split('.').pop().toLowerCase())
 }
 
+function getPreviewType(key) {
+    if (!key) return null
+    const ext = key.split('.').pop().toLowerCase()
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
+        return 'image'
+    }
+    if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) {
+        return 'audio'
+    }
+    if (['mp4', 'webm', 'mov'].includes(ext)) {
+        return 'video'
+    }
+    if (ext === 'pdf') {
+        return 'pdf'
+    }
+    if (ext === 'md') {
+        return 'markdown'
+    }
+    if (['txt', 'json', 'js', 'ts', 'html', 'css', 'xml', 'yaml', 'yml', 'sh', 'py', 'go', 'rs', 'sql', 'ini', 'conf', 'dockerfile'].includes(ext)) {
+        return 'text'
+    }
+    return 'unsupported'
+}
+
 watch(previewObject, async (newVal) => {
-    if (previewUrl.value) URL.revokeObjectURL(previewUrl.value)
-    if (newVal && isImage(newVal.Key)) {
-        try {
-            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(newVal.Key)}`)
-            if (res.ok) previewUrl.value = URL.createObjectURL(await res.blob())
-        } catch (e) { console.error(e) }
+    if (previewUrl.value) {
+        URL.revokeObjectURL(previewUrl.value)
+        previewUrl.value = null
+    }
+    previewTextContent.value = ''
+    previewType.value = ''
+
+    if (!newVal) return
+
+    const type = getPreviewType(newVal.Key)
+    if (type === 'unsupported') {
+        previewType.value = 'unsupported'
+        return
+    }
+
+    try {
+        let url = `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(newVal.Key)}`
+        if (newVal.VersionID) {
+            url += `?versionId=${newVal.VersionID}`
+        }
+
+        const res = await authFetch(url)
+        if (!res.ok) {
+            previewType.value = 'error'
+            return
+        }
+
+        if (type === 'image' || type === 'audio' || type === 'video' || type === 'pdf') {
+            const blob = await res.blob()
+            previewUrl.value = URL.createObjectURL(blob)
+            previewType.value = type
+        } else if (type === 'text' || type === 'markdown') {
+            const text = await res.text()
+            previewTextContent.value = text
+            previewType.value = type
+        }
+    } catch (e) {
+        console.error(e)
+        previewType.value = 'error'
     }
 })
 
@@ -1892,5 +2297,190 @@ async function updateLockSettings() {
         showLockDialog.value = false
         fetchObjects()
     } catch (e) { toast.error('Failed') }
+}
+
+// ==========================================
+// CORS CONFIGURATION
+// ==========================================
+const corsRules = ref([])
+const savingCorsState = ref(false)
+
+function addCorsRule() {
+    corsRules.value.push({
+        originsInput: '*',
+        headersInput: '*',
+        allowed_methods: ['GET'],
+        max_age_seconds: 3000,
+        exposeHeadersInput: ''
+    })
+}
+
+function removeCorsRule(index) {
+    corsRules.value.splice(index, 1)
+}
+
+async function fetchCorsConfig() {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/cors`)
+        if (res.ok) {
+            const data = await res.json()
+            if (data && data.cors_rules) {
+                corsRules.value = data.cors_rules.map(rule => ({
+                    originsInput: (rule.allowed_origins || []).join(', '),
+                    headersInput: (rule.allowed_headers || []).join(', '),
+                    allowed_methods: rule.allowed_methods || [],
+                    max_age_seconds: rule.max_age_seconds || 3000,
+                    exposeHeadersInput: (rule.expose_headers || []).join(', ')
+                }))
+            } else {
+                corsRules.value = []
+            }
+        } else {
+            corsRules.value = []
+        }
+    } catch (e) {
+        corsRules.value = []
+    }
+}
+
+async function saveCors() {
+    savingCorsState.value = true
+    try {
+        const rules = corsRules.value.map(rule => ({
+            allowed_origins: rule.originsInput.split(',').map(s => s.trim()).filter(Boolean),
+            allowed_methods: rule.allowed_methods,
+            allowed_headers: rule.headersInput.split(',').map(s => s.trim()).filter(Boolean),
+            max_age_seconds: parseInt(rule.max_age_seconds) || 3000,
+            expose_headers: rule.exposeHeadersInput.split(',').map(s => s.trim()).filter(Boolean)
+        }))
+
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/cors`, {
+            method: 'PUT',
+            body: { cors_rules: rules }
+        })
+        if (res.ok) {
+            toast.success('CORS Configuration saved successfully')
+            await fetchCorsConfig()
+        } else {
+            const err = await res.text()
+            throw new Error(err || 'Failed to save CORS configuration')
+        }
+    } catch (e) {
+        toast.error(e.message)
+    } finally {
+        savingCorsState.value = false
+    }
+}
+
+async function deleteCors() {
+    toast.promise(
+        async () => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/cors`, {
+                method: 'DELETE'
+            })
+            if (!res.ok) throw new Error('Failed to delete CORS configuration')
+            corsRules.value = []
+        },
+        {
+            loading: 'Deleting CORS Policy...',
+            success: 'CORS Policy deleted successfully',
+            error: 'Failed to delete CORS configuration'
+        }
+    )
+}
+
+// ==========================================
+// VERSION DIFF VIEWER
+// ==========================================
+const showDiffDialog = ref(false)
+const diffLoading = ref(false)
+const diffRows = ref([])
+const diffInfo = ref({
+    key: '',
+    oldVersion: '',
+    newVersion: 'Current'
+})
+
+function computeDiff(oldText, newText) {
+    const oldLines = oldText.split('\n')
+    const newLines = newText.split('\n')
+
+    const m = oldLines.length
+    const n = newLines.length
+
+    const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (oldLines[i - 1] === newLines[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1])
+            }
+        }
+    }
+
+    let i = m, j = n
+    const diff = []
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+            diff.unshift({
+                type: 'equal',
+                oldLine: oldLines[i - 1],
+                newLine: newLines[j - 1],
+                oldNum: i,
+                newNum: j
+            })
+            i--
+            j--
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            diff.unshift({
+                type: 'added',
+                oldLine: '',
+                newLine: newLines[j - 1],
+                oldNum: null,
+                newNum: j
+            })
+            j--
+        } else {
+            diff.unshift({
+                type: 'removed',
+                oldLine: oldLines[i - 1],
+                newLine: '',
+                oldNum: i,
+                newNum: null
+            })
+            i--
+        }
+    }
+    return diff
+}
+
+async function openDiff(key, oldVersionId) {
+    showDiffDialog.value = true
+    diffLoading.value = true
+    diffRows.value = []
+    diffInfo.value = {
+        key: key,
+        oldVersion: oldVersionId.slice(0, 12) + '...',
+        newVersion: 'Current'
+    }
+
+    try {
+        const oldRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}?versionId=${oldVersionId}`)
+        if (!oldRes.ok) throw new Error('Failed to fetch historical version')
+        const oldText = await oldRes.text()
+
+        const newRes = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(key)}`)
+        if (!newRes.ok) throw new Error('Failed to fetch current version')
+        const newText = await newRes.text()
+
+        diffRows.value = computeDiff(oldText, newText)
+    } catch (e) {
+        toast.error('Failed to compute version diff: ' + e.message)
+        showDiffDialog.value = false
+    } finally {
+        diffLoading.value = false
+    }
 }
 </script>

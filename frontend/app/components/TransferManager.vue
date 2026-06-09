@@ -5,11 +5,19 @@
         <!-- HEADER -->
         <header class="h-14 px-4 flex items-center justify-between border-b border-white/5 bg-white/2">
             <h2 class="text-sm font-bold text-slate-100 tracking-wide uppercase">Transfers</h2>
-            <button @click="clearCompleted"
-                class="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all group"
-                title="Clear Completed">
-                <XCircle class="w-5 h-5 group-active:scale-95" />
-            </button>
+            <div class="flex items-center gap-1">
+                <button v-if="transfers.some(u => u.status === 'completed' || u.status === 'cancelled')"
+                    @click="clearCompleted"
+                    class="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all group"
+                    title="Clear Completed">
+                    <Trash2 class="w-4 h-4" />
+                </button>
+                <button @click="showTransferManager = false"
+                    class="p-1.5 rounded-full hover:bg-white/10 text-slate-400 hover:text-white transition-all group"
+                    title="Close">
+                    <X class="w-4.5 h-4.5 group-active:scale-95" />
+                </button>
+            </div>
         </header>
 
         <!-- LIST -->
@@ -20,6 +28,11 @@
                     <div class="mt-0.5">
                         <CheckCircle v-if="transfer.status === 'completed'" class="w-5 h-5 text-emerald-500" />
                         <AlertCircle v-else-if="transfer.status === 'error'" class="w-5 h-5 text-rose-500" />
+                        <div v-else-if="transfer.status === 'paused'" class="relative w-5 h-5">
+                            <div
+                                class="w-5 h-5 rounded-full border-2 border-amber-500/30 border-t-amber-500" />
+                            <Pause class="absolute inset-0 m-auto w-2 h-2 text-amber-500" />
+                        </div>
                         <div v-else class="relative w-5 h-5">
                             <div
                                 class="w-5 h-5 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
@@ -35,7 +48,21 @@
                                 {{ transfer.name }}
                             </h3>
                             <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
-                                <button v-if="transfer.status === 'uploading' || transfer.status === 'downloading'"
+                                <!-- Pause Upload -->
+                                <button v-if="transfer.status === 'uploading' && transfer.isMultipart"
+                                    @click="pauseTransfer(transfer.id)"
+                                    class="p-1 rounded hover:bg-amber-500/20 text-slate-400 hover:text-amber-400 transition-all"
+                                    title="Pause Upload">
+                                    <Pause class="w-3.5 h-3.5" />
+                                </button>
+                                <!-- Resume Upload -->
+                                <button v-if="transfer.status === 'paused'"
+                                    @click="resumeTransfer(transfer.id)"
+                                    class="p-1 rounded hover:bg-emerald-500/20 text-slate-400 hover:text-emerald-400 transition-all"
+                                    title="Resume Upload">
+                                    <Play class="w-3.5 h-3.5" />
+                                </button>
+                                <button v-if="transfer.status === 'uploading' || transfer.status === 'downloading' || transfer.status === 'paused'"
                                     @click="removeTransfer(transfer.id)"
                                     class="p-1 rounded hover:bg-rose-500/20 text-slate-500 hover:text-rose-400 transition-all"
                                     title="Cancel Transfer">
@@ -59,6 +86,7 @@
                                         'bg-emerald-500 shadow-emerald-500/30': transfer.status === 'completed',
                                         'bg-rose-500 shadow-rose-500/30': transfer.status === 'error',
                                         'bg-slate-500 shadow-slate-500/30': transfer.status === 'cancelled',
+                                        'bg-amber-500 shadow-amber-500/30': transfer.status === 'paused',
                                         'bg-blue-400': transfer.type === 'download' && transfer.status === 'downloading'
                                     }" />
                             </div>
@@ -89,10 +117,10 @@
 </template>
 
 <script setup lang="ts">
-import { CheckCircle, AlertCircle, XCircle, X, ArrowUp, ArrowDown } from 'lucide-vue-next'
+import { CheckCircle, AlertCircle, Trash2, X, ArrowUp, ArrowDown, Pause, Play } from 'lucide-vue-next'
 import { useTransfers } from '@/composables/useTransfers'
 
-const { transfers, removeTransfer, clearCompleted, activeTransfersCount } = useTransfers()
+const { transfers, removeTransfer, clearCompleted, activeTransfersCount, showTransferManager, pauseTransfer, resumeTransfer } = useTransfers()
 </script>
 
 <style scoped>

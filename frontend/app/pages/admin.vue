@@ -39,7 +39,7 @@
             <!-- GLOBAL HEADER -->
             <header
                 class="h-14 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-end gap-4 shrink-0 z-20">
-                <Button variant="ghost" size="icon" class="h-9 w-9 text-muted-foreground rounded-lg">
+                <!-- <Button variant="ghost" size="icon" class="h-9 w-9 text-muted-foreground rounded-lg">
                     <Settings class="w-4 h-4" />
                 </Button>
                 <Button variant="ghost" size="icon" class="h-9 w-9 text-muted-foreground rounded-lg">
@@ -47,7 +47,7 @@
                 </Button>
                 <Button variant="ghost" size="icon" class="h-9 w-9 text-muted-foreground rounded-lg">
                     <Sun class="w-4 h-4" />
-                </Button>
+                </Button> -->
                 <div class="relative">
                     <Button variant="ghost" size="icon" class="h-9 w-9 text-muted-foreground rounded-lg transition-all"
                         :class="{ 'bg-primary/10 text-primary hover:bg-primary/20': activeTransfersCount > 0 }"
@@ -80,9 +80,8 @@ import { useRouter } from 'vue-router'
 import TransferManager from '@/components/TransferManager.vue'
 
 const { authState, logout: authLogout } = useAuth()
-const { activeTransfersCount } = useTransfers()
+const { activeTransfersCount, showTransferManager } = useTransfers()
 const router = useRouter()
-const showTransferManager = ref(false)
 
 const navItems = [
     { path: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },

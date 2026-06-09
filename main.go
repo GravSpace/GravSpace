@@ -130,7 +130,6 @@ func main() {
 	store.Notifications = dispatcher
 
 	s3Handler := &s3.S3Handler{Storage: store}
-	adminHandler := &s3.AdminHandler{UserManager: um, Storage: store, S3Port: s3Port}
 	healthChecker := health.NewHealthChecker()
 
 	// Start Background Workers in a goroutine
@@ -166,6 +165,8 @@ func main() {
 	if auditLogger != nil {
 		defer auditLogger.Close()
 	}
+
+	adminHandler := &s3.AdminHandler{UserManager: um, Storage: store, S3Port: s3Port, AuditLogger: auditLogger}
 
 	// Health Check Routes (no auth required)
 	adminApp.GET("/health/live", healthChecker.LivenessHandler)
@@ -266,9 +267,15 @@ func main() {
 	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
 	admin.POST("/buckets/:bucket/webhooks", adminHandler.CreateWebhook)
 	admin.DELETE("/buckets/:bucket/webhooks/:id", adminHandler.DeleteWebhook)
+	admin.GET("/buckets/:bucket/webhooks/dlq", adminHandler.ListWebhookDLQ)
+	admin.POST("/buckets/:bucket/webhooks/dlq/:id/retry", adminHandler.RetryWebhookDLQ)
+	admin.DELETE("/buckets/:bucket/webhooks/dlq/:id", adminHandler.DeleteWebhookDLQ)
 	admin.GET("/buckets/:bucket/website", adminHandler.GetBucketWebsite)
 	admin.PUT("/buckets/:bucket/website", adminHandler.SetBucketWebsite)
 	admin.DELETE("/buckets/:bucket/website", adminHandler.DeleteBucketWebsite)
+	admin.GET("/buckets/:bucket/cors", adminHandler.GetBucketCors)
+	admin.PUT("/buckets/:bucket/cors", adminHandler.PutBucketCors)
+	admin.DELETE("/buckets/:bucket/cors", adminHandler.DeleteBucketCors)
 	admin.PUT("/buckets/:bucket/soft-delete", adminHandler.SetBucketSoftDelete)
 	admin.GET("/trash", adminHandler.ListTrash)
 	admin.POST("/trash/restore", adminHandler.RestoreObject)
@@ -282,8 +289,10 @@ func main() {
 
 	iam.GET("/stats", adminHandler.GetSystemStats)
 	iam.GET("/audit-logs", adminHandler.GetAuditLogs)
+	iam.GET("/audit/stream", adminHandler.StreamAuditLogs)
 	iam.GET("/analytics/storage", adminHandler.GetStorageAnalytics)
 	iam.GET("/analytics/requests", adminHandler.GetActionAnalytics)
+	iam.GET("/analytics/content-types", adminHandler.GetContentTypeBreakdown)
 	iam.GET("/settings", adminHandler.GetSystemSettings)
 	iam.POST("/settings", adminHandler.UpdateSystemSettings)
 	iam.GET("/users", adminHandler.ListUsers)

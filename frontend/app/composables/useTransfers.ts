@@ -5,14 +5,18 @@ export interface TransferItem {
     name: string
     bucket: string
     progress: number
-    status: 'uploading' | 'downloading' | 'completed' | 'error' | 'cancelled'
+    status: 'uploading' | 'downloading' | 'completed' | 'error' | 'cancelled' | 'paused'
     type: 'upload' | 'download'
     error?: string
     size: number
     abort?: () => void
+    isMultipart?: boolean
+    pause?: () => void
+    resume?: () => void
 }
 
 const transfers = ref<TransferItem[]>([])
+const showTransferManager = ref(false)
 
 export const useTransfers = () => {
     const addTransfer = (item: Omit<TransferItem, 'progress' | 'status'>) => {
@@ -21,6 +25,7 @@ export const useTransfers = () => {
             progress: 0,
             status: item.type === 'upload' ? 'uploading' : 'downloading'
         })
+        showTransferManager.value = true
     }
 
     const setAbort = (id: string, abort: () => void) => {
@@ -69,14 +74,42 @@ export const useTransfers = () => {
         transfers.value.filter(u => u.status === 'uploading' || u.status === 'downloading').length
     )
 
+    const setPauseResume = (id: string, pause: () => void, resume: () => void) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item) {
+            item.pause = pause
+            item.resume = resume
+        }
+    }
+
+    const pauseTransfer = (id: string) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item && item.pause && item.status === 'uploading') {
+            item.pause()
+            item.status = 'paused'
+        }
+    }
+
+    const resumeTransfer = (id: string) => {
+        const item = transfers.value.find(u => u.id === id)
+        if (item && item.resume && item.status === 'paused') {
+            item.status = 'uploading'
+            item.resume()
+        }
+    }
+
     return {
         transfers,
+        showTransferManager,
         addTransfer,
         setAbort,
         updateProgress,
         setError,
         removeTransfer,
         clearCompleted,
-        activeTransfersCount
+        activeTransfersCount,
+        setPauseResume,
+        pauseTransfer,
+        resumeTransfer
     }
 }

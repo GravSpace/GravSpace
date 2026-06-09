@@ -88,6 +88,7 @@ type PolicyRecord struct {
 	CreatedAt time.Time
 }
 
+
 type WebhookRecord struct {
 	ID        int64
 	Bucket    string
@@ -97,6 +98,18 @@ type WebhookRecord struct {
 	Active    bool
 	CreatedAt time.Time
 }
+
+type WebhookDLQRecord struct {
+	ID           int64     `json:"id"`
+	WebhookID    int64     `json:"webhook_id"`
+	Bucket       string    `json:"bucket"`
+	URL          string    `json:"url"`
+	EventName    string    `json:"event_name"`
+	Payload      string    `json:"payload"`
+	ErrorMessage string    `json:"error_message"`
+	FailedAt     time.Time `json:"failed_at"`
+}
+
 
 type AuditLogRecord struct {
 	ID        int64
@@ -227,6 +240,11 @@ func NewDatabase(dbPath string) (*Database, error) {
 
 	return d, nil
 }
+
+func (d *Database) GetDB() *sql.DB {
+	return d.db
+}
+
 
 func (d *Database) initSchema() error {
 	schema := `
@@ -360,6 +378,18 @@ func (d *Database) initSchema() error {
 		active BOOLEAN DEFAULT TRUE,
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS webhook_dlq (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		webhook_id INTEGER,
+		bucket TEXT NOT NULL,
+		url TEXT NOT NULL,
+		event_name TEXT NOT NULL,
+		payload TEXT NOT NULL,
+		error_message TEXT,
+		failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE
 	);
 
 	CREATE TABLE IF NOT EXISTS global_policies (
@@ -585,6 +615,7 @@ func (d *Database) SetBucketQuota(name string, quotaBytes int64) error {
 // Object operations
 func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	start := time.Now()
+	obj.Key = strings.TrimPrefix(obj.Key, "/")
 	// Mark previous versions as not latest (exclude current version_id)
 	if obj.IsLatest {
 		_, err := d.db.Exec("UPDATE objects SET is_latest = FALSE WHERE bucket = ? AND key = ? AND version_id != ?", obj.Bucket, obj.Key, obj.VersionID)
@@ -594,9 +625,9 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	}
 
 	result, err := d.db.Exec(`
-		INSERT INTO objects (bucket, key, version_id, size, etag, content_type, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, obj.Bucket, obj.Key, obj.VersionID, obj.Size, obj.ETag, obj.ContentType, obj.IsLatest, obj.EncryptionType, obj.RetainUntilDate, obj.LegalHold, obj.LockMode)
+		INSERT INTO objects (bucket, key, version_id, size, etag, content_type, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, content_hash, compression_type, original_size, is_deduplicated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, obj.Bucket, obj.Key, obj.VersionID, obj.Size, obj.ETag, obj.ContentType, obj.IsLatest, obj.EncryptionType, obj.RetainUntilDate, obj.LegalHold, obj.LockMode, obj.ContentHash, obj.CompressionType, obj.OriginalSize, obj.IsDeduplicated)
 
 	metrics.RecordDBQuery("CreateObject", time.Since(start))
 	if err != nil {
@@ -608,7 +639,8 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 
 func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) {
 	start := time.Now()
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	key = strings.TrimPrefix(key, "/")
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE bucket = ? AND key = ? AND deleted_at IS NULL`
 
 	var obj ObjectRow
@@ -619,13 +651,15 @@ func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) 
 		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
 	} else {
 		query += " AND is_latest = TRUE"
 		err = d.db.QueryRow(query, bucket, key).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
 	}
 	metrics.RecordDBQuery("GetObject", time.Since(start))
 
@@ -641,7 +675,8 @@ func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) 
 
 func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*ObjectRow, error) {
 	start := time.Now()
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	key = strings.TrimPrefix(key, "/")
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE bucket = ? AND key = ?`
 
 	var obj ObjectRow
@@ -652,13 +687,15 @@ func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*Obje
 		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
 	} else {
 		query += " AND is_latest = TRUE"
 		err = d.db.QueryRow(query, bucket, key).Scan(
 			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt)
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
 	}
 	metrics.RecordDBQuery("GetObjectIncludeDeleted", time.Since(start))
 
@@ -674,6 +711,7 @@ func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*Obje
 
 func (d *Database) UpdateObjectLatest(bucket, key, versionID string, isLatest bool) error {
 	start := time.Now()
+	key = strings.TrimPrefix(key, "/")
 	_, err := d.db.Exec("UPDATE objects SET is_latest = ? WHERE bucket = ? AND key = ? AND version_id = ?",
 		isLatest, bucket, key, versionID)
 	metrics.RecordDBQuery("UpdateObjectLatest", time.Since(start))
@@ -682,6 +720,7 @@ func (d *Database) UpdateObjectLatest(bucket, key, versionID string, isLatest bo
 
 func (d *Database) DeleteObject(bucket, key, versionID string) error {
 	start := time.Now()
+	key = strings.TrimPrefix(key, "/")
 	if versionID != "" {
 		_, err := d.db.Exec("DELETE FROM objects WHERE bucket = ? AND key = ? AND version_id = ?", bucket, key, versionID)
 		metrics.RecordDBQuery("DeleteObject", time.Since(start))
@@ -714,6 +753,7 @@ func (d *Database) DeleteObjectsByID(ids []int64) error {
 
 func (d *Database) SoftDeleteObject(bucket, key, versionID string) error {
 	start := time.Now()
+	key = strings.TrimPrefix(key, "/")
 	now := time.Now()
 	if versionID != "" {
 		_, err := d.db.Exec("UPDATE objects SET deleted_at = ?, is_latest = FALSE WHERE bucket = ? AND key = ? AND version_id = ?", now, bucket, key, versionID)
@@ -727,6 +767,7 @@ func (d *Database) SoftDeleteObject(bucket, key, versionID string) error {
 
 func (d *Database) RestoreObject(bucket, key, versionID string) error {
 	start := time.Now()
+	key = strings.TrimPrefix(key, "/")
 	// When restoring, we also need to decide if it becomes the latest version again
 	// For simplicity, we'll mark the restored version as latest if no other version is current
 	_, err := d.db.Exec("UPDATE objects SET deleted_at = NULL, is_latest = TRUE WHERE bucket = ? AND key = ? AND version_id = ?", bucket, key, versionID)
@@ -740,7 +781,7 @@ func (d *Database) RestoreObject(bucket, key, versionID string) error {
 
 func (d *Database) ListTrashObjects(bucket, search string) ([]*ObjectRow, error) {
 	start := time.Now()
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE deleted_at IS NOT NULL`
 	args := []interface{}{}
 	if bucket != "" {
@@ -764,7 +805,8 @@ func (d *Database) ListTrashObjects(bucket, search string) ([]*ObjectRow, error)
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -788,6 +830,7 @@ func (d *Database) EmptyTrash(bucket string) error {
 
 func (d *Database) DeletePrefix(bucket, prefix string) error {
 	start := time.Now()
+	prefix = strings.TrimPrefix(prefix, "/")
 	_, err := d.db.Exec("DELETE FROM objects WHERE bucket = ? AND key LIKE ?", bucket, prefix+"%")
 	metrics.RecordDBQuery("DeletePrefix", time.Since(start))
 	return err
@@ -795,6 +838,7 @@ func (d *Database) DeletePrefix(bucket, prefix string) error {
 
 func (d *Database) SoftDeletePrefix(bucket, prefix string) error {
 	start := time.Now()
+	prefix = strings.TrimPrefix(prefix, "/")
 	now := time.Now()
 	_, err := d.db.Exec("UPDATE objects SET deleted_at = ?, is_latest = FALSE WHERE bucket = ? AND key LIKE ? AND deleted_at IS NULL", now, bucket, prefix+"%")
 	metrics.RecordDBQuery("SoftDeletePrefix", time.Since(start))
@@ -803,17 +847,19 @@ func (d *Database) SoftDeletePrefix(bucket, prefix string) error {
 
 func (d *Database) RestorePrefix(bucket, prefix string) error {
 	start := time.Now()
+	prefix = strings.TrimPrefix(prefix, "/")
 	_, err := d.db.Exec("UPDATE objects SET deleted_at = NULL, is_latest = TRUE WHERE bucket = ? AND key LIKE ? AND deleted_at IS NOT NULL", bucket, prefix+"%")
 	metrics.RecordDBQuery("RestorePrefix", time.Since(start))
 	return err
 }
 
 func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*ObjectRow, error) {
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE bucket = ? AND is_latest = TRUE AND deleted_at IS NULL`
 
 	args := []interface{}{bucket}
 
+	prefix = strings.TrimPrefix(prefix, "/")
 	if prefix != "" {
 		query += " AND key LIKE ?"
 		args = append(args, prefix+"%")
@@ -838,7 +884,8 @@ func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*Obj
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -849,6 +896,7 @@ func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*Obj
 
 func (d *Database) SetObjectRetention(bucket, key, versionID string, retainUntil time.Time, mode string) error {
 	start := time.Now()
+	key = strings.TrimPrefix(key, "/")
 	_, err := d.db.Exec(`UPDATE objects SET retain_until_date = ?, lock_mode = ? 
 	                      WHERE bucket = ? AND key = ? AND version_id = ?`,
 		retainUntil, mode, bucket, key, versionID)
@@ -858,6 +906,7 @@ func (d *Database) SetObjectRetention(bucket, key, versionID string, retainUntil
 
 func (d *Database) SetObjectLegalHold(bucket, key, versionID string, hold bool, reason string) error {
 	start := time.Now()
+	key = strings.TrimPrefix(key, "/")
 	_, err := d.db.Exec("UPDATE objects SET legal_hold = ?, legal_hold_reason = ? WHERE bucket = ? AND key = ? AND version_id = ?", hold, reason, bucket, key, versionID)
 	metrics.RecordDBQuery("SetObjectLegalHold", time.Since(start))
 	return err
@@ -1209,9 +1258,10 @@ func (d *Database) DeleteUserPolicy(username, name string) error {
 
 func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]*ObjectRow, error) {
 	start := time.Now()
+	prefix = strings.TrimPrefix(prefix, "/")
 	// Calculate cutoff time in Go to allow index usage on modified_at column
 	cutoff := time.Now().AddDate(0, 0, -days)
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects 
 	          WHERE bucket = ? AND is_latest = 1 AND modified_at < ? AND deleted_at IS NULL`
 
@@ -1232,7 +1282,8 @@ func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -1246,7 +1297,7 @@ func (d *Database) Close() error {
 }
 
 func (d *Database) ListAllObjects() ([]*ObjectRow, error) {
-	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects`
 	rows, err := d.db.Query(query)
 	if err != nil {
@@ -1259,7 +1310,8 @@ func (d *Database) ListAllObjects() ([]*ObjectRow, error) {
 		var obj ObjectRow
 		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
 			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt); err != nil {
+			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
 			return nil, err
 		}
 		objects = append(objects, &obj)
@@ -1432,4 +1484,161 @@ func (d *Database) SetSystemSetting(key, value string) error {
 		key, value, value)
 	metrics.RecordDBQuery("SetSystemSetting", time.Since(start))
 	return err
+}
+
+func (d *Database) GetObjectByHash(hash string) (*ObjectRow, error) {
+	start := time.Now()
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
+	          FROM objects WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1`
+
+	var obj ObjectRow
+	err := d.db.QueryRow(query, hash).Scan(
+		&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+		&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
+		&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
+		&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
+	metrics.RecordDBQuery("GetObjectByHash", time.Since(start))
+
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &obj, nil
+}
+
+func (d *Database) CountObjectHashReferences(hash string) (int, error) {
+	start := time.Now()
+	var count int
+	err := d.db.QueryRow("SELECT COUNT(*) FROM objects WHERE content_hash = ?", hash).Scan(&count)
+	metrics.RecordDBQuery("CountObjectHashReferences", time.Since(start))
+	return count, err
+}
+
+func (d *Database) GetWebhook(id int64) (*WebhookRecord, error) {
+	start := time.Now()
+	var h WebhookRecord
+	err := d.db.QueryRow("SELECT id, bucket, url, events, secret, active, created_at FROM webhooks WHERE id = ?", id).
+		Scan(&h.ID, &h.Bucket, &h.URL, &h.Events, &h.Secret, &h.Active, &h.CreatedAt)
+	metrics.RecordDBQuery("GetWebhook", time.Since(start))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &h, err
+}
+
+func (d *Database) CreateWebhookDLQ(webhookID int64, bucket, url, eventName, payload, errorMsg string) (int64, error) {
+	start := time.Now()
+	res, err := d.db.Exec(`INSERT INTO webhook_dlq (webhook_id, bucket, url, event_name, payload, error_message) 
+	                        VALUES (?, ?, ?, ?, ?, ?)`,
+		webhookID, bucket, url, eventName, payload, errorMsg)
+	metrics.RecordDBQuery("CreateWebhookDLQ", time.Since(start))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (d *Database) ListWebhookDLQ(bucket string) ([]*WebhookDLQRecord, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`SELECT id, webhook_id, bucket, url, event_name, payload, error_message, failed_at 
+	                        FROM webhook_dlq WHERE bucket = ? ORDER BY failed_at DESC`, bucket)
+	metrics.RecordDBQuery("ListWebhookDLQ", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	records := []*WebhookDLQRecord{}
+	for rows.Next() {
+		var r WebhookDLQRecord
+		if err := rows.Scan(&r.ID, &r.WebhookID, &r.Bucket, &r.URL, &r.EventName, &r.Payload, &r.ErrorMessage, &r.FailedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, &r)
+	}
+	return records, rows.Err()
+}
+
+func (d *Database) GetWebhookDLQ(id int64) (*WebhookDLQRecord, error) {
+	start := time.Now()
+	var r WebhookDLQRecord
+	err := d.db.QueryRow(`SELECT id, webhook_id, bucket, url, event_name, payload, error_message, failed_at 
+	                      FROM webhook_dlq WHERE id = ?`, id).
+		Scan(&r.ID, &r.WebhookID, &r.Bucket, &r.URL, &r.EventName, &r.Payload, &r.ErrorMessage, &r.FailedAt)
+	metrics.RecordDBQuery("GetWebhookDLQ", time.Since(start))
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return &r, err
+}
+
+func (d *Database) DeleteWebhookDLQ(id int64) error {
+	start := time.Now()
+	_, err := d.db.Exec("DELETE FROM webhook_dlq WHERE id = ?", id)
+	metrics.RecordDBQuery("DeleteWebhookDLQ", time.Since(start))
+	return err
+}
+
+type ContentTypeBreakdown struct {
+	Category  string `json:"category"`
+	TotalSize int64  `json:"totalSize"`
+	Count     int    `json:"count"`
+}
+
+func (d *Database) GetContentTypeBreakdown() ([]*ContentTypeBreakdown, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`SELECT COALESCE(content_type, 'application/octet-stream') as ct, SUM(size) as total_size, COUNT(*) as count 
+	                          FROM objects 
+	                          WHERE is_latest = 1 AND deleted_at IS NULL 
+	                          GROUP BY ct`)
+	metrics.RecordDBQuery("GetContentTypeBreakdown", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	breakdowns := []*ContentTypeBreakdown{}
+	for rows.Next() {
+		var ct string
+		var totalSize int64
+		var count int
+		if err := rows.Scan(&ct, &totalSize, &count); err != nil {
+			return nil, err
+		}
+
+		category := "Other"
+		if strings.HasPrefix(ct, "image/") {
+			category = "Images"
+		} else if strings.HasPrefix(ct, "video/") {
+			category = "Videos"
+		} else if strings.HasPrefix(ct, "audio/") {
+			category = "Audio"
+		} else if strings.HasPrefix(ct, "text/") || ct == "application/pdf" || ct == "application/msword" || ct == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" {
+			category = "Documents"
+		} else if ct == "application/json" || ct == "application/xml" || ct == "application/javascript" || ct == "application/x-yaml" {
+			category = "Code & Config"
+		} else if ct == "application/zip" || ct == "application/x-tar" || ct == "application/x-gzip" || ct == "application/x-bzip2" {
+			category = "Archives"
+		}
+
+		found := false
+		for _, b := range breakdowns {
+			if b.Category == category {
+				b.TotalSize += totalSize
+				b.Count += count
+				found = true
+				break
+			}
+		}
+		if !found {
+			breakdowns = append(breakdowns, &ContentTypeBreakdown{
+				Category:  category,
+				TotalSize: totalSize,
+				Count:     count,
+			})
+		}
+	}
+	return breakdowns, nil
 }

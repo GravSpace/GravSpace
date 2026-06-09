@@ -7,7 +7,7 @@ export default defineNuxtConfig({
   },
 
   nitro: {
-    preset: 'node-server'
+    preset: 'bun'
   },
   css: ['~/assets/css/tailwind.css'],
   modules: ['@nuxtjs/tailwindcss', 'shadcn-nuxt'],

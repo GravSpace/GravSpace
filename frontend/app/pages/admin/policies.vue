@@ -138,51 +138,67 @@
                                 <TabsTrigger value="json" class="text-xs">JSON Editor</TabsTrigger>
                             </TabsList>
 
-                            <TabsContent value="builder"
-                                class="space-y-4 py-4 border rounded-lg p-4 bg-muted/20 border-slate-200 dark:border-slate-800 mt-2">
-                                <div class="grid grid-cols-2 gap-4">
-                                    <div class="space-y-2">
-                                        <Label
-                                            class="text-[10px] font-bold uppercase tracking-wider opacity-70">Effect</Label>
-                                        <div class="flex gap-2">
-                                            <Button size="xs"
-                                                :variant="builderEffect === 'Allow' ? 'default' : 'outline'"
-                                                @click="builderEffect = 'Allow'"
-                                                class="flex-1 h-8 text-[10px]">Allow</Button>
-                                            <Button size="xs"
-                                                :variant="builderEffect === 'Deny' ? 'destructive' : 'outline'"
-                                                @click="builderEffect = 'Deny'"
-                                                class="flex-1 h-8 text-[10px]">Deny</Button>
+                            <TabsContent value="builder" class="space-y-4 py-4 mt-2">
+                                <!-- List of Statements -->
+                                <div class="space-y-4 max-h-[40vh] overflow-y-auto pr-1">
+                                    <div v-for="(stmt, index) in builderStatements" :key="index"
+                                        class="relative border rounded-lg p-4 bg-muted/20 border-slate-200 dark:border-slate-800 space-y-4">
+                                        
+                                        <!-- Header for Statement -->
+                                        <div class="flex items-center justify-between">
+                                            <span class="text-xs font-bold text-slate-700 dark:text-slate-300">Statement #{{ index + 1 }}</span>
+                                            <Button v-if="builderStatements.length > 1" size="xs" variant="ghost" class="h-6 text-destructive hover:bg-destructive/10"
+                                                @click="removeStatement(index)">
+                                                <Trash2 class="w-3 h-3 mr-1" /> Remove
+                                            </Button>
                                         </div>
-                                    </div>
-                                    <div class="space-y-2">
-                                        <Label
-                                            class="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource
-                                            ARN</Label>
-                                        <Input v-model="builderResource" placeholder="arn:aws:s3:::*"
-                                            class="h-8 text-xs font-mono" />
+
+                                        <!-- Effect & Resource -->
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <div class="space-y-2">
+                                                <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Effect</Label>
+                                                <div class="flex gap-2">
+                                                    <Button size="xs"
+                                                        :variant="stmt.effect === 'Allow' ? 'default' : 'outline'"
+                                                        @click="stmt.effect = 'Allow'"
+                                                        class="flex-1 h-8 text-[10px]">Allow</Button>
+                                                    <Button size="xs"
+                                                        :variant="stmt.effect === 'Deny' ? 'destructive' : 'outline'"
+                                                        @click="stmt.effect = 'Deny'"
+                                                        class="flex-1 h-8 text-[10px]">Deny</Button>
+                                                </div>
+                                            </div>
+                                            <div class="space-y-2">
+                                                <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource ARN</Label>
+                                                <Input v-model="stmt.resource" placeholder="arn:aws:s3:::*"
+                                                    class="h-8 text-xs font-mono" />
+                                            </div>
+                                        </div>
+
+                                        <!-- Actions Selector -->
+                                        <div class="space-y-2">
+                                            <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">S3 Actions</Label>
+                                            <div class="grid grid-cols-2 gap-2">
+                                                <div v-for="action in availableActions" :key="action.id"
+                                                    class="flex items-center space-x-2 p-1.5 rounded border bg-card hover:bg-accent/50 cursor-pointer transition-colors"
+                                                    @click="toggleStatementAction(index, action.id)">
+                                                    <input type="checkbox" :checked="stmt.actions.includes(action.id)"
+                                                        class="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer" />
+                                                    <span class="text-[10px] font-medium leading-none">{{ action.label }}</span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
 
-                                <div class="space-y-3">
-                                    <div class="flex items-center justify-between">
-                                        <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Common
-                                            S3
-                                            Actions</Label>
-                                        <div class="flex items-center gap-2">
-                                            <span class="text-[9px] text-muted-foreground">Auto-sync JSON</span>
-                                            <Switch :model-value="builderSync"
-                                                @update:model-value="v => builderSync = v" class="scale-75" />
-                                        </div>
-                                    </div>
-                                    <div class="grid grid-cols-2 gap-2">
-                                        <div v-for="action in availableActions" :key="action.id"
-                                            class="flex items-center space-x-2 p-2 rounded border bg-card hover:bg-accent/50 cursor-pointer transition-colors"
-                                            @click="toggleAction(action.id)">
-                                            <input type="checkbox" :checked="builderActions.includes(action.id)"
-                                                class="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer" />
-                                            <span class="text-[10px] font-medium leading-none">{{ action.label }}</span>
-                                        </div>
+                                <!-- Add Statement Button -->
+                                <div class="flex justify-between items-center pt-2">
+                                    <Button size="sm" variant="outline" @click="addStatement" class="h-8 text-xs">
+                                        <Plus class="w-3.5 h-3.5 mr-1.5" /> Add Statement
+                                    </Button>
+                                    <div class="flex items-center gap-2">
+                                        <span class="text-[9px] text-muted-foreground">Auto-sync JSON</span>
+                                        <Switch :model-value="builderSync" @update:model-value="v => builderSync = v" class="scale-75" />
                                     </div>
                                 </div>
                             </TabsContent>
@@ -279,9 +295,13 @@ const policyName = ref('')
 const expandedPolicy = ref(null)
 const selectedPolicy = ref(null)
 
-const builderActions = ref(['s3:GetObject', 's3:ListBucket'])
-const builderResource = ref('arn:aws:s3:::*')
-const builderEffect = ref('Allow')
+const builderStatements = ref([
+    {
+        effect: 'Allow',
+        resource: 'arn:aws:s3:::*',
+        actions: ['s3:GetObject', 's3:ListBucket']
+    }
+])
 const builderSync = ref(true)
 
 const availableActions = [
@@ -297,27 +317,56 @@ const availableActions = [
 
 const newPolicyJson = ref('')
 
-watch([builderActions, builderResource, builderEffect], () => {
+function addStatement() {
+    builderStatements.value.push({
+        effect: 'Allow',
+        resource: 'arn:aws:s3:::*',
+        actions: []
+    })
+}
+
+function removeStatement(index) {
+    if (builderStatements.value.length > 1) {
+        builderStatements.value.splice(index, 1)
+    }
+}
+
+function toggleStatementAction(stmtIndex, actionId) {
+    const actions = builderStatements.value[stmtIndex].actions
+    const idx = actions.indexOf(actionId)
+    if (idx > -1) {
+        actions.splice(idx, 1)
+    } else {
+        actions.push(actionId)
+    }
+}
+
+watch(builderStatements, () => {
     if (!builderSync.value) return
     const policy = {
         version: "2012-10-17",
-        statement: [{
-            effect: builderEffect.value,
-            action: builderActions.value,
-            resource: [builderResource.value]
-        }]
+        statement: builderStatements.value.map(stmt => ({
+            effect: stmt.effect,
+            action: stmt.actions,
+            resource: [stmt.resource]
+        }))
     }
     newPolicyJson.value = JSON.stringify(policy, null, 2)
 }, { immediate: true, deep: true })
 
-function toggleAction(id) {
-    const idx = builderActions.value.indexOf(id)
-    if (idx > -1) {
-        builderActions.value.splice(idx, 1)
-    } else {
-        builderActions.value.push(id)
+watch(builderSync, (newVal) => {
+    if (newVal) {
+        const policy = {
+            version: "2012-10-17",
+            statement: builderStatements.value.map(stmt => ({
+                effect: stmt.effect,
+                action: stmt.actions,
+                resource: [stmt.resource]
+            }))
+        }
+        newPolicyJson.value = JSON.stringify(policy, null, 2)
     }
-}
+})
 
 async function fetchPolicies() {
     try {

@@ -1,6 +1,10 @@
 package s3
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,16 +17,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/auth"
 	"github.com/GravSpace/GravSpace/internal/database"
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 )
 
 type AdminHandler struct {
 	UserManager *auth.UserManager
 	Storage     storage.Storage
 	S3Port      string
+	AuditLogger *audit.AuditLogger
 }
 
 func (h *AdminHandler) ListBuckets(c *gin.Context) {
@@ -37,8 +44,14 @@ func (h *AdminHandler) ListBuckets(c *gin.Context) {
 func (h *AdminHandler) CreateBucket(c *gin.Context) {
 	bucket := c.Param("bucket")
 	if err := h.Storage.CreateBucket(bucket); err != nil {
+		if h.AuditLogger != nil {
+			h.AuditLogger.LogDenied("admin", "s3:CreateBucket", bucket, c.ClientIP(), c.GetHeader("User-Agent"), err.Error())
+		}
 		c.String(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:CreateBucket", bucket, c.ClientIP(), c.GetHeader("User-Agent"), nil)
 	}
 	c.Status(http.StatusCreated)
 }
@@ -46,8 +59,14 @@ func (h *AdminHandler) CreateBucket(c *gin.Context) {
 func (h *AdminHandler) DeleteBucket(c *gin.Context) {
 	bucket := c.Param("bucket")
 	if err := h.Storage.DeleteBucket(bucket); err != nil {
+		if h.AuditLogger != nil {
+			h.AuditLogger.LogDenied("admin", "s3:DeleteBucket", bucket, c.ClientIP(), c.GetHeader("User-Agent"), err.Error())
+		}
 		c.String(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:DeleteBucket", bucket, c.ClientIP(), c.GetHeader("User-Agent"), nil)
 	}
 	c.Status(http.StatusOK)
 }
@@ -275,8 +294,14 @@ func (h *AdminHandler) PutObject(c *gin.Context) {
 	vid, err := h.Storage.PutObject(bucket, key, c.Request.Body, "")
 	if err != nil {
 		log.Printf("Error in PutObject: %v", err)
+		if h.AuditLogger != nil {
+			h.AuditLogger.LogDenied("admin", "s3:PutObject", bucket+"/"+key, c.ClientIP(), c.GetHeader("User-Agent"), err.Error())
+		}
 		c.String(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:PutObject", bucket+"/"+key, c.ClientIP(), c.GetHeader("User-Agent"), map[string]string{"version_id": vid})
 	}
 	c.Header("x-amz-version-id", vid)
 	log.Printf("Successfully put object: %s/%s, version: %s", bucket, key, vid)
@@ -293,6 +318,10 @@ func (h *AdminHandler) DownloadObject(c *gin.Context) {
 		fmt.Printf("DEBUG: DownloadObject failed for bucket=%s, key=%s, err=%v\n", bucket, key, err)
 		c.String(http.StatusNotFound, fmt.Sprintf("Object not found: %v", err))
 		return
+	}
+
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:GetObject", bucket+"/"+key, c.ClientIP(), c.GetHeader("User-Agent"), nil)
 	}
 
 	contentType := mime.TypeByExtension(filepath.Ext(key))
@@ -313,8 +342,14 @@ func (h *AdminHandler) DeleteObject(c *gin.Context) {
 	bypass := c.Query("bypassGovernance") != "false" // Admin by default bypasses unless explicitly false
 
 	if err := h.Storage.DeleteObject(bucket, key, versionID, bypass); err != nil {
+		if h.AuditLogger != nil {
+			h.AuditLogger.LogDenied("admin", "s3:DeleteObject", bucket+"/"+key, c.ClientIP(), c.GetHeader("User-Agent"), err.Error())
+		}
 		c.String(http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:DeleteObject", bucket+"/"+key, c.ClientIP(), c.GetHeader("User-Agent"), nil)
 	}
 	c.Status(http.StatusNoContent)
 }
@@ -466,10 +501,27 @@ func (h *AdminHandler) GetSystemStats(c *gin.Context) {
 		count, size = 0, 0
 	}
 
+	var physicalSize int64
+	var deduplicatedCount int64
+	db := h.Storage.(*storage.FileStorage).DB
+	if db != nil {
+		db.GetDB().QueryRow(`
+			SELECT 
+				COALESCE(SUM(CASE WHEN is_deduplicated = 0 OR is_deduplicated IS NULL THEN COALESCE(original_size, size) ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN is_deduplicated = 1 THEN 1 ELSE 0 END), 0)
+			FROM objects
+			WHERE is_latest = 1
+		`).Scan(&physicalSize, &deduplicatedCount)
+	} else {
+		physicalSize = size
+	}
+
 	stats := map[string]interface{}{}
 	stats["total_users"] = len(h.UserManager.Users)
 	stats["total_objects"] = count
 	stats["total_size"] = size
+	stats["physical_size"] = physicalSize
+	stats["deduplicated_count"] = deduplicatedCount
 	stats["uptime"] = time.Since(startTime).String()
 
 	c.JSON(http.StatusOK, stats)
@@ -663,6 +715,15 @@ func (h *AdminHandler) GetStorageAnalytics(c *gin.Context) {
 	c.JSON(http.StatusOK, history)
 }
 
+func (h *AdminHandler) GetContentTypeBreakdown(c *gin.Context) {
+	breakdown, err := h.Storage.GetContentTypeBreakdown()
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, breakdown)
+}
+
 func (h *AdminHandler) GetActionAnalytics(c *gin.Context) {
 	daysStr := c.Query("days")
 	days, _ := strconv.Atoi(daysStr)
@@ -678,6 +739,40 @@ func (h *AdminHandler) GetActionAnalytics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, trends)
+}
+
+func (h *AdminHandler) GetBucketCors(c *gin.Context) {
+	bucket := c.Param("bucket")
+	config, err := h.Storage.GetBucketCors(bucket)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, config)
+}
+
+func (h *AdminHandler) PutBucketCors(c *gin.Context) {
+	bucket := c.Param("bucket")
+	var config storage.CORSConfiguration
+	if err := c.ShouldBindJSON(&config); err != nil {
+		c.String(http.StatusBadRequest, "Invalid CORS configuration")
+		return
+	}
+
+	if err := h.Storage.PutBucketCors(bucket, config); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func (h *AdminHandler) DeleteBucketCors(c *gin.Context) {
+	bucket := c.Param("bucket")
+	if err := h.Storage.DeleteBucketCors(bucket); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Status(http.StatusOK)
 }
 
 func (h *AdminHandler) GetBucketWebsite(c *gin.Context) {
@@ -934,7 +1029,6 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 	query.Set("X-Amz-SignedHeaders", "host")
 	if versionID != "" && versionID != "simple" && versionID != "folder" {
 		query.Set("versionId", versionID)
-		endpoint += "?versionId=" + versionID
 	}
 
 	if allowedIP != "" {
@@ -1010,3 +1104,124 @@ func (h *AdminHandler) UpdateSystemSettings(c *gin.Context) {
 
 	c.Status(http.StatusOK)
 }
+
+func (h *AdminHandler) ListWebhookDLQ(c *gin.Context) {
+	bucket := c.Param("bucket")
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
+	}
+
+	dlq, err := fs.DB.ListWebhookDLQ(bucket)
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, dlq)
+}
+
+func (h *AdminHandler) DeleteWebhookDLQ(c *gin.Context) {
+	idStr := c.Param("id")
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
+	}
+
+	if err := fs.DB.DeleteWebhookDLQ(id); err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func (h *AdminHandler) RetryWebhookDLQ(c *gin.Context) {
+	idStr := c.Param("id")
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+
+	fs, ok := h.Storage.(*storage.FileStorage)
+	if !ok {
+		c.String(http.StatusInternalServerError, "Storage type not supported")
+		return
+	}
+
+	record, err := fs.DB.GetWebhookDLQ(id)
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+	if record == nil {
+		c.String(http.StatusNotFound, "DLQ record not found")
+		return
+	}
+
+	// Try sending the webhook payload again
+	client := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequest("POST", record.URL, bytes.NewBuffer([]byte(record.Payload)))
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "GravSpace-Webhook-Dispatcher/1.0")
+	req.Header.Set("X-GravSpace-Event", record.EventName)
+	req.Header.Set("X-GravSpace-Retry", "true")
+
+	webhook, _ := fs.DB.GetWebhook(record.WebhookID)
+	if webhook != nil && webhook.Secret != "" {
+		mac := hmac.New(sha256.New, []byte(webhook.Secret))
+		mac.Write([]byte(record.Payload))
+		signature := hex.EncodeToString(mac.Sum(nil))
+		req.Header.Set("X-GravSpace-Signature", signature)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		c.String(http.StatusBadGateway, fmt.Sprintf("Retry failed: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		c.String(resp.StatusCode, fmt.Sprintf("Target returned error status: %d", resp.StatusCode))
+		return
+	}
+
+	// Delete from DLQ on successful retry
+	fs.DB.DeleteWebhookDLQ(id)
+	c.Status(http.StatusOK)
+}
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
+func (h *AdminHandler) StreamAuditLogs(c *gin.Context) {
+	ws, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to upgrade connection"})
+		return
+	}
+
+	h.AuditLogger.RegisterClient(ws)
+
+	defer func() {
+		h.AuditLogger.UnregisterClient(ws)
+	}()
+
+	for {
+		_, _, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
+}
+

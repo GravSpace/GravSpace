@@ -148,31 +148,61 @@ func (d *Dispatcher) sendWebhook(h *database.WebhookRecord, e Event, client *htt
 	}
 
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", h.URL, bytes.NewBuffer(body))
-	if err != nil {
-		return
+
+	var lastErr error
+	backoff := 1 * time.Second
+	maxRetries := 3
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			backoff *= 2
+		}
+
+		req, err := http.NewRequest("POST", h.URL, bytes.NewBuffer(body))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "GravSpace-Webhook-Dispatcher/1.0")
+		req.Header.Set("X-GravSpace-Event", e.EventName)
+
+		// HMAC Signature if secret exists
+		if h.Secret != "" {
+			mac := hmac.New(sha256.New, []byte(h.Secret))
+			mac.Write(body)
+			signature := hex.EncodeToString(mac.Sum(nil))
+			req.Header.Set("X-GravSpace-Signature", signature)
+		}
+
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			log.Printf("Webhook attempt %d failed to %s: %v", attempt+1, h.URL, err)
+			continue
+		}
+
+		if resp.StatusCode >= 300 {
+			lastErr = fmt.Errorf("HTTP status %d", resp.StatusCode)
+			resp.Body.Close()
+			log.Printf("Webhook attempt %d returned status %d for %s", attempt+1, resp.StatusCode, h.URL)
+			continue
+		}
+
+		resp.Body.Close()
+		lastErr = nil
+		break
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "GravSpace-Webhook-Dispatcher/1.0")
-	req.Header.Set("X-GravSpace-Event", e.EventName)
-
-	// HMAC Signature if secret exists
-	if h.Secret != "" {
-		mac := hmac.New(sha256.New, []byte(h.Secret))
-		mac.Write(body)
-		signature := hex.EncodeToString(mac.Sum(nil))
-		req.Header.Set("X-GravSpace-Signature", signature)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Webhook delivery failed to %s: %v", h.URL, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		log.Printf("Webhook target %s returned status %d", h.URL, resp.StatusCode)
+	if lastErr != nil {
+		log.Printf("Webhook delivery permanently failed for %s (stored in DLQ): %v", h.URL, lastErr)
+		if d.db != nil {
+			_, err := d.db.CreateWebhookDLQ(h.ID, e.Bucket, h.URL, e.EventName, string(body), lastErr.Error())
+			if err != nil {
+				log.Printf("Failed to store webhook in DLQ: %v", err)
+			}
+		}
 	}
 }

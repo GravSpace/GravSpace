@@ -71,7 +71,7 @@
                         <span class="text-[9px] text-slate-600 uppercase font-black tracking-widest">Setup Hint</span>
                         <div class="h-px flex-1 bg-slate-800"></div>
                     </div>
-                    <div class="flex items-center justify-between w-full px-1">
+                    <!-- <div class="flex items-center justify-between w-full px-1">
                         <span class="text-[10px] text-slate-500 font-mono">admin / adminsecret</span>
                         <TooltipProvider>
                             <Tooltip>
@@ -83,7 +83,7 @@
                                 </TooltipContent>
                             </Tooltip>
                         </TooltipProvider>
-                    </div>
+                    </div> -->
                 </CardFooter>
             </Card>
 
