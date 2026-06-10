@@ -2,213 +2,257 @@
     <div class="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
         <header
             class="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
-            <div>
-                <h1 class="text-xl font-bold tracking-tight text-slate-900 dark:text-slate-100">Dashboard</h1>
+            <div class="flex flex-col">
+                <h1 class="text-lg font-semibold tracking-tight">Dashboard</h1>
                 <p class="text-xs text-muted-foreground">Historical trends and storage distribution</p>
             </div>
-            <div class="flex items-center gap-2">
-                <Button variant="outline" size="sm" @click="fetchAllData" :disabled="loading" class="h-9">
+            <div class="flex items-center gap-3">
+                <!-- WS Status indicator in header -->
+                <div class="flex items-center gap-1.5 select-none">
+                    <span class="relative flex h-2 w-2">
+                        <span :class="[
+                            'absolute inline-flex h-full w-full rounded-full opacity-75',
+                            wsStatus === 'connected' ? 'animate-ping bg-emerald-400' : '',
+                            wsStatus === 'connecting' ? 'animate-ping bg-amber-400' : '',
+                            wsStatus === 'disconnected' ? 'bg-rose-400' : ''
+                        ]"></span>
+                        <span :class="[
+                            'relative inline-flex rounded-full h-2 w-2',
+                            wsStatus === 'connected' ? 'bg-emerald-500' : '',
+                            wsStatus === 'connecting' ? 'bg-amber-500' : '',
+                            wsStatus === 'disconnected' ? 'bg-rose-500' : ''
+                        ]"></span>
+                    </span>
+                    <span :class="[
+                        'text-[9px] uppercase tracking-widest font-bold',
+                        wsStatus === 'connected' ? 'text-emerald-500' : '',
+                        wsStatus === 'connecting' ? 'text-amber-500' : '',
+                        wsStatus === 'disconnected' ? 'text-rose-500' : ''
+                    ]">{{ wsStatus }}</span>
+                </div>
+                <Button variant="outline" size="sm" @click="fetchAllData" :disabled="loading"
+                    class="h-8 border-slate-200 dark:border-slate-800">
                     <RefreshCw class="w-3.5 h-3.5 mr-2" :class="{ 'animate-spin': loading }" />
-                    Sync Data
+                    Sync
                 </Button>
             </div>
         </header>
 
-        <main class="flex-1 overflow-auto p-6 space-y-6">
-            <!-- TOP STATS -->
-            <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                <Card v-for="stat in topStats" :key="stat.label"
-                    class="border-slate-200 dark:border-slate-800 shadow-xs group hover:border-primary/50 transition-colors">
-                    <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle class="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{{
-                            stat.label }}</CardTitle>
-                        <component :is="stat.icon"
-                            class="h-4 w-4 text-primary opacity-70 group-hover:scale-110 transition-transform" />
-                    </CardHeader>
-                    <CardContent>
-                        <div class="text-2xl font-bold">{{ stat.value }}</div>
-                        <p class="text-[10px] text-muted-foreground mt-1">{{ stat.sub }}</p>
-                    </CardContent>
-                </Card>
+        <main class="flex-1 overflow-auto p-5 space-y-4">
+            <!-- TOP STATS ROW -->
+            <div class="grid gap-3 grid-cols-2 lg:grid-cols-4">
+                <div v-for="(stat, i) in topStats" :key="stat.label"
+                    class="group relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-card p-4 shadow-xs hover:shadow-md hover:border-primary/30 transition-all duration-300">
+                    <!-- Colored accent line at top -->
+                    <div class="absolute top-0 left-0 right-0 h-0.5" :class="[
+                        i === 0 ? 'bg-indigo-500' : '',
+                        i === 1 ? 'bg-sky-500' : '',
+                        i === 2 ? 'bg-violet-500' : '',
+                        i === 3 ? 'bg-emerald-500' : ''
+                    ]"></div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span
+                            class="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">{{ stat.label }}</span>
+                        <div :class="[
+                            'h-7 w-7 rounded-lg flex items-center justify-center transition-colors duration-200',
+                            i === 0 ? 'bg-indigo-500/10 text-indigo-500' : '',
+                            i === 1 ? 'bg-sky-500/10 text-sky-500' : '',
+                            i === 2 ? 'bg-violet-500/10 text-violet-500' : '',
+                            i === 3 ? 'bg-emerald-500/10 text-emerald-500' : ''
+                        ]">
+                            <component :is="stat.icon"
+                                class="h-3.5 w-3.5 group-hover:scale-110 transition-transform" />
+                        </div>
+                    </div>
+                    <div class="text-xl font-bold tracking-tight">{{ stat.value }}</div>
+                    <p class="text-[10px] text-muted-foreground mt-0.5 opacity-60">{{ stat.sub }}</p>
+                </div>
             </div>
 
-            <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 lg:h-[450px]">
-                <!-- STORAGE DISTRIBUTION -->
-                <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
-                    <CardHeader>
-                        <CardTitle class="text-sm font-bold flex items-center gap-2">
-                            <Pizza class="w-4 h-4 text-primary" />
-                            Storage Distribution (by Bucket)
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent class="flex-1 flex items-center justify-center p-6 pt-0 min-h-0">
-                        <Doughnut v-if="distributionData" :data="distributionData" :options="doughnutOptions" />
-                        <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
-                            <PieChart class="w-12 h-12" />
-                            <span class="text-xs italic">Gathering distribution data...</span>
+            <!-- CHARTS: 2-COLUMN LAYOUT -->
+            <div class="grid gap-4 lg:grid-cols-2">
+                <!-- Left Column: Doughnuts side by side -->
+                <div class="grid gap-3 grid-cols-2">
+                    <!-- Storage Distribution -->
+                    <div
+                        class="rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs overflow-hidden flex flex-col">
+                        <div class="px-4 pt-3 pb-1.5">
+                            <div class="flex items-center gap-1.5">
+                                <Pizza class="w-3.5 h-3.5 text-primary" />
+                                <span class="text-xs font-bold tracking-tight">By Bucket</span>
+                            </div>
                         </div>
-                    </CardContent>
-                </Card>
-
-                <!-- CONTENT-TYPE BREAKDOWN -->
-                <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
-                    <CardHeader>
-                        <CardTitle class="text-sm font-bold flex items-center gap-2">
-                            <PieChart class="w-4 h-4 text-primary" />
-                            Content-Type Breakdown (by Size)
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent class="flex-1 flex items-center justify-center p-6 pt-0 min-h-0">
-                        <Doughnut v-if="contentTypeData" :data="contentTypeData" :options="contentTypeOptions" />
-                        <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
-                            <PieChart class="w-12 h-12" />
-                            <span class="text-xs italic">Gathering breakdown data...</span>
+                        <div class="flex-1 flex items-center justify-center px-4 pb-3 min-h-[180px]">
+                            <Doughnut v-if="distributionData" :data="distributionData" :options="doughnutOptions" />
+                            <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
+                                <PieChart class="w-10 h-10" />
+                                <span class="text-[9px] italic mt-1">Loading...</span>
+                            </div>
                         </div>
-                    </CardContent>
-                </Card>
+                    </div>
 
-                <!-- REQUEST TRENDS -->
-                <Card class="border-slate-200 dark:border-slate-800 flex flex-col shadow-sm">
-                    <CardHeader>
-                        <CardTitle class="text-sm font-bold flex items-center gap-2">
-                            <TrendingUp class="w-4 h-4 text-primary" />
-                            Request Trends (Last 30 Days)
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent class="flex-1 p-6 pt-0 min-h-0">
+                    <!-- Content-Type Breakdown -->
+                    <div
+                        class="rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs overflow-hidden flex flex-col">
+                        <div class="px-4 pt-3 pb-1.5">
+                            <div class="flex items-center gap-1.5">
+                                <PieChart class="w-3.5 h-3.5 text-primary" />
+                                <span class="text-xs font-bold tracking-tight">By Type</span>
+                            </div>
+                        </div>
+                        <div class="flex-1 flex items-center justify-center px-4 pb-3 min-h-[180px]">
+                            <Doughnut v-if="contentTypeData" :data="contentTypeData" :options="contentTypeOptions" />
+                            <div v-else class="flex flex-col items-center opacity-20 animate-pulse">
+                                <PieChart class="w-10 h-10" />
+                                <span class="text-[9px] italic mt-1">Loading...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column: Request Trends -->
+                <div
+                    class="rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs overflow-hidden flex flex-col">
+                    <div class="px-4 pt-3 pb-1.5 flex items-center justify-between">
+                        <div class="flex items-center gap-1.5">
+                            <TrendingUp class="w-3.5 h-3.5 text-primary" />
+                            <span class="text-xs font-bold tracking-tight">Request Trends</span>
+                        </div>
+                        <span class="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Last 30
+                            days</span>
+                    </div>
+                    <div class="flex-1 px-4 pb-3 min-h-[180px]">
                         <Line v-if="trendsData" :data="trendsData" :options="lineOptions" />
                         <div v-else class="flex h-full items-center justify-center opacity-20">
-                            <Activity class="w-12 h-12" />
+                            <Activity class="w-10 h-10" />
                         </div>
-                    </CardContent>
-                </Card>
+                    </div>
+                </div>
             </div>
 
-            <!-- BUCKET GROWTH -->
-            <Card class="border-slate-200 dark:border-slate-800 shadow-sm h-[400px]">
-                <CardHeader>
-                    <CardTitle class="text-sm font-bold flex items-center gap-2">
-                        <LineChart class="w-4 h-4 text-primary" />
-                        Historical Growth (Capacity Trajectory)
-                    </CardTitle>
-                </CardHeader>
-                <CardContent class="h-full pb-12 p-6 pt-0">
-                    <Line v-if="growthData" :data="growthData" :options="growthOptions" />
-                    <div v-else class="flex h-full items-center justify-center opacity-20">
-                        <Database class="w-12 h-12" />
-                    </div>
-                </CardContent>
-            </Card>
-
-            <!-- LIVE AUDIT TRAIL LOGS -->
-            <Card class="border-slate-200 dark:border-slate-800 shadow-sm flex flex-col h-[400px] overflow-hidden">
-                <CardHeader class="flex flex-row items-center justify-between pb-3 border-b">
-                    <CardTitle class="text-sm font-bold flex items-center gap-2">
-                        <Activity class="w-4 h-4 text-primary" />
-                        Live Audit Trail & S3 Events
-                    </CardTitle>
-                    <div class="flex items-center gap-4">
-                        <!-- Connection Status -->
-                        <div class="flex items-center gap-1.5 text-xs font-semibold select-none">
-                            <span class="relative flex h-2 w-2">
-                                <span :class="[
-                                    'absolute inline-flex h-full w-full rounded-full opacity-75',
-                                    wsStatus === 'connected' ? 'animate-ping bg-emerald-400' : '',
-                                    wsStatus === 'connecting' ? 'animate-ping bg-amber-400' : '',
-                                    wsStatus === 'disconnected' ? 'bg-rose-400' : ''
-                                ]"></span>
-                                <span :class="[
-                                    'relative inline-flex rounded-full h-2 w-2',
-                                    wsStatus === 'connected' ? 'bg-emerald-500' : '',
-                                    wsStatus === 'connecting' ? 'bg-amber-500' : '',
-                                    wsStatus === 'disconnected' ? 'bg-rose-500' : ''
-                                ]"></span>
-                            </span>
-                            <span :class="[
-                                'text-[10px] uppercase tracking-wider font-bold',
-                                wsStatus === 'connected' ? 'text-emerald-500' : '',
-                                wsStatus === 'connecting' ? 'text-amber-500' : '',
-                                wsStatus === 'disconnected' ? 'text-rose-500' : ''
-                            ]">{{ wsStatus }}</span>
+            <!-- GROWTH + AUDIT: 2-COLUMN LAYOUT -->
+            <div class="grid gap-4 lg:grid-cols-5">
+                <!-- Historical Growth (wider) -->
+                <div
+                    class="lg:col-span-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs overflow-hidden flex flex-col h-[320px]">
+                    <div class="px-4 pt-3 pb-1.5 flex items-center justify-between">
+                        <div class="flex items-center gap-1.5">
+                            <LineChart class="w-3.5 h-3.5 text-primary" />
+                            <span class="text-xs font-bold tracking-tight">Capacity Trajectory</span>
                         </div>
-                        <Button variant="ghost" size="xs" @click="auditLogs = []" class="h-7 text-[10px] uppercase font-bold tracking-wider">
-                            Clear Feed
+                        <span class="text-[9px] text-muted-foreground font-medium uppercase tracking-wider">Historical
+                            growth</span>
+                    </div>
+                    <div class="flex-1 px-4 pb-3 min-h-0">
+                        <Line v-if="growthData" :data="growthData" :options="growthOptions" />
+                        <div v-else class="flex h-full items-center justify-center opacity-20">
+                            <Database class="w-10 h-10" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Audit Trail (narrower) -->
+                <div
+                    class="lg:col-span-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs overflow-hidden flex flex-col h-[320px]">
+                    <div
+                        class="px-4 py-2.5 flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 shrink-0">
+                        <div class="flex items-center gap-1.5">
+                            <Activity class="w-3.5 h-3.5 text-primary" />
+                            <span class="text-xs font-bold tracking-tight">Live Audit</span>
+                        </div>
+                        <Button variant="ghost" size="xs" @click="auditLogs = []"
+                            class="h-6 text-[9px] uppercase font-bold tracking-wider text-muted-foreground hover:text-foreground px-2">
+                            Clear
                         </Button>
                     </div>
-                </CardHeader>
-                <CardContent class="flex-1 bg-slate-950 p-4 font-mono text-[11px] leading-5 text-slate-300 overflow-y-auto custom-scrollbar select-text">
-                    <div v-if="auditLogs.length === 0" class="flex flex-col items-center justify-center h-full text-slate-500 select-none">
-                        <Activity class="w-8 h-8 opacity-20 mb-2 animate-pulse" />
-                        <span class="italic">Waiting for S3 events...</span>
-                    </div>
-                    <div v-else class="space-y-1">
-                        <div v-for="(log, idx) in auditLogs" :key="idx" class="flex items-start gap-3 hover:bg-white/5 py-0.5 px-1 rounded transition-colors animate-in fade-in duration-300">
-                            <span class="text-slate-600 select-none shrink-0">{{ new Date(log.timestamp).toLocaleTimeString() }}</span>
-                            <span :class="[
-                                'px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider shrink-0',
-                                log.result === 'success' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                            ]">{{ log.action.split(':').pop() }}</span>
-                            <span class="text-slate-400 truncate flex-1" :title="log.resource">{{ log.resource }}</span>
-                            <span class="text-slate-500 shrink-0">{{ log.user || 'anonymous' }}</span>
-                            <span class="text-slate-600 shrink-0 font-bold tracking-tighter">{{ log.ip }}</span>
+                    <div
+                        class="flex-1 bg-slate-950 p-3 font-mono text-[10px] leading-4 text-slate-300 overflow-y-auto custom-scrollbar select-text min-h-0">
+                        <div v-if="auditLogs.length === 0"
+                            class="flex flex-col items-center justify-center h-full text-slate-600 select-none">
+                            <Activity class="w-6 h-6 opacity-20 mb-1.5 animate-pulse" />
+                            <span class="text-[10px] italic">Waiting for events...</span>
+                        </div>
+                        <div v-else class="space-y-0.5">
+                            <div v-for="(log, idx) in auditLogs" :key="idx"
+                                class="flex items-start gap-2 hover:bg-white/5 py-0.5 px-1 rounded transition-colors">
+                                <span class="text-slate-600 select-none shrink-0 w-[52px]">{{ new
+                                    Date(log.timestamp).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit',
+                                        second: '2-digit' }) }}</span>
+                                <span :class="[
+                                    'px-1 py-0 rounded text-[8px] font-bold uppercase tracking-wider shrink-0 leading-4',
+                                    log.result === 'success' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                                ]">{{ log.action.split(':').pop() }}</span>
+                                <span class="text-slate-500 truncate flex-1" :title="log.resource">{{ log.resource
+                                }}</span>
+                            </div>
                         </div>
                     </div>
-                </CardContent>
-            </Card>
+                </div>
+            </div>
 
-            <!-- BUCKET QUOTAS & CAPACITY ALERTS -->
-            <Card class="border-slate-200 dark:border-slate-800 shadow-sm">
-                <CardHeader>
-                    <CardTitle class="text-sm font-bold flex items-center gap-2">
-                        <ShieldAlert class="w-4 h-4 text-primary" />
-                        Bucket Quotas & Capacity Warnings
-                    </CardTitle>
-                </CardHeader>
-                <CardContent class="p-6 pt-0">
-                    <div v-if="!bucketsInfo || bucketsInfo.length === 0" class="text-center py-6 text-xs text-muted-foreground">
-                        No buckets configured.
+            <!-- BUCKET QUOTAS -->
+            <div v-if="bucketsInfo && bucketsInfo.length > 0"
+                class="rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs overflow-hidden">
+                <div class="px-4 pt-3 pb-2 flex items-center justify-between">
+                    <div class="flex items-center gap-1.5">
+                        <ShieldAlert class="w-3.5 h-3.5 text-primary" />
+                        <span class="text-xs font-bold tracking-tight">Bucket Quotas & Capacity</span>
                     </div>
-                    <div v-else class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        <div v-for="b in bucketsInfo" :key="b.Name" 
-                            class="p-4 rounded-xl border bg-card hover:border-primary/30 transition-all flex flex-col justify-between gap-3">
-                            <div class="flex items-center justify-between">
-                                <div class="flex items-center gap-2">
-                                    <div class="h-8 w-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center">
-                                        <Database class="w-4 h-4" />
-                                    </div>
-                                    <span class="font-bold text-sm text-slate-800 dark:text-slate-200 font-mono">{{ b.Name }}</span>
+                    <span class="text-[9px] text-muted-foreground font-medium">{{ bucketsInfo.length }}
+                        {{ bucketsInfo.length === 1 ? 'bucket' : 'buckets' }}</span>
+                </div>
+                <div class="px-4 pb-4">
+                    <div class="space-y-2">
+                        <div v-for="b in bucketsInfo" :key="b.Name"
+                            class="flex items-center gap-4 p-3 rounded-lg border border-slate-100 dark:border-slate-800/60 bg-slate-50/50 dark:bg-slate-900/30 hover:border-primary/20 transition-colors">
+                            <!-- Bucket name + icon -->
+                            <div class="flex items-center gap-2.5 min-w-0 w-[180px] shrink-0">
+                                <div
+                                    class="h-7 w-7 rounded-md bg-indigo-500/10 text-indigo-500 flex items-center justify-center shrink-0">
+                                    <Database class="w-3.5 h-3.5" />
                                 </div>
-                                <Badge v-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.9" variant="destructive" class="text-[9px] uppercase font-bold animate-pulse">
+                                <span
+                                    class="font-bold text-xs text-slate-800 dark:text-slate-200 font-mono truncate">{{ b.Name }}</span>
+                            </div>
+
+                            <!-- Progress bar -->
+                            <div class="flex-1 flex items-center gap-3 min-w-0">
+                                <div class="flex-1 space-y-1">
+                                    <div class="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                        <div class="h-full rounded-full transition-all duration-500"
+                                            :class="getQuotaProgressColor(b.CurrentSize, b.QuotaBytes)"
+                                            :style="{ width: getQuotaPercent(b.CurrentSize, b.QuotaBytes) + '%' }">
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-between text-[9px] text-muted-foreground">
+                                        <span>{{ formatSize(b.CurrentSize) }}</span>
+                                        <span>{{ b.QuotaBytes > 0 ? formatSize(b.QuotaBytes) : 'Unlimited' }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Status badge -->
+                            <div class="shrink-0">
+                                <Badge v-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.9"
+                                    variant="destructive"
+                                    class="text-[8px] uppercase font-bold h-5 px-1.5 animate-pulse">
                                     Critical
                                 </Badge>
-                                <Badge v-else-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.75" variant="warning" class="text-[9px] uppercase font-bold">
+                                <Badge
+                                    v-else-if="b.QuotaBytes > 0 && (b.CurrentSize / b.QuotaBytes) >= 0.75"
+                                    variant="outline"
+                                    class="text-[8px] uppercase font-bold h-5 px-1.5 border-amber-500/30 text-amber-500 bg-amber-500/5">
                                     Warning
                                 </Badge>
-                                <Badge v-else variant="outline" class="text-[9px] uppercase font-semibold text-emerald-500 border-emerald-500/20 bg-emerald-500/5">
+                                <Badge v-else variant="outline"
+                                    class="text-[8px] uppercase font-bold h-5 px-1.5 border-emerald-500/20 text-emerald-500 bg-emerald-500/5">
                                     Healthy
                                 </Badge>
                             </div>
-                            
-                            <div class="space-y-1">
-                                <div class="flex justify-between text-[10px] text-muted-foreground">
-                                    <span>Usage: {{ formatSize(b.CurrentSize) }}</span>
-                                    <span>Quota: {{ b.QuotaBytes > 0 ? formatSize(b.QuotaBytes) : 'Unlimited' }}</span>
-                                </div>
-                                <div class="h-2 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                                    <div class="h-full rounded-full transition-all duration-300"
-                                        :class="getQuotaProgressColor(b.CurrentSize, b.QuotaBytes)"
-                                        :style="{ width: getQuotaPercent(b.CurrentSize, b.QuotaBytes) + '%' }">
-                                    </div>
-                                </div>
-                                <div class="flex justify-between items-center text-[9px] mt-1">
-                                    <span class="text-muted-foreground">{{ getQuotaPercent(b.CurrentSize, b.QuotaBytes) }}% utilized</span>
-                                    <span v-if="b.QuotaBytes > 0 && b.CurrentSize >= b.QuotaBytes" class="text-rose-500 font-bold">Quota exceeded!</span>
-                                </div>
-                            </div>
                         </div>
                     </div>
-                </CardContent>
-            </Card>
+                </div>
+            </div>
         </main>
     </div>
 </template>
@@ -226,6 +270,7 @@ import {
 } from 'lucide-vue-next'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { useAuth } from '@/composables/useAuth'
 
 // Chart.js registration
@@ -308,7 +353,7 @@ const distributionData = computed(() => {
                 '#f59e0b', '#10b981', '#06b6d4', '#3b82f6'
             ],
             borderWidth: 0,
-            hoverOffset: 15
+            hoverOffset: 10
         }]
     }
 })
@@ -325,16 +370,11 @@ const contentTypeData = computed(() => {
         datasets: [{
             data: sizes,
             backgroundColor: [
-                '#3b82f6', // blue (Images)
-                '#10b981', // emerald (Videos)
-                '#f59e0b', // amber (Audio)
-                '#6366f1', // indigo (Documents)
-                '#8b5cf6', // violet (Code & Config)
-                '#ec4899', // pink (Archives)
-                '#64748b'  // slate (Other)
+                '#3b82f6', '#10b981', '#f59e0b', '#6366f1',
+                '#8b5cf6', '#ec4899', '#64748b'
             ],
             borderWidth: 0,
-            hoverOffset: 15
+            hoverOffset: 10
         }]
     }
 })
@@ -342,9 +382,9 @@ const contentTypeData = computed(() => {
 const contentTypeOptions = computed(() => ({
     responsive: true,
     maintainAspectRatio: false,
-    cutout: '75%',
+    cutout: '72%',
     plugins: {
-        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 15, font: { size: 10 } } },
+        legend: { position: 'bottom', labels: { boxWidth: 8, padding: 8, font: { size: 9 } } },
         tooltip: {
             callbacks: {
                 label: (context) => {
@@ -385,11 +425,12 @@ const trendsData = computed(() => {
             label: actionConfig[action].label,
             data: counts,
             borderColor: actionConfig[action].color,
-            backgroundColor: actionConfig[action].color + '20',
+            backgroundColor: actionConfig[action].color + '15',
             fill: true,
             tension: 0.4,
-            pointRadius: 2,
-            pointHoverRadius: 6
+            pointRadius: 1.5,
+            pointHoverRadius: 5,
+            borderWidth: 1.5
         })
     })
 
@@ -421,9 +462,9 @@ const growthData = computed(() => {
             data: data,
             borderColor: colors[i % colors.length],
             backgroundColor: colors[i % colors.length] + '10',
-            borderWidth: 2,
+            borderWidth: 1.5,
             tension: 0.3,
-            pointRadius: 3,
+            pointRadius: 2,
             fill: true
         }
     })
@@ -434,9 +475,9 @@ const growthData = computed(() => {
 const doughnutOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    cutout: '75%',
+    cutout: '72%',
     plugins: {
-        legend: { position: 'bottom', labels: { boxWidth: 10, padding: 15, font: { size: 10 } } }
+        legend: { position: 'bottom', labels: { boxWidth: 8, padding: 8, font: { size: 9 } } }
     }
 }
 
@@ -444,30 +485,31 @@ const lineOptions = {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-        legend: { display: false }
+        legend: { position: 'top', align: 'end', labels: { boxWidth: 8, padding: 12, font: { size: 9 } } }
     },
     scales: {
-        x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+        x: { grid: { display: false }, ticks: { font: { size: 8 }, maxTicksLimit: 10 } },
         y: {
             beginAtZero: true,
-            grid: { color: 'rgba(0,0,0,0.05)' },
-            ticks: { stepSize: 1, font: { size: 9 } }
+            grid: { color: 'rgba(0,0,0,0.04)' },
+            ticks: { stepSize: 1, font: { size: 8 } }
         }
     }
 }
 
 const growthOptions = {
-    ...lineOptions,
+    responsive: true,
+    maintainAspectRatio: false,
     plugins: {
-        legend: { position: 'top', labels: { boxWidth: 10, font: { size: 10 } } }
+        legend: { position: 'top', align: 'end', labels: { boxWidth: 8, padding: 12, font: { size: 9 } } }
     },
     scales: {
-        x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+        x: { grid: { display: false }, ticks: { font: { size: 8 }, maxTicksLimit: 10 } },
         y: {
-            grid: { color: 'rgba(0,0,0,0.05)' },
+            grid: { color: 'rgba(0,0,0,0.04)' },
             ticks: {
                 callback: (val) => formatSize(val),
-                font: { size: 9 }
+                font: { size: 8 }
             }
         }
     }
