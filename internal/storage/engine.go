@@ -40,6 +40,7 @@ type Object struct {
 	ContentType     string
 	CompressionType string
 	ContentHash     string
+	OriginalSize    int64
 }
 
 var bufferPool = sync.Pool{
@@ -160,6 +161,13 @@ type Storage interface {
 	// Signature Tracking
 	IsSignatureUsed(signature string) (bool, error)
 	RecordSignature(signature string, expiresAt time.Time) error
+	IsSignatureRevoked(signature string) (bool, error)
+	RevokeSignature(signature string) error
+
+	// Bucket Replication
+	CreateReplicationRule(source, dest, prefix string) error
+	GetReplicationRules(bucket string) ([]database.ReplicationRow, error)
+	DeleteReplicationRule(id int64) error
 
 	// Stats
 	StartLifecycleWorker()
@@ -746,6 +754,31 @@ func (s *FileStorage) PutObject(bucket, key string, reader io.Reader, encryption
 	// Invalidate object list cache for this bucket and all parent prefixes
 	s.invalidateObjectListCache(bucket, key)
 
+	// Trigger Asynchronous Replication if configured
+	if s.DB != nil {
+		rules, err := s.DB.GetReplicationRules(bucket)
+		if err == nil {
+			for _, rule := range rules {
+				if rule.Enabled {
+					prefix := ""
+					if rule.Prefix != nil {
+						prefix = *rule.Prefix
+					}
+					if prefix == "" || strings.HasPrefix(key, prefix) {
+						go func(destBucket string, encType string) {
+							// Open source object reader
+							reader, _, err := s.GetObject(bucket, key, versionID)
+							if err == nil {
+								defer reader.Close()
+								s.PutObject(destBucket, key, reader, encType)
+							}
+						}(rule.DestinationBucket, encryptionType)
+					}
+				}
+			}
+		}
+	}
+
 	return versionID, nil
 }
 
@@ -827,6 +860,7 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 	compressionType := ""
 	contentHash := ""
 	var dbSize int64
+	var originalSize int64
 	if s.DB != nil {
 		obj, _ := s.DB.GetObject(bucket, key, versionID)
 		if obj != nil {
@@ -842,6 +876,9 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 			}
 			if obj.ContentHash != nil {
 				contentHash = *obj.ContentHash
+			}
+			if obj.OriginalSize != nil {
+				originalSize = *obj.OriginalSize
 			}
 		}
 	}
@@ -861,6 +898,7 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 		ContentType:     contentType,
 		CompressionType: compressionType,
 		ContentHash:     contentHash,
+		OriginalSize:    originalSize,
 	}, nil
 }
 
@@ -982,6 +1020,24 @@ func (s *FileStorage) DeleteObject(bucket, key, versionID string, bypassGovernan
 
 	if !softDeleteEnabled && contentHash != "" {
 		s.cleanOrphanedCAS(contentHash)
+	}
+
+	// Trigger Asynchronous Replication of deletion if configured
+	if s.DB != nil && fsErr == nil {
+		rules, err := s.DB.GetReplicationRules(bucket)
+		if err == nil {
+			for _, rule := range rules {
+				if rule.Enabled {
+					prefix := ""
+					if rule.Prefix != nil {
+						prefix = *rule.Prefix
+					}
+					if prefix == "" || strings.HasPrefix(key, prefix) {
+						go s.DeleteObject(rule.DestinationBucket, key, versionID, bypassGovernance)
+					}
+				}
+			}
+		}
 	}
 
 	return fsErr
@@ -1183,6 +1239,18 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]O
 				obj.LegalHold = o.LegalHold
 				if o.EncryptionType != nil {
 					obj.EncryptionType = *o.EncryptionType
+				}
+				if o.ContentType != nil {
+					obj.ContentType = *o.ContentType
+				}
+				if o.CompressionType != nil {
+					obj.CompressionType = *o.CompressionType
+				}
+				if o.ContentHash != nil {
+					obj.ContentHash = *o.ContentHash
+				}
+				if o.OriginalSize != nil {
+					obj.OriginalSize = *o.OriginalSize
 				}
 				objects = append(objects, obj)
 			}
@@ -1979,5 +2047,50 @@ func (g *gzipReadCloser) Close() error {
 		return err1
 	}
 	return err2
+}
+
+func (s *FileStorage) IsSignatureRevoked(signature string) (bool, error) {
+	if s.DB == nil {
+		return false, nil
+	}
+	return s.DB.IsSignatureRevoked(signature)
+}
+
+func (s *FileStorage) RevokeSignature(signature string) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.RevokeSignature(signature)
+}
+
+func (s *FileStorage) CreateReplicationRule(source, dest, prefix string) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	var pref *string
+	if prefix != "" {
+		pref = &prefix
+	}
+	row := &database.ReplicationRow{
+		SourceBucket:      source,
+		DestinationBucket: dest,
+		Prefix:            pref,
+		Enabled:           true,
+	}
+	return s.DB.CreateReplicationRule(row)
+}
+
+func (s *FileStorage) GetReplicationRules(bucket string) ([]database.ReplicationRow, error) {
+	if s.DB == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+	return s.DB.GetReplicationRules(bucket)
+}
+
+func (s *FileStorage) DeleteReplicationRule(id int64) error {
+	if s.DB == nil {
+		return fmt.Errorf("database not available")
+	}
+	return s.DB.DeleteReplicationRule(id)
 }
 

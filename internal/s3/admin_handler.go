@@ -956,6 +956,27 @@ func (h *AdminHandler) ShareObject(c *gin.Context) {
 		return
 	}
 
+	// Track in database
+	u, errParse := url.Parse(presignedURL)
+	if errParse == nil && h.Storage.(*storage.FileStorage).DB != nil {
+		sig := u.Query().Get("X-Amz-Signature")
+		expiresAt := time.Now().Add(time.Duration(req.ExpirySeconds) * time.Second)
+		var allowedIPPtr *string
+		if req.AllowedIP != "" {
+			allowedIPPtr = &req.AllowedIP
+		}
+		dbRow := &database.PresignedURLRow{
+			Bucket:     bucket,
+			Key:        req.Key,
+			URL:        presignedURL,
+			Signature:  sig,
+			ExpiresAt:  expiresAt,
+			AllowedIP:  allowedIPPtr,
+			OneTimeUse: req.OneTimeUse,
+		}
+		h.Storage.(*storage.FileStorage).DB.CreatePresignedURL(dbRow)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"url": presignedURL,
 	})
@@ -1223,5 +1244,192 @@ func (h *AdminHandler) StreamAuditLogs(c *gin.Context) {
 			break
 		}
 	}
+}
+
+func (h *AdminHandler) ListPresignedURLs(c *gin.Context) {
+	db := h.Storage.(*storage.FileStorage).DB
+	if db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not available"})
+		return
+	}
+	urls, err := db.ListPresignedURLs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, urls)
+}
+
+func (h *AdminHandler) RevokePresignedURL(c *gin.Context) {
+	signature := c.Query("signature")
+	if signature == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing signature parameter"})
+		return
+	}
+	db := h.Storage.(*storage.FileStorage).DB
+	if db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not available"})
+		return
+	}
+	err := db.RevokeSignature(signature)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusOK)
+}
+
+func (h *AdminHandler) CopyObjects(c *gin.Context) {
+	srcBucket := c.Param("bucket")
+	var req struct {
+		Keys              []string `json:"keys"`
+		DestinationBucket string   `json:"destinationBucket"`
+		DestinationPrefix string   `json:"destinationPrefix"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	exists, err := h.Storage.BucketExists(req.DestinationBucket)
+	if err != nil || !exists {
+		c.String(http.StatusBadRequest, "Destination bucket does not exist")
+		return
+	}
+
+	copiedCount := 0
+	var errs []string
+	for _, key := range req.Keys {
+		if strings.HasSuffix(key, "/") {
+			objects, _, err := h.Storage.ListObjects(srcBucket, key, "", "")
+			if err == nil {
+				for _, obj := range objects {
+					parentDir := filepath.Dir(strings.TrimSuffix(key, "/"))
+					var relKey string
+					if parentDir == "." || parentDir == "/" || parentDir == "" {
+						relKey = obj.Key
+					} else {
+						relKey, _ = filepath.Rel(parentDir, obj.Key)
+					}
+					destKey := req.DestinationPrefix + relKey
+
+					reader, stat, err := h.Storage.GetObject(srcBucket, obj.Key, "")
+					if err == nil {
+						_, err = h.Storage.PutObject(req.DestinationBucket, destKey, reader, stat.EncryptionType)
+						reader.Close()
+						if err != nil {
+							errs = append(errs, fmt.Sprintf("Failed to copy %s: %v", obj.Key, err))
+						} else {
+							copiedCount++
+						}
+					}
+				}
+			}
+		} else {
+			destKey := req.DestinationPrefix + filepath.Base(key)
+			if req.DestinationPrefix == "" {
+				destKey = key
+			}
+			reader, stat, err := h.Storage.GetObject(srcBucket, key, "")
+			if err == nil {
+				_, err = h.Storage.PutObject(req.DestinationBucket, destKey, reader, stat.EncryptionType)
+				reader.Close()
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("Failed to copy %s: %v", key, err))
+				} else {
+					copiedCount++
+				}
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		c.JSON(http.StatusMultiStatus, gin.H{"copiedCount": copiedCount, "errors": errs})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"copiedCount": copiedCount})
+}
+
+func (h *AdminHandler) BulkDeleteObjects(c *gin.Context) {
+	bucket := c.Param("bucket")
+	var req struct {
+		Keys []string `json:"keys"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.String(http.StatusBadRequest, err.Error())
+		return
+	}
+
+	bypass := c.Query("bypassGovernance") != "false"
+	deletedCount := 0
+	var errs []string
+
+	for _, key := range req.Keys {
+		if strings.HasSuffix(key, "/") {
+			objects, _, err := h.Storage.ListObjects(bucket, key, "", "")
+			if err == nil {
+				for _, obj := range objects {
+					if err := h.Storage.DeleteObject(bucket, obj.Key, "", bypass); err != nil {
+						errs = append(errs, fmt.Sprintf("Failed to delete %s: %v", obj.Key, err))
+					} else {
+						deletedCount++
+					}
+				}
+			}
+			h.Storage.DeleteObject(bucket, key, "", bypass)
+		} else {
+			if err := h.Storage.DeleteObject(bucket, key, "", bypass); err != nil {
+				errs = append(errs, fmt.Sprintf("Failed to delete %s: %v", key, err))
+			} else {
+				deletedCount++
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		c.JSON(http.StatusMultiStatus, gin.H{"deletedCount": deletedCount, "errors": errs})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deletedCount": deletedCount})
+}
+
+func (h *AdminHandler) ListReplicationRules(c *gin.Context) {
+	bucket := c.Param("bucket")
+	rules, err := h.Storage.GetReplicationRules(bucket)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, rules)
+}
+
+func (h *AdminHandler) CreateReplicationRule(c *gin.Context) {
+	bucket := c.Param("bucket")
+	var req struct {
+		DestinationBucket string `json:"destinationBucket"`
+		Prefix            string `json:"prefix"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	err := h.Storage.CreateReplicationRule(bucket, req.DestinationBucket, req.Prefix)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusCreated)
+}
+
+func (h *AdminHandler) DeleteReplicationRule(c *gin.Context) {
+	idStr := c.Param("id")
+	var id int64
+	fmt.Sscanf(idStr, "%d", &id)
+	err := h.Storage.DeleteReplicationRule(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusOK)
 }
 

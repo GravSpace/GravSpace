@@ -181,6 +181,16 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				return
 			}
 
+			// CHECK IF REVOKED
+			if store != nil {
+				revoked, _ := store.IsSignatureRevoked(providedSignature)
+				if revoked {
+					sendS3Error(c, "AccessDenied", "This presigned URL has been revoked.", "", "")
+					c.Abort()
+					return
+				}
+			}
+
 			// ADDITIONAL SECURITY CHECKS FOR PRESIGNED URLS
 			if isPresigned {
 				// 1. IP Restriction

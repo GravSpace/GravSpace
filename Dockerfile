@@ -10,6 +10,13 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
+# Download and install Turso CLI
+RUN apt-get update && apt-get install -y curl xz-utils && \
+    curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tursodatabase/turso/releases/latest/download/turso_cli-installer.sh | sh
+
+# Print tursodb help to see available flags (diagnostic)
+RUN echo '--- tursodb help ---' && $HOME/.turso/tursodb --help 2>&1 || true
+
 # Copy source code
 COPY . .
 
@@ -21,11 +28,14 @@ RUN echo 'package main\nimport "net/http"\nimport "os"\nfunc main() {\n  res, er
     CGO_ENABLED=0 go build -o healthcheck healthcheck.go
 
 # Trigger pre-extraction of libturso_go.so
-RUN (./storage-server & sleep 2 && kill $!) || true
-RUN find /root/.cache/turso-go -name "libturso_go.so" -exec cp {} /app/libturso_go.so \;
+RUN (DATABASE_URL=file:/tmp/temp.db ./storage-server & sleep 2 && kill $!) || true
+RUN find / -not -path "/sys/*" -not -path "/proc/*" -not -path "/dev/*" -name "libturso_go.so" -exec cp {} /app/libturso_go.so \; -quit
 
 # Runtime stage
 FROM debian:bookworm-slim
+
+# Install runtime dependencies including curl and netcat for health checks
+RUN apt-get update && apt-get install -y curl ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*
 
 # Copy certificates and timezone data from builder
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
@@ -34,13 +44,16 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 # Set working directory
 WORKDIR /app
 
-# Copy binaries and library from builder
+# Copy binaries, entrypoint, and libraries from builder
 COPY --from=builder /app/storage-server .
 COPY --from=builder /app/healthcheck /usr/local/bin/healthcheck
 COPY --from=builder /app/libturso_go.so /usr/lib/
+COPY --from=builder /app/entrypoint.sh /app/entrypoint.sh
+COPY --from=builder /root/.turso/tursodb /usr/local/bin/tursodb
 
-# Register the library
-RUN chmod 755 /usr/lib/libturso_go.so && ldconfig
+# Register the library and ensure executables are runnable
+RUN chmod 755 /usr/lib/libturso_go.so && ldconfig && \
+    chmod +x /usr/local/bin/tursodb /app/entrypoint.sh
 
 # Create non-root user and home directory
 RUN groupadd -g 1000 appuser && \
@@ -64,5 +77,5 @@ USER appuser
 EXPOSE 8080
 EXPOSE 9000
 
-# Run the application
-CMD ["./storage-server"]
+# Run the application using our orchestrating entrypoint script
+CMD ["/app/entrypoint.sh"]
