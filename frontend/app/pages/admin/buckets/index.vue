@@ -7,112 +7,162 @@
                 <p class="text-xs text-muted-foreground">Manage your cloud storage infrastructure.</p>
             </div>
             <div class="flex items-center gap-3">
+                <div class="relative">
+                    <Search class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input v-model="searchQuery" type="text" placeholder="Filter buckets..."
+                        class="h-8 w-44 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60" />
+                </div>
                 <Button variant="outline" size="sm" @click="fetchBuckets" :disabled="loading" class="h-8">
                     <RefreshCw class="w-3.5 h-3.5 mr-2" :class="{ 'animate-spin': loading }" />
                     Sync
                 </Button>
-                <Button size="sm" @click="showCreateBucketDialog = true" class="h-8 bg-primary hover:bg-primary/90">
+                <Button size="sm" @click="showCreateBucketDialog = true"
+                    class="h-8 bg-primary hover:bg-primary/90 shadow-sm transition-all duration-200 active:scale-95">
                     <Plus class="w-3.5 h-3.5 mr-2" /> New Bucket
                 </Button>
             </div>
         </header>
 
         <main class="flex-1 overflow-auto p-6">
-            <div v-if="loading && (!buckets || buckets.length === 0)"
-                class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                <Card v-for="i in 8" :key="i" class="h-32 animate-pulse bg-muted/50" />
+            <!-- Loading Skeleton -->
+            <div v-if="loading && (!buckets || buckets.length === 0)" class="space-y-3">
+                <div v-for="i in 5" :key="i"
+                    class="h-[72px] rounded-xl animate-pulse bg-muted/40 border border-slate-200/50 dark:border-slate-800/50" />
             </div>
 
-            <div v-else-if="buckets && buckets.length > 0"
-                class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <!-- Bucket List -->
+            <div v-else-if="filteredBuckets && filteredBuckets.length > 0" class="space-y-2.5">
                 <TransitionGroup name="list">
-                    <Card v-for="bucket in buckets" :key="bucket"
-                        class="group relative overflow-hidden transition-all duration-300 hover:shadow-lg hover:border-primary/50 cursor-pointer border-slate-200 dark:border-slate-800">
-                        <div class="p-4 flex flex-col h-full">
-                            <div class="flex items-start justify-between mb-3">
+                    <div v-for="bucket in filteredBuckets" :key="bucket"
+                        class="group rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs hover:shadow-md hover:border-primary/30 transition-all duration-300 cursor-pointer"
+                        @click="navigateToBucket(bucket)">
+
+                        <div class="flex items-center justify-between px-5 py-3.5">
+                            <!-- Left: Icon + Name + Badges -->
+                            <div class="flex items-center gap-4 min-w-0 flex-1">
                                 <div
-                                    class="p-2 rounded-lg bg-primary/5 text-primary group-hover:bg-primary group-hover:text-white transition-colors duration-300">
-                                    <Database class="w-5 h-5" />
+                                    class="h-10 w-10 rounded-lg bg-gradient-to-br from-primary/10 to-indigo-500/10 border border-primary/15 flex items-center justify-center shrink-0 group-hover:from-primary/20 group-hover:to-indigo-500/20 transition-colors duration-300">
+                                    <Database
+                                        class="w-4.5 h-4.5 text-primary group-hover:scale-110 transition-transform duration-300" />
                                 </div>
-                                <DropdownMenu @click.stop>
-                                    <DropdownMenuTrigger asChild>
-                                        <Button variant="ghost" size="icon"
-                                            class="h-8 w-8 -mr-2 -mt-1 hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <MoreVertical class="w-4 h-4" />
-                                        </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" class="w-48">
-                                        <DropdownMenuItem @click="openVersioningDialog(bucket)">
-                                            <History class="w-4 h-4 mr-2" />
-                                            Versioning Settings
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem @click="openObjectLockDialog(bucket)">
-                                            <Lock class="w-4 h-4 mr-2" />
-                                            Object Lock Settings
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem @click="togglePublic(bucket)">
-                                            <component :is="isPublic(bucket) ? ShieldOff : ShieldCheck"
-                                                class="w-4 h-4 mr-2" />
-                                            {{ isPublic(bucket) ? 'Make Private' : 'Make Public' }}
-                                        </DropdownMenuItem>
-                                        <DropdownMenuSeparator />
-                                        <DropdownMenuItem @click="deleteBucket(bucket)"
-                                            class="text-destructive focus:bg-destructive/10">
-                                            <Trash2 class="w-4 h-4 mr-2" />
-                                            Delete Bucket
-                                        </DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
-                            </div>
-
-                            <div class="space-y-1">
-                                <h3 class="font-medium text-slate-900 dark:text-slate-100 truncate pr-4"
-                                    :title="bucket">
-                                    {{ bucket }}
-                                </h3>
-                                <div class="flex items-center gap-2">
-                                    <Badge :variant="isPublic(bucket) ? 'success' : 'secondary'"
-                                        class="text-[10px] uppercase font-bold px-1.5 h-4 tracking-wider">
-                                        {{ isPublic(bucket) ? 'Public' : 'Private' }}
-                                    </Badge>
-                                    <span
-                                        class="text-[10px] text-muted-foreground uppercase font-medium">Standard</span>
+                                <div class="flex flex-col min-w-0">
+                                    <div class="flex items-center gap-2.5">
+                                        <span
+                                            class="font-bold text-sm text-slate-900 dark:text-slate-100 truncate tracking-tight"
+                                            :title="bucket">{{ bucket }}</span>
+                                        <Badge :variant="isPublic(bucket) ? 'default' : 'outline'" :class="[
+                                            'text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest leading-none font-extrabold shrink-0',
+                                            isPublic(bucket)
+                                                ? 'bg-emerald-500 hover:bg-emerald-500 text-white'
+                                                : 'border-slate-300 dark:border-slate-700 text-muted-foreground'
+                                        ]">
+                                            {{ isPublic(bucket) ? 'Public' : 'Private' }}
+                                        </Badge>
+                                        <Badge v-if="bucketInfoCache[bucket]?.VersioningEnabled" variant="outline"
+                                            class="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest leading-none font-extrabold border-violet-500/30 text-violet-500 shrink-0">
+                                            Versioned
+                                        </Badge>
+                                        <Badge v-if="bucketInfoCache[bucket]?.ObjectLockEnabled" variant="outline"
+                                            class="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest leading-none font-extrabold border-amber-500/30 text-amber-500 shrink-0">
+                                            <Lock class="w-2.5 h-2.5 mr-0.5" /> Locked
+                                        </Badge>
+                                    </div>
+                                    <div class="flex items-center gap-3 mt-0.5">
+                                        <span
+                                            class="text-[10px] text-muted-foreground font-medium uppercase tracking-wider opacity-50">
+                                            Standard Storage
+                                        </span>
+                                        <span v-if="bucketInfoCache[bucket]?.CurrentSize"
+                                            class="text-[10px] text-muted-foreground font-mono">
+                                            {{ formatSize(bucketInfoCache[bucket].CurrentSize) }}
+                                        </span>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div class="mt-auto pt-4 flex items-center justify-between text-muted-foreground"
-                                @click="navigateToBucket(bucket)">
-                                <span class="text-[10px] flex items-center gap-1">
-                                    <Clock class="w-3 h-3" />
-                                    Active
-                                </span>
+                            <!-- Right: Quota Bar + Actions -->
+                            <div class="flex items-center gap-4 shrink-0">
+                                <!-- Quota mini bar -->
+                                <div v-if="bucketInfoCache[bucket]?.QuotaBytes > 0"
+                                    class="hidden md:flex flex-col gap-1 w-32">
+                                    <div
+                                        class="flex justify-between items-center text-[9px] font-bold uppercase tracking-wider">
+                                        <span class="text-muted-foreground opacity-60">Quota</span>
+                                        <span :class="getQuotaPercent(bucketInfoCache[bucket]) > 90 ? 'text-rose-500' : 'text-muted-foreground opacity-60'">
+                                            {{ getQuotaPercent(bucketInfoCache[bucket]) }}%
+                                        </span>
+                                    </div>
+                                    <div
+                                        class="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                                        <div class="h-full rounded-full transition-all duration-500"
+                                            :class="getQuotaColor(bucketInfoCache[bucket])"
+                                            :style="{ width: getQuotaPercent(bucketInfoCache[bucket]) + '%' }">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Actions -->
+                                <div class="flex items-center gap-0.5" @click.stop>
+                                    <Button variant="ghost" size="icon"
+                                        class="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                                        @click="openVersioningDialog(bucket)" title="Versioning">
+                                        <History class="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon"
+                                        class="h-7 w-7 text-muted-foreground hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
+                                        @click="openObjectLockDialog(bucket)" title="Object Lock">
+                                        <Lock class="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon"
+                                        class="h-7 w-7 transition-colors"
+                                        :class="isPublic(bucket) ? 'text-emerald-500 hover:text-rose-500 hover:bg-rose-500/10' : 'text-muted-foreground hover:text-emerald-500 hover:bg-emerald-500/10'"
+                                        @click="togglePublic(bucket)"
+                                        :title="isPublic(bucket) ? 'Make Private' : 'Make Public'">
+                                        <component :is="isPublic(bucket) ? ShieldOff : ShieldCheck"
+                                            class="w-3.5 h-3.5" />
+                                    </Button>
+                                    <Button variant="ghost" size="icon"
+                                        class="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+                                        @click="deleteBucket(bucket)" title="Delete Bucket">
+                                        <Trash2 class="w-3.5 h-3.5" />
+                                    </Button>
+                                </div>
+
+                                <!-- Navigate Arrow -->
                                 <ChevronRight
-                                    class="w-4 h-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+                                    class="w-4 h-4 text-muted-foreground/30 group-hover:text-primary group-hover:translate-x-0.5 transition-all duration-300" />
                             </div>
                         </div>
-                    </Card>
+                    </div>
                 </TransitionGroup>
             </div>
 
+            <!-- Empty State -->
             <div v-else class="h-[60vh] flex flex-col items-center justify-center text-center space-y-4">
-                <div class="p-6 rounded-full bg-muted/30">
-                    <Database class="w-12 h-12 text-muted-foreground/50" />
+                <div class="h-20 w-20 rounded-2xl bg-muted/30 flex items-center justify-center">
+                    <Database class="w-10 h-10 text-muted-foreground/30" />
                 </div>
                 <div class="space-y-1">
-                    <h3 class="text-lg font-medium">No buckets found</h3>
+                    <h3 class="text-lg font-semibold">{{ searchQuery ? 'No matching buckets' : 'No buckets found' }}
+                    </h3>
                     <p class="text-sm text-muted-foreground max-w-xs">
-                        Start by creating your first container to store your objects securely.
+                        {{ searchQuery ? 'Try adjusting your search query.' : 'Start by creating your first container to store your objects securely.' }}
                     </p>
                 </div>
-                <Button @click="showCreateBucketDialog = true">
+                <Button v-if="!searchQuery" @click="showCreateBucketDialog = true"
+                    class="shadow-sm active:scale-95 transition-transform">
                     <Plus class="w-4 h-4 mr-2" /> Create First Bucket
                 </Button>
             </div>
         </main>
 
+        <!-- Create Bucket Dialog -->
         <Dialog :open="showCreateBucketDialog" @update:open="showCreateBucketDialog = false">
             <DialogContent class="sm:max-w-md">
                 <DialogHeader>
+                    <div class="h-10 w-10 rounded-full bg-primary/10 flex items-center justify-center mb-4">
+                        <Database class="w-5 h-5 text-primary" />
+                    </div>
                     <DialogTitle>Provision New Bucket</DialogTitle>
                     <DialogDescription>
                         Buckets are fundamental containers for your cloud data.
@@ -120,11 +170,14 @@
                 </DialogHeader>
                 <div class="space-y-4 py-4">
                     <div class="space-y-2">
-                        <Label for="bucket-name">Bucket Name</Label>
+                        <Label for="bucket-name"
+                            class="text-xs font-bold uppercase tracking-wider opacity-70">Bucket Name</Label>
                         <Input id="bucket-name" v-model="newBucketName" placeholder="my-gravity-bucket"
                             @keyup.enter="createBucket"
-                            class="h-10 border-slate-300 dark:border-slate-700 focus:ring-primary" autofocus />
-                        <p class="text-[10px] text-muted-foreground">Names must be globally unique and URL-compatible.
+                            class="h-10 border-slate-300 dark:border-slate-700 focus:ring-primary shadow-xs"
+                            autofocus />
+                        <p class="text-[10px] text-muted-foreground italic">Names must be globally unique and
+                            URL-compatible.
                         </p>
                     </div>
                     <div class="flex justify-end gap-3 mt-4">
@@ -138,6 +191,7 @@
             </DialogContent>
         </Dialog>
 
+        <!-- Versioning Dialog -->
         <Dialog :open="showVersioningDialog" @update:open="showVersioningDialog = false">
             <DialogContent class="sm:max-w-md">
                 <DialogHeader>
@@ -168,6 +222,7 @@
             </DialogContent>
         </Dialog>
 
+        <!-- Object Lock Dialog -->
         <Dialog :open="showObjectLockDialog" @update:open="showObjectLockDialog = false">
             <DialogContent class="sm:max-w-md">
                 <DialogHeader>
@@ -235,23 +290,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-    Plus, Database, MoreVertical, ShieldCheck, ShieldOff,
-    Trash2, RefreshCw, Clock, ChevronRight, Loader2, History, Lock
+    Plus, Database, ShieldCheck, ShieldOff,
+    Trash2, RefreshCw, ChevronRight, Loader2, History, Lock, Search
 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuSeparator,
-    DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
 import {
     Dialog,
     DialogContent,
@@ -286,7 +333,34 @@ const showObjectLockDialog = ref(false)
 const objectLockEnabled = ref(false)
 const defaultRetentionMode = ref('')
 const defaultRetentionDays = ref(0)
+const searchQuery = ref('')
+const bucketInfoCache = ref({})
 
+const filteredBuckets = computed(() => {
+    if (!searchQuery.value.trim()) return buckets.value
+    const q = searchQuery.value.toLowerCase()
+    return buckets.value.filter(b => b.toLowerCase().includes(q))
+})
+
+function formatSize(bytes) {
+    if (!bytes || bytes === 0) return '0 B'
+    const k = 1024
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+function getQuotaPercent(info) {
+    if (!info || !info.QuotaBytes || info.QuotaBytes <= 0) return 0
+    return Math.min(100, Math.round((info.CurrentSize / info.QuotaBytes) * 100))
+}
+
+function getQuotaColor(info) {
+    const pct = getQuotaPercent(info)
+    if (pct >= 90) return 'bg-rose-500'
+    if (pct >= 75) return 'bg-amber-500'
+    return 'bg-emerald-500'
+}
 
 async function fetchBuckets() {
     loading.value = true
@@ -294,6 +368,8 @@ async function fetchBuckets() {
         const res = await authFetch(`${API_BASE}/admin/buckets`)
         if (res.ok) {
             buckets.value = await res.json()
+            // Fetch info for each bucket in parallel
+            fetchAllBucketInfo()
         } else {
             throw new Error('Failed to fetch buckets')
         }
@@ -302,6 +378,22 @@ async function fetchBuckets() {
     } finally {
         loading.value = false
     }
+}
+
+async function fetchAllBucketInfo() {
+    const results = await Promise.allSettled(
+        buckets.value.map(async (name) => {
+            try {
+                const res = await authFetch(`${API_BASE}/admin/buckets/${name}/info`)
+                if (res.ok) {
+                    const info = await res.json()
+                    bucketInfoCache.value[name] = info
+                }
+            } catch (e) {
+                // Silently skip
+            }
+        })
+    )
 }
 
 async function fetchUsers() {
@@ -423,6 +515,10 @@ async function updateVersioning(versioning) {
         })
         if (res.ok) {
             toast.success(`Versioning ${versioningEnabled.value ? 'enabled' : 'disabled'} for "${selectedBucket.value}".`)
+            // Update cache
+            if (bucketInfoCache.value[selectedBucket.value]) {
+                bucketInfoCache.value[selectedBucket.value].VersioningEnabled = versioning
+            }
         } else {
             throw new Error('Failed to update versioning')
         }
@@ -460,6 +556,10 @@ async function updateObjectLock(lockEnabled) {
         })
         if (res.ok) {
             toast.success(`Object Lock ${objectLockEnabled.value ? 'enabled' : 'disabled'} for "${selectedBucket.value}".`)
+            // Update cache
+            if (bucketInfoCache.value[selectedBucket.value]) {
+                bucketInfoCache.value[selectedBucket.value].ObjectLockEnabled = lockEnabled
+            }
         } else {
             throw new Error('Failed to update object lock')
         }
@@ -502,12 +602,12 @@ onMounted(() => {
 <style scoped>
 .list-enter-active,
 .list-leave-active {
-    transition: all 0.4s ease;
+    transition: all 0.3s ease;
 }
 
 .list-enter-from,
 .list-leave-to {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(12px);
 }
 </style>

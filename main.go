@@ -20,7 +20,7 @@ import (
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -262,6 +262,13 @@ func main() {
 	admin.PUT("/buckets/:bucket/objects/*key", adminHandler.PutObject)
 	admin.DELETE("/buckets/:bucket/objects/*key", adminHandler.DeleteObject)
 	admin.POST("/buckets/:bucket/objects/share", adminHandler.ShareObject)
+	admin.POST("/buckets/:bucket/objects/delete-bulk", adminHandler.BulkDeleteObjects)
+	admin.POST("/buckets/:bucket/copy", adminHandler.CopyObjects)
+	admin.GET("/buckets/:bucket/replication", adminHandler.ListReplicationRules)
+	admin.POST("/buckets/:bucket/replication", adminHandler.CreateReplicationRule)
+	admin.DELETE("/buckets/:bucket/replication/:id", adminHandler.DeleteReplicationRule)
+	admin.GET("/presigns", adminHandler.ListPresignedURLs)
+	admin.DELETE("/presigns", adminHandler.RevokePresignedURL)
 	admin.GET("/buckets/:bucket/tags/*key", adminHandler.GetObjectTagging)
 	admin.PUT("/buckets/:bucket/tags/*key", adminHandler.PutObjectTagging)
 	admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)

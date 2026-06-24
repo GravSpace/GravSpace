@@ -13,7 +13,7 @@ import (
 	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type S3Error struct {
@@ -179,6 +179,16 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 				sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
 				c.Abort()
 				return
+			}
+
+			// CHECK IF REVOKED
+			if store != nil {
+				revoked, _ := store.IsSignatureRevoked(providedSignature)
+				if revoked {
+					sendS3Error(c, "AccessDenied", "This presigned URL has been revoked.", "", "")
+					c.Abort()
+					return
+				}
 			}
 
 			// ADDITIONAL SECURITY CHECKS FOR PRESIGNED URLS

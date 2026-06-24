@@ -6,109 +6,126 @@
                 <h1 class="text-lg font-semibold tracking-tight">IAM Policy Templates</h1>
                 <p class="text-xs text-muted-foreground">Reusable permission blueprints for access control.</p>
             </div>
-            <Button size="sm" @click="showPolicyModal = true"
-                class="h-8 bg-primary hover:bg-primary/90 shadow-sm transition-all duration-200 active:scale-95">
-                <Plus class="w-3.5 h-3.5 mr-2" /> New Policy
-            </Button>
+            <div class="flex items-center gap-3">
+                <div class="relative">
+                    <Search class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input v-model="searchQuery" type="text" placeholder="Filter policies..."
+                        class="h-8 w-44 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60" />
+                </div>
+                <Button size="sm" @click="showPolicyModal = true"
+                    class="h-8 bg-primary hover:bg-primary/90 shadow-sm transition-all duration-200 active:scale-95">
+                    <Plus class="w-3.5 h-3.5 mr-2" /> New Policy
+                </Button>
+            </div>
         </header>
 
-        <main class="flex-1 overflow-auto p-6">
-            <Card class="border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                <Table>
-                    <TableHeader class="bg-muted/30">
-                        <TableRow>
-                            <TableHead class="w-[30%]">Policy Name</TableHead>
-                            <TableHead class="w-[50%]">Permissions Summary</TableHead>
-                            <TableHead class="w-[15%]">Type</TableHead>
-                            <TableHead class="text-right w-[5%] px-6">Actions</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
+        <main class="flex-1 overflow-auto">
+            <div class="p-6 space-y-2.5">
+                <!-- Policy Cards -->
+                <div v-for="policy in filteredPolicies" :key="policy.name"
+                    class="group rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs hover:shadow-md hover:border-primary/30 transition-all duration-300">
 
-                        <!-- Custom Policies -->
-                        <template v-for="policy in policies" :key="policy.name">
-                            <TableRow class="group hover:bg-muted/30 transition-colors cursor-pointer"
-                                @click="togglePolicyDetails(policy.name)">
-                                <TableCell class="py-4">
-                                    <div class="flex items-center gap-3">
-                                        <div
-                                            class="p-1.5 rounded bg-indigo-500/10 text-indigo-500 group-hover:bg-indigo-500 group-hover:text-white transition-colors">
-                                            <FileText class="w-4 h-4" />
-                                        </div>
-                                        <div class="flex flex-col">
-                                            <span class="font-mono text-sm font-bold">{{ policy.name }}</span>
-                                            <span class="text-[10px] text-muted-foreground">Custom policy
-                                                template</span>
-                                        </div>
-                                    </div>
-                                </TableCell>
-                                <TableCell class="py-4">
-                                    <div class="flex flex-wrap gap-1">
-                                        <Badge v-for="(action, i) in getActions(policy)" :key="i" variant="outline"
-                                            class="text-[9px] h-4 bg-amber-500/10 text-amber-600 border-amber-500/20 font-bold">
-                                            {{ action }}
-                                        </Badge>
-                                        <span v-if="getActions(policy).length === 0"
-                                            class="text-[10px] text-muted-foreground italic">No actions defined</span>
-                                    </div>
-                                </TableCell>
-                                <TableCell>
-                                    <Badge variant="outline" class="text-[8px] h-3.5 py-0 uppercase tracking-wider">
-                                        Custom</Badge>
-                                </TableCell>
-                                <TableCell class="text-right px-6">
-                                    <DropdownMenu @click.stop>
-                                        <DropdownMenuTrigger asChild>
-                                            <Button variant="ghost" size="icon"
-                                                class="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                <MoreVertical class="w-4 h-4" />
-                                            </Button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" class="w-48">
-                                            <DropdownMenuItem @click="viewPolicy(policy)">
-                                                <Eye class="w-4 h-4 mr-2" />
-                                                View Details
-                                            </DropdownMenuItem>
-                                            <DropdownMenuSeparator />
-                                            <DropdownMenuItem @click="deletePolicy(policy.name)"
-                                                class="text-destructive focus:bg-destructive/10">
-                                                <Trash2 class="w-4 h-4 mr-2" />
-                                                Delete Policy
-                                            </DropdownMenuItem>
-                                        </DropdownMenuContent>
-                                    </DropdownMenu>
-                                </TableCell>
-                            </TableRow>
-
-                            <!-- Expandable Policy Details -->
-                            <TableRow v-if="expandedPolicy === policy.name" class="bg-slate-50/50 dark:bg-slate-900/30">
-                                <TableCell colspan="4" class="p-0 border-l-4 border-indigo-500/40">
-                                    <div class="px-8 py-6 space-y-4">
-                                        <div class="flex items-center justify-between">
-                                            <h4
-                                                class="text-xs font-bold uppercase tracking-widest text-slate-700 dark:text-slate-300">
-                                                Policy Document</h4>
-                                            <Button variant="ghost" size="xs" @click="expandedPolicy = null"
-                                                class="h-6 text-[10px]">Collapse</Button>
-                                        </div>
-                                        <pre
-                                            class="p-4 rounded-lg bg-slate-950 text-emerald-400 text-[11px] font-mono overflow-x-auto border border-slate-800">{{ formatPolicy(policy) }}</pre>
-                                    </div>
-                                </TableCell>
-                            </TableRow>
-                        </template>
-
-                        <TableRow v-if="!policies || policies.length === 0">
-                            <TableCell colspan="4" class="h-32 text-center text-muted-foreground italic text-sm">
-                                <div class="flex flex-col items-center gap-2">
-                                    <Shield class="w-6 h-6 opacity-20" />
-                                    <span>No custom policies defined yet</span>
+                    <!-- Card Header Row -->
+                    <div class="flex items-center justify-between px-5 py-3.5 cursor-pointer"
+                        @click="togglePolicyDetails(policy.name)">
+                        <!-- Left: Icon + Name -->
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div
+                                class="h-9 w-9 rounded-lg bg-gradient-to-br from-indigo-500/15 to-violet-500/15 border border-indigo-500/20 flex items-center justify-center shrink-0 group-hover:from-indigo-500/25 group-hover:to-violet-500/25 transition-colors duration-300">
+                                <FileText class="w-4 h-4 text-indigo-500" />
+                            </div>
+                            <div class="flex flex-col min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="font-mono text-sm font-bold truncate tracking-tight">{{ policy.name
+                                        }}</span>
+                                    <Badge variant="outline"
+                                        class="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest leading-none font-extrabold border-slate-300 dark:border-slate-700 text-muted-foreground shrink-0">
+                                        Custom
+                                    </Badge>
                                 </div>
-                            </TableCell>
-                        </TableRow>
-                    </TableBody>
-                </Table>
-            </Card>
+                                <span
+                                    class="text-[10px] text-muted-foreground font-medium mt-0.5 uppercase tracking-wider opacity-50">
+                                    {{ getStatementCount(policy) }}
+                                    {{ getStatementCount(policy) === 1 ? 'statement' : 'statements' }} ·
+                                    {{ getEffect(policy) }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Center: Action badges -->
+                        <div class="flex items-center gap-1.5 flex-wrap justify-center max-w-[45%] px-4">
+                            <div v-for="(action, i) in getActions(policy)" :key="i"
+                                class="flex items-center gap-1 h-5 px-1.5 rounded bg-amber-500/8 border border-amber-500/15">
+                                <span
+                                    class="text-[9px] font-semibold text-amber-700 dark:text-amber-400 leading-none font-mono">{{
+                                    action }}</span>
+                            </div>
+                            <span v-if="getActions(policy).length === 0"
+                                class="text-[10px] text-muted-foreground italic opacity-50">No actions</span>
+                        </div>
+
+                        <!-- Right: Actions + Chevron -->
+                        <div class="flex items-center gap-1 shrink-0">
+                            <div @click.stop>
+                                <Button variant="ghost" size="icon"
+                                    class="h-7 w-7 text-muted-foreground hover:text-indigo-500 hover:bg-indigo-500/10 transition-colors"
+                                    @click="viewPolicy(policy)" title="View Details">
+                                    <Eye class="w-3.5 h-3.5" />
+                                </Button>
+                            </div>
+                            <div @click.stop>
+                                <Button variant="ghost" size="icon"
+                                    class="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+                                    @click="deletePolicy(policy.name)" title="Delete Policy">
+                                    <Trash2 class="w-3.5 h-3.5" />
+                                </Button>
+                            </div>
+                            <ChevronDown
+                                class="w-3.5 h-3.5 text-muted-foreground/40 ml-1 transition-transform duration-200"
+                                :class="{ 'rotate-180': expandedPolicy === policy.name }" />
+                        </div>
+                    </div>
+
+                    <!-- Expandable Policy Document -->
+                    <div v-show="expandedPolicy === policy.name"
+                        class="border-t border-slate-100 dark:border-slate-800/80">
+                        <div class="px-5 py-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <span
+                                    class="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Policy
+                                    Document</span>
+                                <Button variant="ghost" size="xs"
+                                    class="h-5 text-[9px] px-2 text-muted-foreground hover:text-foreground"
+                                    @click="copyPolicyJson(policy)">
+                                    <Copy class="w-2.5 h-2.5 mr-1" /> Copy
+                                </Button>
+                            </div>
+                            <pre
+                                class="p-3.5 rounded-lg bg-slate-950 text-emerald-400 text-[10px] font-mono overflow-x-auto border border-slate-800 max-h-48 leading-relaxed">{{ formatPolicy(policy) }}</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div v-if="filteredPolicies.length === 0 && !loading"
+                    class="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                    <div class="h-16 w-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
+                        <Shield class="w-8 h-8 opacity-20" />
+                    </div>
+                    <span class="text-sm font-medium">{{
+                        searchQuery ?
+                            'No matching policies' :
+                            'No custom policiesdefined yet'
+                        }}</span>
+                    <span class="text-xs opacity-60 mt-1">{{
+                        searchQuery ? 'Try adjusting your search query'
+                            : 'Create your first policy template to get started'
+                        }}</span>
+                    <Button v-if="!searchQuery" size="sm" class="mt-4" @click="showPolicyModal = true">
+                        <Plus class="w-3.5 h-3.5 mr-2" /> Create First Policy
+                    </Button>
+                </div>
+            </div>
         </main>
 
         <!-- POLICY DIALOG -->
@@ -143,11 +160,13 @@
                                 <div class="space-y-4 max-h-[40vh] overflow-y-auto pr-1">
                                     <div v-for="(stmt, index) in builderStatements" :key="index"
                                         class="relative border rounded-lg p-4 bg-muted/20 border-slate-200 dark:border-slate-800 space-y-4">
-                                        
+
                                         <!-- Header for Statement -->
                                         <div class="flex items-center justify-between">
-                                            <span class="text-xs font-bold text-slate-700 dark:text-slate-300">Statement #{{ index + 1 }}</span>
-                                            <Button v-if="builderStatements.length > 1" size="xs" variant="ghost" class="h-6 text-destructive hover:bg-destructive/10"
+                                            <span class="text-xs font-bold text-slate-700 dark:text-slate-300">Statement
+                                                #{{ index + 1 }}</span>
+                                            <Button v-if="builderStatements.length > 1" size="xs" variant="ghost"
+                                                class="h-6 text-destructive hover:bg-destructive/10"
                                                 @click="removeStatement(index)">
                                                 <Trash2 class="w-3 h-3 mr-1" /> Remove
                                             </Button>
@@ -156,7 +175,8 @@
                                         <!-- Effect & Resource -->
                                         <div class="grid grid-cols-2 gap-4">
                                             <div class="space-y-2">
-                                                <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Effect</Label>
+                                                <Label
+                                                    class="text-[10px] font-bold uppercase tracking-wider opacity-70">Effect</Label>
                                                 <div class="flex gap-2">
                                                     <Button size="xs"
                                                         :variant="stmt.effect === 'Allow' ? 'default' : 'outline'"
@@ -169,7 +189,9 @@
                                                 </div>
                                             </div>
                                             <div class="space-y-2">
-                                                <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource ARN</Label>
+                                                <Label
+                                                    class="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource
+                                                    ARN</Label>
                                                 <Input v-model="stmt.resource" placeholder="arn:aws:s3:::*"
                                                     class="h-8 text-xs font-mono" />
                                             </div>
@@ -177,14 +199,16 @@
 
                                         <!-- Actions Selector -->
                                         <div class="space-y-2">
-                                            <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">S3 Actions</Label>
+                                            <Label class="text-[10px] font-bold uppercase tracking-wider opacity-70">S3
+                                                Actions</Label>
                                             <div class="grid grid-cols-2 gap-2">
                                                 <div v-for="action in availableActions" :key="action.id"
                                                     class="flex items-center space-x-2 p-1.5 rounded border bg-card hover:bg-accent/50 cursor-pointer transition-colors"
                                                     @click="toggleStatementAction(index, action.id)">
                                                     <input type="checkbox" :checked="stmt.actions.includes(action.id)"
                                                         class="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer" />
-                                                    <span class="text-[10px] font-medium leading-none">{{ action.label }}</span>
+                                                    <span class="text-[10px] font-medium leading-none">{{ action.label
+                                                        }}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -198,7 +222,8 @@
                                     </Button>
                                     <div class="flex items-center gap-2">
                                         <span class="text-[9px] text-muted-foreground">Auto-sync JSON</span>
-                                        <Switch :model-value="builderSync" @update:model-value="v => builderSync = v" class="scale-75" />
+                                        <Switch :model-value="builderSync" @update:model-value="v => builderSync = v"
+                                            class="scale-75" />
                                     </div>
                                 </div>
                             </TabsContent>
@@ -262,27 +287,26 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 
 useSeoMeta({
     title: 'IAM Policies | GravSpace',
     description: 'Manage reusable permission templates and secure your cloud storage resources with fine-grained access control.',
 })
-import { Plus, Trash2, Shield, ShieldCheck, FileText, MoreVertical, Eye } from 'lucide-vue-next'
+import { Plus, Trash2, Shield, ShieldCheck, FileText, Eye, Search, ChevronDown, Copy } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import {
-    DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
 import {
     Tabs, TabsContent, TabsList, TabsTrigger
 } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Switch } from '@/components/ui/switch'
+import {
+    Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle
+} from '@/components/ui/dialog'
 import { useAuth } from '@/composables/useAuth'
 
 const config = useRuntimeConfig()
@@ -290,10 +314,12 @@ const API_BASE = config.public.apiBase
 const { authFetch } = useAuth()
 
 const policies = ref([])
+const loading = ref(false)
 const showPolicyModal = ref(false)
 const policyName = ref('')
 const expandedPolicy = ref(null)
 const selectedPolicy = ref(null)
+const searchQuery = ref('')
 
 const builderStatements = ref([
     {
@@ -316,6 +342,38 @@ const availableActions = [
 ]
 
 const newPolicyJson = ref('')
+
+const filteredPolicies = computed(() => {
+    if (!searchQuery.value.trim()) return policies.value || []
+    const q = searchQuery.value.toLowerCase()
+    return (policies.value || []).filter(p => p.name.toLowerCase().includes(q))
+})
+
+function getStatementCount(policy) {
+    try {
+        const parsed = typeof policy === 'string' ? JSON.parse(policy) : policy
+        if (parsed.statement && Array.isArray(parsed.statement)) {
+            return parsed.statement.length
+        }
+    } catch (e) { }
+    return 0
+}
+
+function getEffect(policy) {
+    try {
+        const parsed = typeof policy === 'string' ? JSON.parse(policy) : policy
+        if (parsed.statement && Array.isArray(parsed.statement)) {
+            const effects = new Set(parsed.statement.map(s => s.effect))
+            return Array.from(effects).join(' + ')
+        }
+    } catch (e) { }
+    return 'Unknown'
+}
+
+function copyPolicyJson(policy) {
+    navigator.clipboard.writeText(formatPolicy(policy))
+    toast.success('Policy JSON copied to clipboard.')
+}
 
 function addStatement() {
     builderStatements.value.push({
@@ -369,6 +427,7 @@ watch(builderSync, (newVal) => {
 })
 
 async function fetchPolicies() {
+    loading.value = true
     try {
         const res = await authFetch(`${API_BASE}/admin/policies`)
         if (res.ok) {
@@ -377,6 +436,8 @@ async function fetchPolicies() {
     } catch (e) {
         console.error('Failed to fetch policies', e)
         toast.error('Failed to synchronize policy templates.')
+    } finally {
+        loading.value = false
     }
 }
 

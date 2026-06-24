@@ -30,18 +30,38 @@ services:
       # Worker Intervals (Optional)
       - SYNC_WORKER_INTERVAL=${SYNC_WORKER_INTERVAL:-5m}
       - LIFECYCLE_WORKER_INTERVAL=${LIFECYCLE_WORKER_INTERVAL:-1h}
+      # Redis Configuration
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
     volumes:
       - storage_data:/app/data
       - storage_db:/app/db
       - storage_logs:/app/logs
     networks:
       - gravspace-network
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "healthcheck"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 15s
+
+  # Redis Service
+  redis:
+    image: redis:alpine
+    container_name: gravspace-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - gravspace-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 
   # Frontend Service
   frontend:

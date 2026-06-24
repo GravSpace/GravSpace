@@ -10,9 +10,10 @@ import (
 	"path/filepath"
 
 	"github.com/GravSpace/GravSpace/internal/metrics"
-	_ "github.com/tursodatabase/turso-go" // Turso driver (works for remote)
+	_ "github.com/tursodatabase/libsql-client-go/libsql" // Remote Turso/libSQL driver
 	"golang.org/x/crypto/bcrypt"
-	_ "modernc.org/sqlite" // SQLite driver (for local)
+	_ "modernc.org/sqlite"          // SQLite driver (for local)
+	_ "turso.tech/database/tursogo" // Local Turso driver
 )
 
 type Database struct {
@@ -88,7 +89,6 @@ type PolicyRecord struct {
 	CreatedAt time.Time
 }
 
-
 type WebhookRecord struct {
 	ID        int64
 	Bucket    string
@@ -110,7 +110,6 @@ type WebhookDLQRecord struct {
 	FailedAt     time.Time `json:"failed_at"`
 }
 
-
 type AuditLogRecord struct {
 	ID        int64
 	Timestamp time.Time
@@ -128,6 +127,28 @@ type StorageSnapshotRecord struct {
 	Timestamp time.Time
 	Bucket    string
 	Size      int64
+}
+
+type PresignedURLRow struct {
+	ID         int64     `json:"id"`
+	Bucket     string    `json:"bucket"`
+	Key        string    `json:"key"`
+	URL        string    `json:"url"`
+	Signature  string    `json:"signature"`
+	ExpiresAt  time.Time `json:"expires_at"`
+	AllowedIP  *string   `json:"allowed_ip"`
+	OneTimeUse bool      `json:"one_time_use"`
+	IsRevoked  bool      `json:"is_revoked"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type ReplicationRow struct {
+	ID                int64     `json:"id"`
+	SourceBucket      string    `json:"source_bucket"`
+	DestinationBucket string    `json:"destination_bucket"`
+	Prefix            *string   `json:"prefix"`
+	Enabled           bool      `json:"enabled"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // NewDatabase creates a new database connection
@@ -151,6 +172,9 @@ func NewDatabase(dbPath string) (*Database, error) {
 	if dbURL == "" {
 		dbURL = os.Getenv("TURSO_DATABASE_URL")
 	}
+	if dbURL == "" {
+		dbURL = "http://127.0.0.1:8085"
+	}
 
 	dbToken := os.Getenv("DATABASE_AUTH_TOKEN")
 	if dbToken == "" {
@@ -161,13 +185,13 @@ func NewDatabase(dbPath string) (*Database, error) {
 	var err error
 
 	if dbURL != "" {
-		// If it's a remote URL (starts with libsql:// or https://)
-		if strings.HasPrefix(dbURL, "libsql://") || strings.HasPrefix(dbURL, "https://") {
+		// If it's a remote URL (starts with libsql://, https://, or http://)
+		if strings.HasPrefix(dbURL, "libsql://") || strings.HasPrefix(dbURL, "https://") || strings.HasPrefix(dbURL, "http://") {
 			connStr := dbURL
 			if dbToken != "" && !strings.Contains(dbURL, "authToken=") {
 				connStr = fmt.Sprintf("%s?authToken=%s", dbURL, dbToken)
 			}
-			db, err = sql.Open("turso", connStr)
+			db, err = sql.Open("libsql", connStr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to connect to remote database: %w", err)
 			}
@@ -175,7 +199,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 		} else if strings.HasPrefix(dbURL, "file:") {
 			// Local SQLite via DATABASE_URL
 			dbPath = strings.TrimPrefix(dbURL, "file:")
-			db, err = sql.Open("sqlite", dbPath)
+			db, err = sql.Open("turso", dbPath)
 			if err != nil {
 				return nil, fmt.Errorf("failed to open local database from URL: %w", err)
 			}
@@ -183,7 +207,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 		} else {
 			// Fallback to legacy Turso handling if it's just a hostname/URL without protocol
 			connStr := fmt.Sprintf("%s?authToken=%s", dbURL, dbToken)
-			db, err = sql.Open("turso", connStr)
+			db, err = sql.Open("libsql", connStr)
 			if err != nil {
 				return nil, fmt.Errorf("failed to connect to remote database: %w", err)
 			}
@@ -203,7 +227,7 @@ func NewDatabase(dbPath string) (*Database, error) {
 			}
 		}
 
-		db, err = sql.Open("sqlite", dbPath)
+		db, err = sql.Open("turso", dbPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open local database: %w", err)
 		}
@@ -244,7 +268,6 @@ func NewDatabase(dbPath string) (*Database, error) {
 func (d *Database) GetDB() *sql.DB {
 	return d.db
 }
-
 
 func (d *Database) initSchema() error {
 	schema := `
@@ -416,6 +439,37 @@ func (d *Database) initSchema() error {
 	CREATE TABLE IF NOT EXISTS used_signatures (
 		signature TEXT PRIMARY KEY,
 		expires_at TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS presigned_urls (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		bucket TEXT NOT NULL,
+		key TEXT NOT NULL,
+		url TEXT NOT NULL,
+		signature TEXT UNIQUE NOT NULL,
+		expires_at TIMESTAMP NOT NULL,
+		allowed_ip TEXT,
+		one_time_use BOOLEAN DEFAULT FALSE,
+		is_revoked BOOLEAN DEFAULT FALSE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (bucket) REFERENCES buckets(name) ON DELETE CASCADE
+	);
+
+	CREATE TABLE IF NOT EXISTS revoked_signatures (
+		signature TEXT PRIMARY KEY,
+		revoked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS bucket_replications (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		source_bucket TEXT NOT NULL,
+		destination_bucket TEXT NOT NULL,
+		prefix TEXT,
+		enabled BOOLEAN DEFAULT TRUE,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (source_bucket) REFERENCES buckets(name) ON DELETE CASCADE,
+		FOREIGN KEY (destination_bucket) REFERENCES buckets(name) ON DELETE CASCADE,
+		UNIQUE(source_bucket, destination_bucket, prefix)
 	);
 	`
 
@@ -1641,4 +1695,119 @@ func (d *Database) GetContentTypeBreakdown() ([]*ContentTypeBreakdown, error) {
 		}
 	}
 	return breakdowns, nil
+}
+
+// Presigned URL Operations
+func (d *Database) CreatePresignedURL(row *PresignedURLRow) error {
+	start := time.Now()
+	_, err := d.db.Exec(`
+		INSERT INTO presigned_urls (bucket, key, url, signature, expires_at, allowed_ip, one_time_use)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, row.Bucket, row.Key, row.URL, row.Signature, row.ExpiresAt, row.AllowedIP, row.OneTimeUse)
+	metrics.RecordDBQuery("CreatePresignedURL", time.Since(start))
+	return err
+}
+
+func (d *Database) ListPresignedURLs() ([]*PresignedURLRow, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`
+		SELECT id, bucket, key, url, signature, expires_at, allowed_ip, one_time_use, is_revoked, created_at
+		FROM presigned_urls
+		ORDER BY created_at DESC
+	`)
+	metrics.RecordDBQuery("ListPresignedURLs", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []*PresignedURLRow
+	for rows.Next() {
+		var row PresignedURLRow
+		err := rows.Scan(
+			&row.ID, &row.Bucket, &row.Key, &row.URL, &row.Signature,
+			&row.ExpiresAt, &row.AllowedIP, &row.OneTimeUse, &row.IsRevoked, &row.CreatedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, &row)
+	}
+	return results, rows.Err()
+}
+
+func (d *Database) RevokeSignature(signature string) error {
+	start := time.Now()
+	// Insert into revoked_signatures
+	_, err1 := d.db.Exec(`
+		INSERT OR IGNORE INTO revoked_signatures (signature) VALUES (?)
+	`, signature)
+	if err1 != nil {
+		return err1
+	}
+
+	// Update presigned_urls table
+	_, err2 := d.db.Exec(`
+		UPDATE presigned_urls SET is_revoked = TRUE WHERE signature = ?
+	`, signature)
+	metrics.RecordDBQuery("RevokeSignature", time.Since(start))
+	return err2
+}
+
+func (d *Database) IsSignatureRevoked(signature string) (bool, error) {
+	start := time.Now()
+	var count int
+	err := d.db.QueryRow(`
+		SELECT COUNT(*) FROM revoked_signatures WHERE signature = ?
+	`, signature).Scan(&count)
+	metrics.RecordDBQuery("IsSignatureRevoked", time.Since(start))
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// Bucket Replication Operations
+func (d *Database) CreateReplicationRule(row *ReplicationRow) error {
+	start := time.Now()
+	_, err := d.db.Exec(`
+		INSERT INTO bucket_replications (source_bucket, destination_bucket, prefix, enabled)
+		VALUES (?, ?, ?, ?)
+	`, row.SourceBucket, row.DestinationBucket, row.Prefix, row.Enabled)
+	metrics.RecordDBQuery("CreateReplicationRule", time.Since(start))
+	return err
+}
+
+func (d *Database) GetReplicationRules(bucket string) ([]ReplicationRow, error) {
+	start := time.Now()
+	rows, err := d.db.Query(`
+		SELECT id, source_bucket, destination_bucket, prefix, enabled, created_at
+		FROM bucket_replications
+		WHERE source_bucket = ?
+	`, bucket)
+	metrics.RecordDBQuery("GetReplicationRules", time.Since(start))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []ReplicationRow
+	for rows.Next() {
+		var r ReplicationRow
+		err := rows.Scan(&r.ID, &r.SourceBucket, &r.DestinationBucket, &r.Prefix, &r.Enabled, &r.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (d *Database) DeleteReplicationRule(id int64) error {
+	start := time.Now()
+	_, err := d.db.Exec(`
+		DELETE FROM bucket_replications WHERE id = ?
+	`, id)
+	metrics.RecordDBQuery("DeleteReplicationRule", time.Since(start))
+	return err
 }

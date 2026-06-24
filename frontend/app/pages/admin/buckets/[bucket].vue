@@ -96,7 +96,10 @@
                     <Table>
                         <TableHeader class="bg-muted/30 sticky top-0 z-10">
                             <TableRow>
-                                <TableHead class="w-[45%] bg-muted/30 backdrop-blur-md">Name</TableHead>
+                                <TableHead class="w-12 bg-muted/30 backdrop-blur-md">
+                                    <Checkbox :checked="isAllSelected" @update:checked="toggleSelectAll" />
+                                </TableHead>
+                                <TableHead class="w-[40%] bg-muted/30 backdrop-blur-md">Name</TableHead>
                                 <TableHead class="w-[15%] bg-muted/30 backdrop-blur-md">Size</TableHead>
                                 <TableHead class="w-[15%] bg-muted/30 backdrop-blur-md">Type</TableHead>
                                 <TableHead class="text-right w-[25%] px-6 bg-muted/30 backdrop-blur-md">Actions
@@ -106,7 +109,7 @@
                         <TableBody>
                             <TableRow v-if="currentPrefix" @click="navigateUp"
                                 class="cursor-pointer hover:bg-muted/50 transition-colors group italic text-muted-foreground/80">
-                                <TableCell colspan="4" class="py-2 px-4 flex items-center gap-2">
+                                <TableCell colspan="5" class="py-2 px-4 flex items-center gap-2">
                                     <CornerLeftUp class="w-3.5 h-3.5" />
                                     <span class="text-xs font-medium">Go back</span>
                                 </TableCell>
@@ -119,7 +122,12 @@
                                 <!-- FOLDER ITEM -->
                                 <TableRow v-if="typeof item === 'string'"
                                     class="hover:bg-muted/50 transition-colors group cursor-pointer"
+                                    :class="{ 'bg-indigo-50/20 dark:bg-indigo-950/20': selectedItems.has(item) }"
                                     @mouseenter="prefetchFolder(item)">
+                                    <TableCell class="w-12 py-3" @click.stop>
+                                        <Checkbox :checked="selectedItems.has(item)"
+                                            @update:checked="toggleSelect(item)" />
+                                    </TableCell>
                                     <TableCell class="font-medium py-3" @click="navigateTo(item)">
                                         <div class="flex items-center gap-3 cursor-pointer">
                                             <div
@@ -156,7 +164,12 @@
                                 </TableRow>
 
                                 <!-- OBJECT ITEM -->
-                                <TableRow v-else class="group hover:bg-muted/40 transition-colors">
+                                <TableRow v-else class="group hover:bg-muted/40 transition-colors"
+                                    :class="{ 'bg-indigo-50/20 dark:bg-indigo-950/20': selectedItems.has(item.Key) }">
+                                    <TableCell class="w-12 py-3" @click.stop>
+                                        <Checkbox :checked="selectedItems.has(item.Key)"
+                                            @update:checked="toggleSelect(item.Key)" />
+                                    </TableCell>
                                     <TableCell class="font-medium py-3">
                                         <div class="flex items-center gap-3">
                                             <div
@@ -316,69 +329,341 @@
         </Dialog>
 
         <Dialog :open="!!previewObject" @update:open="previewObject = null">
-            <DialogContent
-                class="max-w-4xl p-0 overflow-hidden bg-white/98 dark:bg-slate-950/98 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl">
+            <DialogContent :showCloseButton="false"
+                class="sm:max-w-5xl p-0 overflow-hidden bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-slate-900 rounded-2xl shadow-2xl">
+
+                <!-- CUSTOM HEADER -->
                 <DialogHeader
-                    class="px-6 py-4 border-b border-slate-200/50 dark:border-slate-800/50 flex flex-row items-center justify-between">
-                    <div>
-                        <DialogTitle
-                            class="text-sm font-bold font-mono text-slate-800 dark:text-slate-200 truncate max-w-lg">{{
-                                previewObject?.Key.split('/').pop() }}</DialogTitle>
-                        <DialogDescription class="text-[10px] text-muted-foreground font-mono">{{ previewObject?.Key }}
-                        </DialogDescription>
+                    class="px-6 py-4 border-b border-slate-100 dark:border-slate-900 flex flex-row items-center justify-between bg-white dark:bg-slate-950">
+                    <div class="flex items-center gap-3.5 min-w-0">
+                        <div class="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
+                            <component :is="getFileIcon(previewObject?.Key || '')" class="w-5 h-5" />
+                        </div>
+                        <div class="min-w-0">
+                            <div class="flex items-center gap-2">
+                                <DialogTitle
+                                    class="text-sm font-bold text-slate-800 dark:text-slate-100 truncate max-w-sm sm:max-w-md md:max-w-lg font-sans tracking-tight">
+
+                                    Preview
+                                </DialogTitle>
+                                <span
+                                    class="hidden sm:inline-flex px-2 py-0.5 text-[9px] font-bold rounded-md bg-slate-100 dark:bg-slate-900 text-slate-500 dark:text-slate-400 uppercase tracking-wide border border-slate-200/30 dark:border-slate-800/30">
+                                    {{ previewObject?.Key?.split('.').pop() || 'file' }}
+                                </span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="flex items-center gap-2">
-                        <Button size="xs" variant="outline" class="h-7 text-[10px] font-bold"
+
+                    <div class="flex items-center gap-2.5 shrink-0">
+                        <Button size="sm" variant="ghost"
+                            class="h-8 text-xs font-semibold rounded-lg transition-all duration-200 px-3 border border-transparent"
+                            :class="showPreviewMeta ? 'bg-indigo-50/80 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400 border-indigo-200/50 dark:border-indigo-900/50 shadow-sm' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-900'"
+                            @click="showPreviewMeta = !showPreviewMeta">
+                            <Info class="w-3.5 h-3.5 mr-1.5" /> Info
+                        </Button>
+                        <Button size="sm" variant="outline"
+                            class="h-8 text-xs font-semibold border-slate-250 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900 rounded-lg shadow-xs"
                             @click="downloadObject(previewObject?.Key, previewObject?.VersionID)">
-                            <Download class="w-3 h-3 mr-1.5" /> Download
+                            <Download class="w-3.5 h-3.5 mr-1.5" /> Download
+                        </Button>
+
+                        <div class="w-[1px] h-4 bg-slate-200 dark:bg-slate-800 mx-0.5"></div>
+
+                        <Button size="icon" variant="ghost"
+                            class="h-8 w-8 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-900"
+                            @click="previewObject = null">
+                            <X class="w-4 h-4" />
                         </Button>
                     </div>
                 </DialogHeader>
-                <div class="relative h-[65vh] bg-slate-900/5 dark:bg-slate-950/50 flex items-center justify-center p-4">
-                    <div v-if="!previewType" class="flex flex-col items-center gap-4 animate-pulse">
-                        <Loader2 class="w-10 h-10 animate-spin text-primary" />
-                        <span class="text-xs font-bold tracking-widest text-slate-600 uppercase">Securing data
-                            stream...</span>
+
+                <!-- CONTENT CONTAINER -->
+                <div class="flex h-[62vh] overflow-hidden bg-slate-50/30 dark:bg-slate-950">
+                    <!-- MAIN PREVIEW PANEL -->
+                    <div
+                        class="flex-1 bg-slate-900/5 dark:bg-slate-950/20 flex items-center justify-center p-6 relative overflow-hidden">
+                        <div v-if="!previewType" class="flex flex-col items-center gap-4 animate-pulse">
+                            <Loader2 class="w-8 h-8 animate-spin text-indigo-500" />
+                            <span class="text-[10px] font-bold tracking-widest text-slate-500 uppercase">Loading
+                                preview...</span>
+                        </div>
+
+                        <!-- Images (with Checkerboard background pattern) -->
+                        <div v-else-if="previewType === 'image'"
+                            class="relative max-w-full max-h-full flex items-center justify-center p-3 rounded-xl border border-slate-200/50 bg-[linear-gradient(45deg,#efefef_25%,transparent_25%),linear-gradient(-45deg,#efefef_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#efefef_75%),linear-gradient(-45deg,transparent_75%,#efefef_75%)] bg-[size:16px_16px] bg-[position:0_0,0_8px,8px_-8px,-8px_0] dark:bg-[linear-gradient(45deg,#1e293b_25%,transparent_25%),linear-gradient(-45deg,#1e293b_25%,transparent_25%),linear-gradient(45deg,transparent_75%,#1e293b_75%),linear-gradient(-45deg,transparent_75%,#1e293b_75%)] shadow-inner">
+                            <img :src="previewUrl"
+                                class="max-w-full max-h-[48vh] object-contain rounded-lg shadow-lg border border-white/80 dark:border-slate-900 transition-all duration-300 hover:scale-[1.01]" />
+                        </div>
+
+                        <!-- Audio Custom Player (Aesthetic Glass Widget) -->
+                        <div v-else-if="previewType === 'audio'"
+                            class="w-full max-w-sm p-6 bg-white/70 dark:bg-slate-900/40 backdrop-blur-md rounded-2xl border border-slate-200/60 dark:border-slate-800/60 flex flex-col items-center gap-6 shadow-xl relative overflow-hidden">
+                            <div class="absolute -top-12 -left-12 w-28 h-28 bg-indigo-500/10 rounded-full blur-2xl">
+                            </div>
+                            <div class="absolute -bottom-12 -right-12 w-28 h-28 bg-violet-500/10 rounded-full blur-2xl">
+                            </div>
+
+                            <div
+                                class="relative flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-500/10 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 shadow-sm">
+                                <Music class="w-7 h-7" :class="{ 'animate-pulse text-indigo-550': mediaPlaying }" />
+                            </div>
+
+                            <div class="text-center w-full min-w-0 px-2">
+                                <h4
+                                    class="text-xs font-bold text-slate-800 dark:text-slate-100 truncate max-w-[220px] mx-auto">
+                                    {{ previewObject?.Key?.split('/').pop() || '' }}</h4>
+                                <p
+                                    class="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 mt-1 font-mono uppercase tracking-wider">
+                                    {{ formatSize(previewObject?.Size) }}</p>
+                            </div>
+
+                            <!-- Hidden native audio element -->
+                            <audio ref="audioElement" :src="previewUrl" class="hidden" @timeupdate="onAudioTimeUpdate"
+                                @loadedmetadata="onAudioMetadata" @ended="mediaPlaying = false"></audio>
+
+                            <div class="w-full space-y-4 relative z-10">
+                                <!-- Seek Bar -->
+                                <div class="space-y-1.5">
+                                    <div
+                                        class="flex justify-between text-[9px] font-mono font-bold text-slate-400 dark:text-slate-500">
+                                        <span>{{ formatTime(mediaCurrentTime) }}</span>
+                                        <span>{{ formatTime(mediaDuration) }}</span>
+                                    </div>
+                                    <input type="range" min="0" :max="mediaDuration || 100" :value="mediaCurrentTime"
+                                        @input="seekAudio"
+                                        class="w-full h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-600 dark:accent-indigo-500 focus:outline-none" />
+                                </div>
+
+                                <!-- Controls Grid -->
+                                <div class="flex items-center justify-between gap-4 pt-1">
+                                    <select v-model="mediaPlaybackRate" @change="changePlaybackRate"
+                                        class="text-[9px] bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-md p-1.5 outline-none font-bold text-slate-600 dark:text-slate-350 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-900 transition-colors">
+                                        <option :value="0.5">0.5x</option>
+                                        <option :value="1">1.0x</option>
+                                        <option :value="1.5">1.5x</option>
+                                        <option :value="2">2.0x</option>
+                                    </select>
+
+                                    <Button size="icon"
+                                        class="h-10 w-10 rounded-full bg-indigo-600 text-white hover:bg-indigo-700 shadow-md hover:scale-105 active:scale-95 transition-all flex items-center justify-center border border-indigo-500/10"
+                                        @click="toggleAudio">
+                                        <Play v-if="!mediaPlaying" class="w-4 h-4 fill-current ml-0.5 text-white" />
+                                        <Pause v-else class="w-4 h-4 fill-current text-white" />
+                                    </Button>
+
+                                    <div class="flex items-center gap-1.5">
+                                        <Button size="icon" variant="ghost"
+                                            class="h-7 w-7 rounded-lg text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                            @click="toggleMute">
+                                            <Volume2 class="w-4 h-4" />
+                                        </Button>
+                                        <input type="range" min="0" max="1" step="0.1" v-model="mediaVolume"
+                                            @input="changeVolume"
+                                            class="w-14 h-1 bg-slate-200 dark:bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-600 dark:accent-indigo-500 focus:outline-none" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Video -->
+                        <div v-else-if="previewType === 'video'"
+                            class="relative max-w-full max-h-full flex items-center justify-center p-1 bg-slate-950 rounded-xl border border-slate-850 shadow-2xl">
+                            <video controls :src="previewUrl"
+                                class="max-w-full max-h-[50vh] rounded-lg shadow-inner"></video>
+                        </div>
+
+                        <!-- PDF -->
+                        <iframe v-else-if="previewType === 'pdf'" :src="previewUrl"
+                            class="w-full h-full border-0 rounded-xl shadow-inner bg-slate-100 dark:bg-slate-900"></iframe>
+
+                        <!-- Text / Code with Line Numbers -->
+                        <div v-else-if="previewType === 'text'"
+                            class="w-full h-full flex flex-col bg-slate-950 border border-slate-850 rounded-xl overflow-hidden shadow-2xl">
+                            <div
+                                class="flex items-center justify-between px-4 py-2 border-b border-slate-900 bg-slate-900/50">
+                                <span
+                                    class="text-[9px] font-bold uppercase tracking-wider text-slate-400 font-sans">Text
+                                    Inspector</span>
+                                <Button size="xs" variant="ghost"
+                                    class="h-6 text-[10px] text-slate-400 hover:text-white rounded px-2 hover:bg-slate-800"
+                                    @click="copyToClipboard(previewTextContent, 'Content copied to clipboard')">
+                                    <Copy class="w-3 h-3 mr-1.5" /> Copy Code
+                                </Button>
+                            </div>
+                            <div class="flex-1 overflow-auto flex font-mono text-xs select-text scrollbar-thin">
+                                <div
+                                    class="text-right pr-3 pl-2 py-4 border-r border-slate-900 text-slate-600 bg-slate-950 select-none min-w-[3rem]">
+                                    <div v-for="n in previewTextContent.split('\n').length" :key="n">{{ n }}</div>
+                                </div>
+                                <pre class="flex-1 p-4 overflow-x-auto text-slate-350 bg-slate-950/40">{{ previewTextContent }}
+                        </pre>
+                            </div>
+                        </div>
+
+                        <!-- Markdown -->
+                        <div v-else-if="previewType === 'markdown'"
+                            class="w-full h-full flex flex-col bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-900 rounded-xl overflow-hidden shadow-md">
+                            <div
+                                class="flex items-center justify-between px-4 py-2 border-b bg-slate-50 dark:bg-slate-900/30">
+                                <span
+                                    class="text-[9px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Markdown
+                                    Document</span>
+                                <Button size="xs" variant="ghost"
+                                    class="h-6 text-[10px] text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white rounded px-2"
+                                    @click="copyToClipboard(previewTextContent, 'Content copied to clipboard')">
+                                    <Copy class="w-3 h-3 mr-1.5" /> Copy Content
+                                </Button>
+                            </div>
+                            <div
+                                class="flex-1 p-6 overflow-auto select-text prose dark:prose-invert max-w-none text-sm scrollbar-thin">
+                                <pre
+                                    class="font-mono text-xs whitespace-pre-wrap leading-relaxed text-slate-700 dark:text-slate-300 bg-slate-50/50 dark:bg-slate-900/30 p-4 rounded-lg border border-slate-100 dark:border-slate-900/50">
+                            {{ previewTextContent }}</pre>
+                            </div>
+                        </div>
+
+                        <div v-else-if="previewType === 'error'"
+                            class="flex flex-col items-center gap-3 text-rose-500 max-w-sm text-center">
+                            <div class="p-3 rounded-full bg-rose-500/10 text-rose-500">
+                                <ShieldAlert class="w-8 h-8" />
+                            </div>
+                            <h5 class="text-xs font-bold mt-1">Failed to load preview</h5>
+                            <p class="text-[10px] text-muted-foreground leading-normal">There was an error retrieving
+                                the object
+                                data from the server.</p>
+                        </div>
+
+                        <div v-else
+                            class="flex flex-col items-center gap-3 text-slate-400 dark:text-slate-500 max-w-xs text-center">
+                            <div class="p-3.5 rounded-full bg-slate-100 dark:bg-slate-900/80 text-slate-400">
+                                <FileIcon class="w-8 h-8" />
+                            </div>
+                            <h5 class="text-xs font-bold mt-1 text-slate-700 dark:text-slate-300">Preview not available
+                            </h5>
+                            <p class="text-[10px] text-muted-foreground leading-normal">This file format is not
+                                supported for
+                                inline viewing. Please download the file to view its content.</p>
+                        </div>
                     </div>
 
-                    <!-- Images -->
-                    <img v-else-if="previewType === 'image'" :src="previewUrl"
-                        class="max-w-full max-h-full object-contain rounded-lg shadow-sm border border-slate-200/50 dark:border-slate-800/50" />
+                    <!-- METADATA INFO SIDEBAR -->
+                    <div v-if="showPreviewMeta"
+                        class="w-80 shrink-0 border-l border-slate-200/50 dark:border-slate-800/50 p-5 overflow-y-auto bg-slate-50/40 dark:bg-slate-950/40 flex flex-col gap-5 select-text scrollbar-thin">
+                        <h3
+                            class="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-500 mt-1">
+                            Object Properties</h3>
 
-                    <!-- Audio -->
-                    <div v-else-if="previewType === 'audio'"
-                        class="w-full max-w-md p-6 bg-card rounded-2xl border flex flex-col items-center gap-4">
-                        <Music class="w-12 h-12 text-primary" />
-                        <audio controls :src="previewUrl" class="w-full"></audio>
-                    </div>
+                        <div class="space-y-4">
+                            <!-- GENERAL INFO CARD -->
+                            <div
+                                class="rounded-xl border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-950/40 p-4 shadow-sm space-y-4">
+                                <h4
+                                    class="text-[9px] font-bold uppercase tracking-widest text-indigo-500 dark:text-indigo-400">
+                                    General Info</h4>
 
-                    <!-- Video -->
-                    <video v-else-if="previewType === 'video'" controls :src="previewUrl"
-                        class="max-w-full max-h-full rounded-lg shadow-md border"></video>
+                                <!-- OBJECT KEY -->
+                                <div class="space-y-1.5">
+                                    <div class="flex items-center gap-1.5 text-slate-400 dark:text-slate-500">
+                                        <Key class="w-3.5 h-3.5 shrink-0" />
+                                        <span class="text-[9px] font-bold uppercase tracking-wider">Object Key</span>
+                                    </div>
+                                    <div class="flex items-center gap-1.5 min-w-0">
+                                        <div
+                                            class="text-[11px] font-mono text-slate-700 dark:text-slate-300 bg-slate-100/50 dark:bg-slate-900/40 px-2 py-1.5 rounded-lg border border-slate-200/50 dark:border-slate-800/50 overflow-x-auto whitespace-nowrap scrollbar-none select-all flex-1 pb-1">
+                                            {{ previewObject?.Key }}
+                                        </div>
+                                        <Button size="icon" variant="ghost"
+                                            class="h-7 w-7 shrink-0 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800/60 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                                            @click="copyToClipboard(previewObject?.Key, 'Key copied to clipboard')">
+                                            <Copy class="w-3.5 h-3.5" />
+                                        </Button>
+                                    </div>
+                                </div>
 
-                    <!-- PDF -->
-                    <iframe v-else-if="previewType === 'pdf'" :src="previewUrl"
-                        class="w-full h-full border-0 rounded-lg"></iframe>
+                                <!-- SIZE & MIME TYPE GRID -->
+                                <div
+                                    class="grid grid-cols-2 gap-4 pt-3 border-t border-slate-100 dark:border-slate-900">
+                                    <div class="space-y-1">
+                                        <div class="flex items-center gap-1.5 text-slate-400 dark:text-slate-500">
+                                            <Database class="w-3.5 h-3.5 shrink-0" />
+                                            <span class="text-[9px] font-bold uppercase tracking-wider">Size</span>
+                                        </div>
+                                        <p class="text-xs font-semibold text-slate-850 dark:text-slate-200 mt-0.5">
+                                            {{ formatSize(previewObject?.Size) }}
+                                        </p>
+                                    </div>
+                                    <div class="space-y-1">
+                                        <div class="flex items-center gap-1.5 text-slate-400 dark:text-slate-500">
+                                            <FileText class="w-3.5 h-3.5 shrink-0" />
+                                            <span class="text-[9px] font-bold uppercase tracking-wider">Mime Type</span>
+                                        </div>
+                                        <p class="text-xs font-semibold text-slate-850 dark:text-slate-200 mt-0.5 truncate"
+                                            :title="previewObject?.ContentType">
+                                            {{ previewObject?.ContentType || 'binary/octet-stream' }}
+                                        </p>
+                                    </div>
+                                </div>
 
-                    <!-- Text / Code -->
-                    <pre v-else-if="previewType === 'text'"
-                        class="w-full h-full p-4 overflow-auto font-mono text-xs text-slate-800 dark:text-emerald-400 bg-slate-950 border border-slate-800 rounded-lg select-text">
-                {{ previewTextContent }}</pre>
+                                <!-- LAST MODIFIED -->
+                                <div class="space-y-1 pt-3 border-t border-slate-100 dark:border-slate-900">
+                                    <div class="flex items-center gap-1.5 text-slate-400 dark:text-slate-500">
+                                        <Clock class="w-3.5 h-3.5 shrink-0" />
+                                        <span class="text-[9px] font-bold uppercase tracking-wider">Last Modified</span>
+                                    </div>
+                                    <p class="text-xs font-semibold text-slate-850 dark:text-slate-200 mt-0.5">
+                                        {{ previewObject?.LastModified ? new
+                                            Date(previewObject.LastModified).toLocaleString() :
+                                            '-' }}
+                                    </p>
+                                </div>
+                            </div>
 
-                    <!-- Markdown -->
-                    <div v-else-if="previewType === 'markdown'"
-                        class="w-full h-full p-6 overflow-auto bg-card rounded-lg border prose dark:prose-invert max-w-none text-sm select-text">
-                        <pre class="font-mono text-xs whitespace-pre-wrap">{{ previewTextContent }}</pre>
-                    </div>
+                            <!-- TECHNICAL DETAILS CARD -->
+                            <div
+                                class="rounded-xl border border-slate-200/50 dark:border-slate-800/80 bg-white dark:bg-slate-950/40 p-4 shadow-sm space-y-4">
+                                <h4
+                                    class="text-[9px] font-bold uppercase tracking-widest text-indigo-500 dark:text-indigo-400">
+                                    Technical Details</h4>
 
-                    <div v-else-if="previewType === 'error'" class="flex flex-col items-center gap-2 text-rose-500">
-                        <ShieldAlert class="w-10 h-10" />
-                        <span class="text-xs font-bold">Failed to load preview for this file.</span>
-                    </div>
+                                <!-- ETAG -->
+                                <div class="space-y-1.5">
+                                    <div class="flex items-center gap-1.5 text-slate-400 dark:text-slate-500">
+                                        <Tag class="w-3.5 h-3.5 shrink-0" />
+                                        <span class="text-[9px] font-bold uppercase tracking-wider">ETag (MD5)</span>
+                                    </div>
+                                    <div class="flex items-center gap-1.5 min-w-0">
+                                        <div
+                                            class="text-[11px] font-mono text-slate-700 dark:text-slate-300 bg-slate-100/50 dark:bg-slate-900/40 px-2 py-1.5 rounded-lg border border-slate-200/50 dark:border-slate-800/50 overflow-x-auto whitespace-nowrap scrollbar-none select-all flex-1 pb-1">
+                                            {{ previewObject?.ETag || '-' }}
+                                        </div>
+                                        <Button v-if="previewObject?.ETag" size="icon" variant="ghost"
+                                            class="h-7 w-7 shrink-0 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800/60 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                                            @click="copyToClipboard(previewObject?.ETag, 'ETag copied to clipboard')">
+                                            <Copy class="w-3.5 h-3.5" />
+                                        </Button>
+                                    </div>
+                                </div>
 
-                    <div v-else class="flex flex-col items-center gap-2 text-slate-400">
-                        <FileIcon class="w-10 h-10" />
-                        <span class="text-xs font-semibold">Preview not supported for this file type.</span>
+                                <!-- VERSION ID -->
+                                <div class="space-y-1.5 pt-3 border-t border-slate-100 dark:border-slate-900">
+                                    <div class="flex items-center gap-1.5 text-slate-400 dark:text-slate-500">
+                                        <History class="w-3.5 h-3.5 shrink-0" />
+                                        <span class="text-[9px] font-bold uppercase tracking-wider">Version ID</span>
+                                    </div>
+                                    <div class="flex items-center gap-1.5 min-w-0">
+                                        <div
+                                            class="text-[11px] font-mono text-slate-700 dark:text-slate-300 bg-slate-100/50 dark:bg-slate-900/40 px-2 py-1.5 rounded-lg border border-slate-200/50 dark:border-slate-800/50 overflow-x-auto whitespace-nowrap scrollbar-none select-all flex-1 pb-1">
+                                            {{ previewObject?.VersionID || 'Latest' }}
+                                        </div>
+                                        <Button v-if="previewObject?.VersionID" size="icon" variant="ghost"
+                                            class="h-7 w-7 shrink-0 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-800/60 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                                            @click="copyToClipboard(previewObject?.VersionID, 'Version ID copied to clipboard')">
+                                            <Copy class="w-3.5 h-3.5" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </DialogContent>
@@ -641,12 +926,13 @@
                 </DialogHeader>
 
                 <Tabs v-model="activeSettingsTab" class="mt-4">
-                    <TabsList class="grid w-full grid-cols-5">
+                    <TabsList class="grid w-full grid-cols-6">
                         <TabsTrigger value="general">General</TabsTrigger>
                         <TabsTrigger value="notifications">Webhooks</TabsTrigger>
                         <TabsTrigger value="security">Security</TabsTrigger>
                         <TabsTrigger value="website">Website</TabsTrigger>
                         <TabsTrigger value="cors">CORS</TabsTrigger>
+                        <TabsTrigger value="replication">Replication</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="general" class="space-y-6 py-4">
@@ -1040,6 +1326,88 @@
                             </div>
                         </div>
                     </TabsContent>
+
+                    <TabsContent value="replication" class="space-y-4 py-4">
+                        <div class="space-y-4">
+                            <div class="p-4 border rounded-lg bg-slate-50 dark:bg-slate-900/50 space-y-4">
+                                <h3
+                                    class="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">
+                                    Create
+                                    Replication Rule</h3>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div class="space-y-2">
+                                        <Label class="text-xs font-semibold">Destination Bucket</Label>
+                                        <select v-model="newReplicationRule.destinationBucket"
+                                            class="w-full text-xs h-9 bg-background border border-input rounded-md px-3 outline-none focus:ring-1 focus:ring-ring">
+                                            <option value="" disabled>Select target bucket...</option>
+                                            <option v-for="b in bucketsList" :key="b" :value="b"
+                                                :disabled="b === bucketName">{{
+                                                    b }}</option>
+                                        </select>
+                                    </div>
+                                    <div class="space-y-2">
+                                        <Label class="text-xs font-semibold">Prefix Filter (Optional)</Label>
+                                        <Input v-model="newReplicationRule.prefix" placeholder="e.g. logs/"
+                                            class="text-xs h-9" />
+                                    </div>
+                                </div>
+                                <div class="flex justify-end">
+                                    <Button @click="createReplicationRule"
+                                        :disabled="!newReplicationRule.destinationBucket"
+                                        class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-9">
+                                        Add Rule
+                                    </Button>
+                                </div>
+                            </div>
+
+                            <!-- Rules Table / State -->
+                            <div class="space-y-2">
+                                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Active Rules</h3>
+                                <div v-if="replicationRules.length === 0"
+                                    class="flex flex-col items-center justify-center p-8 border border-dashed rounded-lg text-muted-foreground gap-2">
+                                    <Database class="w-8 h-8 text-slate-300" />
+                                    <span class="text-xs font-semibold">No active replication rules</span>
+                                    <span class="text-[10px] text-muted-foreground/80">Configure cross-bucket
+                                        replication for
+                                        data redundancy.</span>
+                                </div>
+                                <div v-else class="border rounded-lg overflow-hidden bg-card">
+                                    <Table>
+                                        <TableHeader class="bg-muted/30">
+                                            <TableRow>
+                                                <TableHead class="text-xs">Destination</TableHead>
+                                                <TableHead class="text-xs">Prefix</TableHead>
+                                                <TableHead class="text-xs">Status</TableHead>
+                                                <TableHead class="text-right text-xs">Action</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            <TableRow v-for="rule in replicationRules" :key="rule.id">
+                                                <TableCell class="font-medium text-xs font-mono">{{
+                                                    rule.destination_bucket }}
+                                                </TableCell>
+                                                <TableCell class="text-xs font-mono">{{ rule.prefix || '*' }}
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge
+                                                        class="text-[9px] uppercase font-bold bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/10 border-0">
+                                                        Active
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell class="text-right">
+                                                    <Button size="icon" variant="ghost"
+                                                        class="h-7 w-7 text-rose-500 hover:text-rose-700 hover:bg-rose-500/10"
+                                                        @click="deleteReplicationRule(rule.id)">
+                                                        <Trash2 class="w-3.5 h-3.5" />
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        </TableBody>
+                                    </Table>
+                                </div>
+                            </div>
+                        </div>
+                    </TabsContent>
                 </Tabs>
             </DialogContent>
         </Dialog>
@@ -1098,11 +1466,114 @@
                 </div>
             </DialogContent>
         </Dialog>
+
+        <!-- BULK COPY DIALOG -->
+        <Dialog :open="showBulkCopyModal" @update:open="showBulkCopyModal = false">
+            <DialogContent class="sm:max-w-md">
+                <DialogHeader>
+                    <DialogTitle>Bulk Copy Objects</DialogTitle>
+                    <DialogDescription>Copy {{ selectedItemsCount }} selected items to another bucket.
+                    </DialogDescription>
+                </DialogHeader>
+                <div class="space-y-4 py-4">
+                    <div class="space-y-2">
+                        <Label class="text-xs font-semibold">Destination Bucket</Label>
+                        <select v-model="bulkCopyDestBucket"
+                            class="w-full text-xs h-9 bg-background border border-input rounded-md px-3 outline-none focus:ring-1 focus:ring-ring">
+                            <option value="" disabled>Select target bucket...</option>
+                            <option v-for="b in bucketsList" :key="b" :value="b" :disabled="b === bucketName">{{ b }}
+                            </option>
+                        </select>
+                    </div>
+                    <div class="space-y-2">
+                        <Label class="text-xs font-semibold">Destination Prefix (Optional)</Label>
+                        <Input v-model="bulkCopyDestPrefix" placeholder="e.g. archive/" class="text-xs h-9" />
+                    </div>
+                    <div class="flex justify-end gap-3 mt-4">
+                        <Button variant="outline" @click="showBulkCopyModal = false">Cancel</Button>
+                        <Button @click="executeBulkCopy" :disabled="!bulkCopyDestBucket"
+                            class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Copy Items</Button>
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
+
+        <!-- BULK TAG DIALOG -->
+        <Dialog :open="showBulkTagModal" @update:open="showBulkTagModal = false">
+            <DialogContent class="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>Bulk Tag Objects</DialogTitle>
+                    <DialogDescription>Apply metadata tags to {{ selectedItemsCount }} selected items.
+                    </DialogDescription>
+                </DialogHeader>
+                <div class="space-y-4 py-4">
+                    <div class="space-y-2">
+                        <div class="flex justify-between items-center">
+                            <Label class="text-xs font-semibold">Tags</Label>
+                            <Button size="xs" variant="outline" @click="addBulkTagRow">
+                                <Plus class="w-3 h-3 mr-1" /> Add Tag
+                            </Button>
+                        </div>
+                        <div class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                            <div v-for="(tag, idx) in bulkTags" :key="idx" class="flex gap-2 items-center">
+                                <Input v-model="tag.key" placeholder="Key" class="text-xs h-9 flex-1" />
+                                <Input v-model="tag.value" placeholder="Value" class="text-xs h-9 flex-1" />
+                                <Button size="icon" variant="ghost"
+                                    class="h-8 w-8 text-rose-500 hover:bg-rose-500/10 shrink-0"
+                                    @click="removeBulkTagRow(idx)">
+                                    <Trash2 class="w-3.5 h-3.5" />
+                                </Button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex justify-end gap-3 mt-4">
+                        <Button variant="outline" @click="showBulkTagModal = false">Cancel</Button>
+                        <Button @click="executeBulkTag" :disabled="bulkTags.some(t => !t.key)"
+                            class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">Apply Tags</Button>
+                    </div>
+                </div>
+            </DialogContent>
+        </Dialog>
+
+        <!-- FLOATING BOTTOM TOOLBAR -->
+        <Transition enter-active-class="transition duration-300 ease-out"
+            enter-from-class="transform translate-y-10 opacity-0" enter-to-class="transform translate-y-0 opacity-100"
+            leave-active-class="transition duration-200 ease-in" leave-from-class="transform translate-y-0 opacity-100"
+            leave-to-class="transform translate-y-10 opacity-0">
+            <div v-if="selectedItemsCount > 0"
+                class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 bg-slate-900/90 text-white px-6 py-3 rounded-full shadow-2xl border border-slate-800 backdrop-blur-md">
+                <span class="text-xs font-mono font-bold">{{ selectedItemsCount }} items selected</span>
+                <div class="w-[1px] h-4 bg-slate-800"></div>
+                <div class="flex items-center gap-2">
+                    <Button size="xs" variant="ghost"
+                        class="text-white hover:bg-slate-800 hover:text-white text-[10px] font-bold"
+                        @click="showBulkCopyModal = true">
+                        <Copy class="w-3 h-3 mr-1.5" /> Copy
+                    </Button>
+                    <Button size="xs" variant="ghost"
+                        class="text-white hover:bg-slate-800 hover:text-white text-[10px] font-bold"
+                        @click="showBulkTagModal = true">
+                        <Tag class="w-3 h-3 mr-1.5" /> Tag
+                    </Button>
+                    <Button size="xs" variant="ghost"
+                        class="text-rose-400 hover:bg-rose-950/50 hover:text-rose-300 text-[10px] font-bold"
+                        @click="executeBulkDelete">
+                        <Trash2 class="w-3 h-3 mr-1.5" /> Delete
+                    </Button>
+                </div>
+                <div class="w-[1px] h-4 bg-slate-800"></div>
+                <Button size="icon" variant="ghost"
+                    class="h-6 w-6 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full"
+                    @click="clearSelection">
+                    <X class="w-3.5 h-3.5" />
+                </Button>
+            </div>
+        </Transition>
     </div>
 </template>
 
 <script setup>
-import { ref, watch, onMounted, computed } from 'vue'
+import { ref, shallowRef, watch, onMounted, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
     ChevronLeft, Database, Plus, MoreHorizontal, MoreVertical, FolderPlus, Upload,
@@ -1114,8 +1585,9 @@ import {
     UserPlus, UserMinus, Key, ShieldCheck as ShieldCheckIcon, Save,
     Music, File as FileIcon, Inbox,
     FolderUp,
-    ChevronDown
+    ChevronDown, Video, Volume2, Play, Pause, X
 } from 'lucide-vue-next'
+import { Checkbox } from '@/components/ui/checkbox'
 import { debounce } from 'perfect-debounce'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -2177,9 +2649,9 @@ async function generateShareLink() {
     } catch (e) { toast.error('Failed to generate link') }
 }
 
-function copyToClipboard(text) {
+function copyToClipboard(text, msg = 'Link copied to clipboard') {
     navigator.clipboard.writeText(text)
-    toast.success('Link copied to clipboard')
+    toast.success(msg)
 }
 
 function formatSize(bytes) {
@@ -2197,74 +2669,7 @@ function isImage(key) {
     return ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(key?.split('.').pop().toLowerCase())
 }
 
-function getPreviewType(key) {
-    if (!key) return null
-    const ext = key.split('.').pop().toLowerCase()
-    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) {
-        return 'image'
-    }
-    if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(ext)) {
-        return 'audio'
-    }
-    if (['mp4', 'webm', 'mov'].includes(ext)) {
-        return 'video'
-    }
-    if (ext === 'pdf') {
-        return 'pdf'
-    }
-    if (ext === 'md') {
-        return 'markdown'
-    }
-    if (['txt', 'json', 'js', 'ts', 'html', 'css', 'xml', 'yaml', 'yml', 'sh', 'py', 'go', 'rs', 'sql', 'ini', 'conf', 'dockerfile'].includes(ext)) {
-        return 'text'
-    }
-    return 'unsupported'
-}
 
-watch(previewObject, async (newVal) => {
-    if (previewUrl.value) {
-        URL.revokeObjectURL(previewUrl.value)
-        previewUrl.value = null
-    }
-    previewTextContent.value = ''
-    previewType.value = ''
-
-    if (!newVal) return
-
-    const type = getPreviewType(newVal.Key)
-    if (type === 'unsupported') {
-        previewType.value = 'unsupported'
-        return
-    }
-
-    try {
-        let url = `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(newVal.Key)}`
-        if (newVal.VersionID) {
-            url += `?versionId=${newVal.VersionID}`
-        }
-
-        const res = await authFetch(url)
-        if (!res.ok) {
-            previewType.value = 'error'
-            return
-        }
-
-        if (type === 'image' || type === 'audio' || type === 'video' || type === 'pdf') {
-            const blob = await res.blob()
-            previewUrl.value = URL.createObjectURL(blob)
-            previewType.value = type
-        } else if (type === 'text' || type === 'markdown') {
-            const text = await res.text()
-            previewTextContent.value = text
-            previewType.value = type
-        }
-    } catch (e) {
-        console.error(e)
-        previewType.value = 'error'
-    }
-})
-
-onMounted(() => { fetchObjects(); fetchUsers() })
 
 const isLocked = (obj) => obj?.LegalHold || (obj?.RetainUntilDate && new Date(obj.RetainUntilDate) > new Date())
 
@@ -2483,4 +2888,371 @@ async function openDiff(key, oldVersionId) {
         diffLoading.value = false
     }
 }
+
+// ============================================================================
+// OBJECT PREVIEW & CUSTOM MEDIA PLAYER
+// ============================================================================
+const showPreviewMeta = ref(true)
+const mediaPlaying = ref(false)
+const mediaCurrentTime = ref(0)
+const mediaDuration = ref(0)
+const mediaPlaybackRate = ref(1)
+const mediaVolume = ref(1)
+const mediaMuted = ref(false)
+const audioElement = ref(null)
+
+function toggleAudio() {
+    if (!audioElement.value) return
+    if (mediaPlaying.value) {
+        audioElement.value.pause()
+        mediaPlaying.value = false
+    } else {
+        audioElement.value.play()
+        mediaPlaying.value = true
+    }
+}
+
+function seekAudio(e) {
+    if (!audioElement.value) return
+    const val = parseFloat(e.target.value)
+    audioElement.value.currentTime = val
+    mediaCurrentTime.value = val
+}
+
+function onAudioTimeUpdate() {
+    if (audioElement.value) {
+        mediaCurrentTime.value = audioElement.value.currentTime
+    }
+}
+
+function onAudioMetadata() {
+    if (audioElement.value) {
+        mediaDuration.value = audioElement.value.duration
+    }
+}
+
+function changePlaybackRate() {
+    if (audioElement.value) {
+        audioElement.value.playbackRate = mediaPlaybackRate.value
+    }
+}
+
+function changeVolume() {
+    if (audioElement.value) {
+        audioElement.value.volume = mediaVolume.value
+        mediaMuted.value = mediaVolume.value === 0
+    }
+}
+
+function toggleMute() {
+    if (audioElement.value) {
+        mediaMuted.value = !mediaMuted.value
+        audioElement.value.muted = mediaMuted.value
+        if (mediaMuted.value) {
+            mediaVolume.value = 0
+        } else {
+            mediaVolume.value = 1
+            audioElement.value.volume = 1
+        }
+    }
+}
+
+function formatTime(secs) {
+    if (isNaN(secs)) return '0:00'
+    const m = Math.floor(secs / 60)
+    const s = Math.floor(secs % 60)
+    return `${m}:${s < 10 ? '0' : ''}${s}`
+}
+
+function getPreviewType(key) {
+    const ext = key.split('.').pop().toLowerCase()
+    const textExts = ['txt', 'json', 'yaml', 'yml', 'xml', 'csv', 'ini', 'conf', 'log', 'js', 'ts', 'go', 'py', 'java', 'c', 'cpp', 'h', 'css', 'html', 'sql', 'sh', 'bat', 'env']
+    if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return 'image'
+    if (['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)) return 'audio'
+    if (['mp4', 'webm', 'ogg', 'mov', 'mkv'].includes(ext)) return 'video'
+    if (ext === 'pdf') return 'pdf'
+    if (ext === 'md') return 'markdown'
+    if (textExts.includes(ext)) return 'text'
+    return 'unsupported'
+}
+
+
+// ============================================================================
+// BUCKET REPLICATION
+// ============================================================================
+const replicationRules = ref([])
+const newReplicationRule = ref({ destinationBucket: '', prefix: '' })
+const bucketsList = ref([])
+
+async function fetchBuckets() {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets`)
+        if (res.ok) {
+            const data = await res.json()
+            bucketsList.value = data.map(b => b.Name)
+        }
+    } catch (e) {
+        console.error('Failed to fetch buckets:', e)
+    }
+}
+
+async function fetchReplicationRules() {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/replication`)
+        if (res.ok) {
+            replicationRules.value = await res.json()
+        }
+    } catch (e) {
+        console.error('Failed to fetch replication rules:', e)
+    }
+}
+
+async function createReplicationRule() {
+    if (!newReplicationRule.value.destinationBucket) return
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/replication`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                destinationBucket: newReplicationRule.value.destinationBucket,
+                prefix: newReplicationRule.value.prefix
+            })
+        })
+        if (res.ok) {
+            toast.success('Replication rule added successfully')
+            newReplicationRule.value = { destinationBucket: '', prefix: '' }
+            fetchReplicationRules()
+        } else {
+            const txt = await res.text()
+            toast.error('Failed to add rule: ' + txt)
+        }
+    } catch (e) {
+        toast.error('Error adding rule: ' + e.message)
+    }
+}
+
+async function deleteReplicationRule(id) {
+    try {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/replication/${id}`, {
+            method: 'DELETE'
+        })
+        if (res.ok) {
+            toast.success('Replication rule removed')
+            fetchReplicationRules()
+        } else {
+            toast.error('Failed to remove replication rule')
+        }
+    } catch (e) {
+        toast.error('Error deleting rule: ' + e.message)
+    }
+}
+
+
+// ============================================================================
+// BULK OPERATIONS
+// ============================================================================
+const selectedItems = shallowRef(new Set())
+const showBulkCopyModal = ref(false)
+const bulkCopyDestBucket = ref('')
+const bulkCopyDestPrefix = ref('')
+const showBulkTagModal = ref(false)
+const bulkTags = ref([{ key: '', value: '' }])
+
+const selectedItemsCount = computed(() => selectedItems.value.size)
+
+const isAllSelected = computed(() => {
+    if (!visibleItems.value || visibleItems.value.length === 0) return false
+    return visibleItems.value.every(item => {
+        const k = typeof item === 'string' ? item : item.Key
+        return selectedItems.value.has(k)
+    })
+})
+
+function toggleSelect(key) {
+    const newSet = new Set(selectedItems.value)
+    if (newSet.has(key)) {
+        newSet.delete(key)
+    } else {
+        newSet.add(key)
+    }
+    selectedItems.value = newSet
+}
+
+function toggleSelectAll() {
+    const newSet = new Set(selectedItems.value)
+    if (isAllSelected.value) {
+        visibleItems.value.forEach(item => {
+            const k = typeof item === 'string' ? item : item.Key
+            newSet.delete(k)
+        })
+    } else {
+        visibleItems.value.forEach(item => {
+            const k = typeof item === 'string' ? item : item.Key
+            newSet.add(k)
+        })
+    }
+    selectedItems.value = newSet
+}
+
+function clearSelection() {
+    selectedItems.value = new Set()
+}
+
+function addBulkTagRow() {
+    bulkTags.value.push({ key: '', value: '' })
+}
+
+function removeBulkTagRow(idx) {
+    if (bulkTags.value.length > 1) {
+        bulkTags.value.splice(idx, 1)
+    } else {
+        bulkTags.value = [{ key: '', value: '' }]
+    }
+}
+
+async function executeBulkCopy() {
+    if (!bulkCopyDestBucket.value || selectedItems.value.size === 0) return
+    try {
+        const keysArray = Array.from(selectedItems.value)
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/copy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                keys: keysArray,
+                destinationBucket: bulkCopyDestBucket.value,
+                destinationPrefix: bulkCopyDestPrefix.value
+            })
+        })
+        if (res.ok) {
+            toast.success(`Successfully copied ${keysArray.length} items`)
+            showBulkCopyModal.value = false
+            bulkCopyDestBucket.value = ''
+            bulkCopyDestPrefix.value = ''
+            clearSelection()
+            fetchObjects()
+        } else {
+            const txt = await res.text()
+            toast.error('Bulk copy failed: ' + txt)
+        }
+    } catch (e) {
+        toast.error('Error during bulk copy: ' + e.message)
+    }
+}
+
+async function executeBulkTag() {
+    if (selectedItems.value.size === 0) return
+    const tagMap = {}
+    bulkTags.value.forEach(t => {
+        if (t.key.trim()) tagMap[t.key.trim()] = t.value.trim()
+    })
+
+    try {
+        const keysArray = Array.from(selectedItems.value)
+        let successCount = 0
+        const promises = keysArray.map(async (key) => {
+            const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/tags/${encodeS3Key(key)}`, {
+                method: 'PUT',
+                body: tagMap
+            })
+            if (res.ok) successCount++
+        })
+
+        await Promise.all(promises)
+        toast.success(`Applied tags to ${successCount} items`)
+        showBulkTagModal.value = false
+        bulkTags.value = [{ key: '', value: '' }]
+        clearSelection()
+    } catch (e) {
+        toast.error('Error applying bulk tags: ' + e.message)
+    }
+}
+
+async function executeBulkDelete() {
+    if (selectedItems.value.size === 0) return
+    if (!confirm(`Are you sure you want to delete ${selectedItems.value.size} selected items?`)) return
+
+    try {
+        const keysArray = Array.from(selectedItems.value)
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName.value}/objects/delete-bulk`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                keys: keysArray
+            })
+        })
+
+        if (res.ok) {
+            toast.success(`Successfully deleted selected items`)
+            clearSelection()
+            fetchObjects()
+        } else {
+            const txt = await res.text()
+            toast.error('Bulk deletion failed: ' + txt)
+        }
+    } catch (e) {
+        toast.error('Error during bulk delete: ' + e.message)
+    }
+}
+
+// Clear selection whenever the folder or search changes
+watch([currentPrefix, searchQuery], () => {
+    selectedItems.value = new Set()
+})
+
+// ============================================================================
+// WATCHERS & MOUNTED
+// ============================================================================
+watch(previewObject, async (newVal) => {
+    if (previewUrl.value) {
+        URL.revokeObjectURL(previewUrl.value)
+        previewUrl.value = null
+    }
+    previewTextContent.value = ''
+    previewType.value = ''
+    mediaPlaying.value = false
+    mediaCurrentTime.value = 0
+    mediaDuration.value = 0
+    mediaPlaybackRate.value = 1
+
+    if (!newVal) return
+
+    const type = getPreviewType(newVal.Key)
+    if (type === 'unsupported') {
+        previewType.value = 'unsupported'
+        return
+    }
+
+    try {
+        let url = `${API_BASE}/admin/buckets/${bucketName.value}/objects/${encodeS3Key(newVal.Key)}`
+        if (newVal.VersionID) {
+            url += `?versionId=${newVal.VersionID}`
+        }
+
+        const res = await authFetch(url)
+        if (!res.ok) {
+            previewType.value = 'error'
+            return
+        }
+
+        if (type === 'image' || type === 'audio' || type === 'video' || type === 'pdf') {
+            const blob = await res.blob()
+            previewUrl.value = URL.createObjectURL(blob)
+            previewType.value = type
+        } else if (type === 'text' || type === 'markdown') {
+            const text = await res.text()
+            previewTextContent.value = text
+            previewType.value = type
+        }
+    } catch (e) {
+        console.error(e)
+        previewType.value = 'error'
+    }
+})
+
+onMounted(() => {
+    fetchObjects()
+    fetchUsers()
+    fetchBuckets()
+    fetchReplicationRules()
+})
 </script>

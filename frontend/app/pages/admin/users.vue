@@ -7,6 +7,11 @@
                 <p class="text-xs text-muted-foreground">Control security credentials and access permissions.</p>
             </div>
             <div class="flex items-center gap-3">
+                <div class="relative">
+                    <Search class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <input v-model="searchQuery" type="text" placeholder="Filter principals..."
+                        class="h-8 w-48 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60" />
+                </div>
                 <Button variant="outline" size="sm" @click="fetchUsers" :disabled="loading"
                     class="h-8 border-slate-200 dark:border-slate-800">
                     <RefreshCw class="w-3.5 h-3.5 mr-2" :class="{ 'animate-spin': loading }" />
@@ -20,167 +25,185 @@
         </header>
 
         <main class="flex-1 overflow-auto">
-            <div class="p-6">
-                <Card class="border-slate-200 dark:border-slate-800 overflow-hidden shadow-sm">
-                    <Table>
-                        <TableHeader class="bg-muted/30">
-                            <TableRow>
-                                <TableHead class="w-[200px]">Principal</TableHead>
-                                <TableHead class="w-[350px]">Access Credentials</TableHead>
-                                <TableHead>Effective Policies</TableHead>
-                                <TableHead class="text-right w-[120px] px-6">Management</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            <TableRow v-for="(user, username) in users" :key="username"
-                                class="group transition-colors hover:bg-muted/30">
-                                <TableCell class="py-4 align-top">
-                                    <div class="flex items-start gap-3">
-                                        <div
-                                            class="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20">
-                                            <component
-                                                :is="username === 'admin' ? ShieldCheck : username === 'anonymous' ? Eye : User"
-                                                class="w-4 h-4 text-primary" />
-                                        </div>
-                                        <div class="flex flex-col min-w-0">
-                                            <div class="flex items-center gap-2">
-                                                <span class="font-bold text-sm tracking-tight truncate">{{ username
-                                                }}</span>
-                                                <Badge v-if="username === 'admin'" variant="default"
-                                                    class="text-[8px] h-3.5 bg-indigo-500 hover:bg-indigo-500 py-0 uppercase tracking-widest leading-none">
-                                                    Root</Badge>
-                                                <Badge v-if="username === 'anonymous'" variant="outline"
-                                                    class="text-[8px] h-3.5 border-blue-500/30 text-blue-500 py-0 uppercase tracking-widest leading-none">
-                                                    Guest</Badge>
-                                            </div>
-                                            <span
-                                                class="text-[10px] text-muted-foreground font-medium mt-0.5 truncate uppercase opacity-60">
-                                                {{ user.Username === 'admin' ? 'System Administrator' : user.Username
-                                                    === 'anonymous' ? 'Unauthenticated Access' : 'Service Account' }}
-                                            </span>
-                                        </div>
-                                    </div>
-                                </TableCell>
+            <div class="p-6 space-y-3">
+                <!-- User Cards -->
+                <div v-for="(user, username) in filteredUsers" :key="username"
+                    class="group rounded-xl border border-slate-200 dark:border-slate-800 bg-card shadow-xs hover:shadow-md hover:border-primary/30 transition-all duration-300">
 
-                                <TableCell class="py-4 align-top">
-                                    <div v-if="user.accessKeys && user.accessKeys.length > 0" class="space-y-1.5 pr-4">
-                                        <div v-for="key in user.accessKeys" :key="key.accessKeyId"
-                                            class="p-2 rounded-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col group/key relative">
-                                            <div class="flex items-center justify-between gap-2 overflow-hidden">
-                                                <div class="flex flex-col min-w-0">
-                                                    <span
-                                                        class="text-[9px] text-muted-foreground uppercase font-bold tracking-tighter opacity-70">Identity
-                                                        Key</span>
-                                                    <code
-                                                        class="text-[10px] font-mono font-bold truncate">{{ key.accessKeyId }}</code>
-                                                </div>
-                                                <div class="flex items-center gap-1">
-                                                    <Button variant="ghost" size="icon"
-                                                        class="h-6 w-6 shrink-0 hover:bg-muted"
-                                                        @click="copyToClipboard(key.accessKeyId, 'Key ID')">
-                                                        <Copy class="w-3 h-3" />
-                                                    </Button>
-                                                    <Button variant="ghost" size="icon"
-                                                        class="h-6 w-6 shrink-0 text-destructive hover:bg-destructive/10"
-                                                        @click="deleteKey(username, key.accessKeyId)">
-                                                        <Trash class="w-3 h-3" />
-                                                    </Button>
-                                                </div>
-                                            </div>
-                                            <div
-                                                class="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-800 pt-2 overflow-hidden">
-                                                <div class="flex flex-col min-w-0">
-                                                    <span
-                                                        class="text-[9px] text-muted-foreground uppercase font-bold tracking-tighter opacity-70">Secret
-                                                        Data</span>
-                                                    <code
-                                                        class="text-[10px] font-mono font-bold text-amber-600 dark:text-amber-500 truncate italic">
-                                                        {{ showSecrets[key.accessKeyId] ? key.secretAccessKey : '••••••••••••••••••••••••••••••••' }}
-                                                    </code>
-                                                </div>
-                                                <div class="flex items-center gap-1">
-                                                    <Button variant="ghost" size="icon"
-                                                        class="h-6 w-6 shrink-0 hover:bg-muted"
-                                                        @click="showSecrets[key.accessKeyId] = !showSecrets[key.accessKeyId]">
-                                                        <component :is="showSecrets[key.accessKeyId] ? EyeOff : Eye"
-                                                            class="w-3 h-3" />
-                                                    </Button>
-                                                    <Button variant="ghost" size="icon"
-                                                        class="h-6 w-6 shrink-0 hover:bg-muted"
-                                                        @click="copyToClipboard(key.secretAccessKey, 'Secret')">
-                                                        <Copy class="w-3 h-3" />
-                                                    </Button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div v-else
-                                        class="flex flex-col items-center justify-center h-20 border border-dashed rounded-md bg-muted/20 text-muted-foreground p-4">
-                                        <KeyIcon class="w-5 h-5 mb-1 opacity-20" />
-                                        <span class="text-[10px] font-medium uppercase tracking-widest italic">Protected
-                                            - No active keys</span>
-                                    </div>
-                                </TableCell>
+                    <!-- Card Header Row -->
+                    <div class="flex items-center justify-between px-5 py-3.5">
+                        <!-- Left: Avatar + Identity -->
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div :class="[
+                                'h-9 w-9 rounded-lg flex items-center justify-center shrink-0 transition-colors duration-200',
+                                username === 'admin'
+                                    ? 'bg-gradient-to-br from-indigo-500/20 to-violet-500/20 border border-indigo-500/30'
+                                    : username === 'anonymous'
+                                        ? 'bg-gradient-to-br from-sky-500/15 to-cyan-500/15 border border-sky-500/25'
+                                        : 'bg-gradient-to-br from-slate-500/10 to-slate-400/10 border border-slate-300 dark:border-slate-700'
+                            ]">
+                                <component
+                                    :is="username === 'admin' ? ShieldCheck : username === 'anonymous' ? Eye : User"
+                                    :class="[
+                                        'w-4 h-4',
+                                        username === 'admin' ? 'text-indigo-500' : username === 'anonymous' ? 'text-sky-500' : 'text-slate-500'
+                                    ]" />
+                            </div>
+                            <div class="flex flex-col min-w-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold text-sm tracking-tight truncate">{{ username }}</span>
+                                    <Badge v-if="username === 'admin'" variant="default"
+                                        class="text-[8px] h-4 bg-indigo-500 hover:bg-indigo-500 py-0 px-1.5 uppercase tracking-widest leading-none font-extrabold">
+                                        Root</Badge>
+                                    <Badge v-if="username === 'anonymous'" variant="outline"
+                                        class="text-[8px] h-4 border-sky-500/30 text-sky-500 py-0 px-1.5 uppercase tracking-widest leading-none font-extrabold">
+                                        Guest</Badge>
+                                </div>
+                                <span
+                                    class="text-[10px] text-muted-foreground font-medium mt-0.5 truncate uppercase tracking-wider opacity-50">
+                                    {{ username === 'admin' ? 'System Administrator' : username === 'anonymous' ?
+                                        'Unauthenticated Access' : 'Service Account' }}
+                                </span>
+                            </div>
+                        </div>
 
-                                <TableCell class="py-4 align-top">
-                                    <div class="flex flex-wrap gap-2 pr-4">
-                                        <div v-for="p in user.policies" :key="p.name"
-                                            class="flex items-center gap-1.5 h-6 px-2 rounded bg-indigo-500/10 border border-indigo-500/20 group/badge">
-                                            <Lock class="w-3 h-3 text-indigo-500" />
-                                            <span
-                                                class="text-[10px] font-bold text-indigo-700 dark:text-indigo-400 capitalize">{{
-                                                    p.name }}</span>
-                                            <button v-if="username !== 'admin' && username !== 'anonymous'"
-                                                @click="removePolicy(username, p.name)"
-                                                class="ml-1 text-indigo-400 hover:text-destructive transition-colors opacity-0 group-hover/badge:opacity-100">
-                                                <X class="w-3 h-3" />
-                                            </button>
-                                        </div>
-                                        <Button v-if="username !== 'admin'" variant="outline" size="xs"
-                                            class="h-6 px-2 text-[10px] font-bold border-dashed border-indigo-200 dark:border-indigo-900 group/attach hover:bg-indigo-500 hover:text-white hover:border-indigo-500 transition-all"
-                                            @click="openPolicyModal(username)">
-                                            <Plus class="w-3 h-3 mr-1" /> Attach
+                        <!-- Center: Policies -->
+                        <div class="flex items-center gap-1.5 flex-wrap justify-center max-w-[40%]">
+                            <div v-for="p in user.policies" :key="p.name"
+                                class="flex items-center gap-1 h-6 px-2 rounded-md bg-indigo-500/8 border border-indigo-500/15 group/badge hover:border-indigo-500/40 transition-colors">
+                                <Lock class="w-2.5 h-2.5 text-indigo-500 opacity-70" />
+                                <span
+                                    class="text-[10px] font-semibold text-indigo-700 dark:text-indigo-400 capitalize leading-none">{{
+                                        p.name }}</span>
+                                <button v-if="username !== 'admin' && username !== 'anonymous'"
+                                    @click.stop="removePolicy(username, p.name)"
+                                    class="ml-0.5 text-indigo-400 hover:text-destructive transition-colors opacity-0 group-hover/badge:opacity-100">
+                                    <X class="w-2.5 h-2.5" />
+                                </button>
+                            </div>
+                            <Button v-if="username !== 'admin'" variant="ghost" size="xs"
+                                class="h-6 px-2 text-[10px] font-bold text-indigo-500 hover:bg-indigo-500/10 hover:text-indigo-600 transition-all"
+                                @click="openPolicyModal(username)">
+                                <Plus class="w-3 h-3 mr-0.5" /> Attach
+                            </Button>
+                        </div>
+
+                        <!-- Right: Actions -->
+                        <div class="flex items-center gap-1 shrink-0">
+                            <template v-if="username !== 'anonymous'">
+                                <Button v-if="username !== 'admin'" variant="ghost" size="icon"
+                                    class="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                                    @click="generateKey(username)"
+                                    title="Generate Access Key">
+                                    <KeyIcon class="w-3.5 h-3.5" />
+                                </Button>
+                                <Button variant="ghost" size="icon"
+                                    class="h-7 w-7 text-muted-foreground hover:text-amber-600 hover:bg-amber-500/10 transition-colors"
+                                    @click="openChangePasswordDialog(username)"
+                                    title="Change Password">
+                                    <Fingerprint class="w-3.5 h-3.5" />
+                                </Button>
+                                <Button v-if="username !== 'admin'" variant="ghost" size="icon"
+                                    class="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors opacity-0 group-hover:opacity-100"
+                                    @click="deleteUser(username)"
+                                    title="Delete User">
+                                    <UserMinus class="w-3.5 h-3.5" />
+                                </Button>
+                            </template>
+                            <Badge v-else variant="outline"
+                                class="text-[8px] font-bold uppercase tracking-tighter opacity-40 border-slate-300 pointer-events-none ml-1">
+                                Immutable</Badge>
+                        </div>
+                    </div>
+
+                    <!-- Access Keys Section (collapsible) -->
+                    <div v-if="user.accessKeys && user.accessKeys.length > 0"
+                        class="border-t border-slate-100 dark:border-slate-800/80">
+                        <button @click="toggleExpanded(username)"
+                            class="w-full flex items-center justify-between px-5 py-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground hover:bg-muted/30 transition-colors">
+                            <div class="flex items-center gap-2">
+                                <KeyIcon class="w-3 h-3 opacity-50" />
+                                <span>{{ user.accessKeys.length }} Access
+                                    {{ user.accessKeys.length === 1 ? 'Key' : 'Keys' }}</span>
+                            </div>
+                            <ChevronDown class="w-3.5 h-3.5 transition-transform duration-200"
+                                :class="{ 'rotate-180': expandedUsers[username] }" />
+                        </button>
+
+                        <div v-show="expandedUsers[username]"
+                            class="px-5 pb-4 pt-1 grid gap-2"
+                            :class="user.accessKeys.length > 1 ? 'sm:grid-cols-2' : ''">
+                            <div v-for="key in user.accessKeys" :key="key.accessKeyId"
+                                class="rounded-lg bg-slate-50 dark:bg-slate-900/60 border border-slate-200/80 dark:border-slate-800 p-3 space-y-2">
+                                <!-- Key ID -->
+                                <div class="flex items-center justify-between gap-2">
+                                    <div class="flex flex-col min-w-0">
+                                        <span
+                                            class="text-[8px] text-muted-foreground uppercase font-bold tracking-widest opacity-60">Access
+                                            Key ID</span>
+                                        <code class="text-[11px] font-mono font-bold truncate">{{ key.accessKeyId
+                                        }}</code>
+                                    </div>
+                                    <div class="flex items-center gap-0.5">
+                                        <Button variant="ghost" size="icon" class="h-6 w-6 shrink-0 hover:bg-muted"
+                                            @click="copyToClipboard(key.accessKeyId, 'Key ID')">
+                                            <Copy class="w-3 h-3" />
+                                        </Button>
+                                        <Button variant="ghost" size="icon"
+                                            class="h-6 w-6 shrink-0 text-destructive hover:bg-destructive/10"
+                                            @click="deleteKey(username, key.accessKeyId)">
+                                            <Trash class="w-3 h-3" />
                                         </Button>
                                     </div>
-                                </TableCell>
-
-                                <TableCell class="py-4 text-right px-6 align-top">
-                                    <DropdownMenu v-if="username !== 'anonymous'">
-                                        <DropdownMenuTrigger asChild>
-                                            <Button variant="ghost" size="icon" class="h-8 w-8 hover:bg-muted">
-                                                <MoreHorizontal class="w-4 h-4" />
-                                            </Button>
-                                        </DropdownMenuTrigger>
-                                        <DropdownMenuContent align="end" class="w-56">
-                                            <DropdownMenuItem v-if="username !== 'admin'"
-                                                @click="generateKey(username)">
-                                                <KeyIcon class="w-4 h-4 mr-2" />
-                                                Generate New Key
-                                            </DropdownMenuItem>
-                                            <DropdownMenuItem @click="openChangePasswordDialog(username)">
-                                                <Fingerprint class="w-4 h-4 mr-2" />
-                                                Change Password
-                                            </DropdownMenuItem>
-                                            <template v-if="username !== 'admin'">
-                                                <DropdownMenuSeparator />
-                                                <DropdownMenuItem @click="deleteUser(username)"
-                                                    class="text-destructive focus:bg-destructive/10">
-                                                    <UserMinus class="w-4 h-4 mr-2" />
-                                                    Erase Account
-                                                </DropdownMenuItem>
-                                            </template>
-                                        </DropdownMenuContent>
-                                    </DropdownMenu>
-                                    <div v-else class="flex justify-end pr-2 py-1">
-                                        <Badge variant="outline"
-                                            class="text-[8px] font-bold uppercase tracking-tighter opacity-40 border-slate-300 pointer-events-none">
-                                            Immutable</Badge>
+                                </div>
+                                <!-- Secret -->
+                                <div
+                                    class="flex items-center justify-between gap-2 border-t border-slate-200/60 dark:border-slate-700/60 pt-2">
+                                    <div class="flex flex-col min-w-0">
+                                        <span
+                                            class="text-[8px] text-muted-foreground uppercase font-bold tracking-widest opacity-60">Secret</span>
+                                        <code
+                                            class="text-[10px] font-mono font-semibold text-amber-600 dark:text-amber-400 truncate">
+                                            {{ showSecrets[key.accessKeyId] ? key.secretAccessKey :
+                                                '••••••••••••••••••••••••' }}
+                                        </code>
                                     </div>
-                                </TableCell>
-                            </TableRow>
-                        </TableBody>
-                    </Table>
-                </Card>
+                                    <div class="flex items-center gap-0.5">
+                                        <Button variant="ghost" size="icon" class="h-6 w-6 shrink-0 hover:bg-muted"
+                                            @click="showSecrets[key.accessKeyId] = !showSecrets[key.accessKeyId]">
+                                            <component :is="showSecrets[key.accessKeyId] ? EyeOff : Eye"
+                                                class="w-3 h-3" />
+                                        </Button>
+                                        <Button variant="ghost" size="icon" class="h-6 w-6 shrink-0 hover:bg-muted"
+                                            @click="copyToClipboard(key.secretAccessKey, 'Secret')">
+                                            <Copy class="w-3 h-3" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Empty keys indicator -->
+                    <div v-else-if="username !== 'admin' && username !== 'anonymous'"
+                        class="border-t border-dashed border-slate-200/80 dark:border-slate-800/60 px-5 py-2">
+                        <div class="flex items-center gap-2 text-muted-foreground">
+                            <KeyIcon class="w-3 h-3 opacity-25" />
+                            <span class="text-[10px] font-medium uppercase tracking-widest opacity-40 italic">No active
+                                credentials</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div v-if="Object.keys(filteredUsers).length === 0 && !loading"
+                    class="flex flex-col items-center justify-center py-20 text-muted-foreground">
+                    <div class="h-16 w-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">
+                        <Users class="w-8 h-8 opacity-20" />
+                    </div>
+                    <span class="text-sm font-medium">{{ searchQuery ? 'No matching principals' : 'No principals configured' }}</span>
+                    <span class="text-xs opacity-60 mt-1">{{ searchQuery ? 'Try adjusting your search query' : 'Create your first user to get started' }}</span>
+                </div>
             </div>
         </main>
 
@@ -335,27 +358,24 @@
             </DialogContent>
         </Dialog>
     </div>
+
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 useSeoMeta({
     title: 'IAM Users | GravSpace',
     description: 'Manage administrative principals and cloud service accounts for secure programmatic and console access.',
 })
 import {
-    Plus, MoreHorizontal, ShieldCheck, UserPlus, Trash, RefreshCw, KeyIcon,
-    Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2, FileCode, UserMinus
+    Plus, ShieldCheck, UserPlus, Trash, RefreshCw, KeyIcon,
+    Shield, Lock, Copy, Eye, EyeOff, User, X, Fingerprint, Loader2, FileCode, UserMinus,
+    ChevronDown, Search, Users
 } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
-import {
-    DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
 import {
     Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle
 } from '@/components/ui/dialog'
@@ -382,6 +402,8 @@ const selectedUserForPolicy = ref(null)
 const attachmentMode = ref('template')
 const policyTemplates = ref([])
 const selectedTemplate = ref('')
+const searchQuery = ref('')
+const expandedUsers = ref({})
 const newPolicyJson = ref(JSON.stringify({
     name: "ReadOnlyAccess",
     version: "2012-10-17",
@@ -392,6 +414,21 @@ const newPolicyJson = ref(JSON.stringify({
     }]
 }, null, 2))
 
+const filteredUsers = computed(() => {
+    if (!searchQuery.value.trim()) return users.value
+    const q = searchQuery.value.toLowerCase()
+    const result = {}
+    for (const [username, user] of Object.entries(users.value)) {
+        if (username.toLowerCase().includes(q)) {
+            result[username] = user
+        }
+    }
+    return result
+})
+
+function toggleExpanded(username) {
+    expandedUsers.value[username] = !expandedUsers.value[username]
+}
 
 async function fetchUsers() {
     loading.value = true
@@ -463,6 +500,7 @@ async function generateKey(username) {
         const res = await authFetch(`${API_BASE}/admin/users/${username}/keys`, { method: 'POST' })
         if (res.ok) {
             toast.success('Signed new access pair.')
+            expandedUsers.value[username] = true
             await fetchUsers()
         }
     } catch (e) {
