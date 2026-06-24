@@ -27,11 +27,11 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o storage-server .
 RUN echo 'package main\nimport "net/http"\nimport "os"\nfunc main() {\n  res, err := http.Get("http://localhost:8080/health/live")\n  if err != nil || res.StatusCode != 200 {\n    os.Exit(1)\n  }\n}' > healthcheck.go && \
     CGO_ENABLED=0 go build -o healthcheck healthcheck.go
 
-# Trigger pre-extraction of libturso_go.so
-RUN printf 'package main\nimport (\n\t"database/sql"\n\t_ "turso.tech/database/tursogo"\n)\nfunc main() {\n\tdb, _ := sql.Open("turso", "/tmp/temp.db")\n\tdb.Ping()\n}\n' > extract.go && \
-    go run extract.go && \
-    rm extract.go
-RUN find / -not -path "/sys/*" -not -path "/proc/*" -not -path "/dev/*" -name "libturso_go.so" -exec cp {} /app/libturso_go.so \; -quit
+# Copy the pre-compiled Turso libraries from Go module cache matching the target platform
+ARG TARGETOS
+ARG TARGETARCH
+RUN find /go/pkg/mod -path "*/${TARGETOS}_${TARGETARCH}/*" -name "libturso_go.so" -exec cp {} /app/libturso_go.so \; && \
+    find /go/pkg/mod -path "*/${TARGETOS}_${TARGETARCH}/*" -name "libturso_sync_sdk_kit.so" -exec cp {} /app/libturso_sync_sdk_kit.so \;
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -50,11 +50,12 @@ WORKDIR /app
 COPY --from=builder /app/storage-server .
 COPY --from=builder /app/healthcheck /usr/local/bin/healthcheck
 COPY --from=builder /app/libturso_go.so /usr/lib/
+COPY --from=builder /app/libturso_sync_sdk_kit.so /usr/lib/
 COPY --from=builder /app/entrypoint.sh /app/entrypoint.sh
 COPY --from=builder /root/.turso/tursodb /usr/local/bin/tursodb
 
 # Register the library and ensure executables are runnable
-RUN chmod 755 /usr/lib/libturso_go.so && ldconfig && \
+RUN chmod 755 /usr/lib/libturso_go.so /usr/lib/libturso_sync_sdk_kit.so && ldconfig && \
     chmod +x /usr/local/bin/tursodb /app/entrypoint.sh
 
 # Create non-root user and home directory
