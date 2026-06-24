@@ -13,7 +13,7 @@ import (
 	"github.com/GravSpace/GravSpace/internal/audit"
 	"github.com/GravSpace/GravSpace/internal/storage"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 type S3Error struct {

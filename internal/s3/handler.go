@@ -435,7 +435,7 @@ func (h *S3Handler) GetObject(c *gin.Context) {
 	// Set S3 headers
 	c.Header("x-amz-version-id", obj.VersionID)
 	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
-	c.Header("Last-Modified", obj.ModTime.Format(time.RFC1123))
+	c.Header("Last-Modified", obj.ModTime.UTC().Format(time.RFC3339))
 
 	// Handle Range Request
 	rangeHeader := c.GetHeader("Range")
@@ -491,7 +491,7 @@ func (h *S3Handler) HeadObject(c *gin.Context) {
 
 	c.Header("Content-Type", contentType)
 	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
-	c.Header("Last-Modified", obj.ModTime.Format(time.RFC1123))
+	c.Header("Last-Modified", obj.ModTime.UTC().Format(time.RFC3339))
 	c.Header("x-amz-version-id", obj.VersionID)
 	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
 	if obj.EncryptionType != "" {
@@ -540,7 +540,7 @@ func (h *S3Handler) PutObject(c *gin.Context) {
 	}
 
 	encryptionType := c.GetHeader("x-amz-server-side-encryption")
-	
+
 	vid, err := h.Storage.PutObject(bucket, key, c.Request.Body, encryptionType)
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
@@ -773,7 +773,7 @@ func (h *S3Handler) ListObjects(c *gin.Context) {
 			result.Contents = append(result.Contents, Content{
 				Key:          o.Key,
 				Size:         o.Size,
-				LastModified: o.ModTime.Format(time.RFC1123),
+				LastModified: o.ModTime.UTC().Format(time.RFC3339),
 				ETag:         fmt.Sprintf("\"%s\"", o.VersionID),
 				StorageClass: "STANDARD",
 			})
@@ -793,7 +793,7 @@ func (h *S3Handler) ListObjects(c *gin.Context) {
 		result.Contents = append(result.Contents, Content{
 			Key:          o.Key,
 			Size:         o.Size,
-			LastModified: o.ModTime.Format(time.RFC1123),
+			LastModified: o.ModTime.UTC().Format(time.RFC3339),
 			ETag:         fmt.Sprintf("\"%s\"", o.VersionID),
 			StorageClass: "STANDARD",
 		})
@@ -831,7 +831,7 @@ func (h *S3Handler) ListVersions(c *gin.Context) {
 				VersionId:    v.VersionID,
 				IsLatest:     v.IsLatest,
 				Size:         v.Size,
-				LastModified: v.ModTime.Format(time.RFC1123),
+				LastModified: v.ModTime.UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -896,7 +896,7 @@ func (h *S3Handler) ServeWebsite(c *gin.Context) {
 	// Set headers
 	c.Header("x-amz-version-id", obj.VersionID)
 	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
-	c.Header("Last-Modified", obj.ModTime.Format(time.RFC1123))
+	c.Header("Last-Modified", obj.ModTime.UTC().Format(time.RFC3339))
 	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
 
 	c.DataFromReader(http.StatusOK, obj.Size, contentType, reader, nil)
