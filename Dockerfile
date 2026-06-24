@@ -28,7 +28,9 @@ RUN echo 'package main\nimport "net/http"\nimport "os"\nfunc main() {\n  res, er
     CGO_ENABLED=0 go build -o healthcheck healthcheck.go
 
 # Trigger pre-extraction of libturso_go.so
-RUN (DATABASE_URL=file:/tmp/temp.db ./storage-server & sleep 2 && kill $!) || true
+RUN printf 'package main\nimport (\n\t"database/sql"\n\t_ "turso.tech/database/tursogo"\n)\nfunc main() {\n\tdb, _ := sql.Open("turso", "/tmp/temp.db")\n\tdb.Ping()\n}\n' > extract.go && \
+    go run extract.go && \
+    rm extract.go
 RUN find / -not -path "/sys/*" -not -path "/proc/*" -not -path "/dev/*" -name "libturso_go.so" -exec cp {} /app/libturso_go.so \; -quit
 
 # Runtime stage
