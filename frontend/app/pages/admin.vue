@@ -63,6 +63,9 @@
 
             <!-- TRANSFER MANAGER -->
             <TransferManager v-show="showTransferManager" />
+
+            <!-- PASSWORD ONBOARDING MODAL -->
+            <PasswordOnboardingModal :isOpen="!!authState.isDefaultPassword" />
         </main>
 
         <Toaster />

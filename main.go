@@ -208,9 +208,20 @@ func main() {
 			return
 		}
 
+		// Check if user is using default password
+		isDefaultPassword := false
+		if user.Username == "admin" {
+			defaultPass := os.Getenv("INITIAL_ADMIN_PASSWORD")
+			if defaultPass == "" {
+				defaultPass = "admin"
+			}
+			isDefaultPassword = um.CheckPassword("admin", defaultPass)
+		}
+
 		c.JSON(http.StatusOK, gin.H{
-			"token":    t,
-			"username": user.Username,
+			"token":               t,
+			"username":            user.Username,
+			"is_default_password": isDefaultPassword,
 		})
 	})
 

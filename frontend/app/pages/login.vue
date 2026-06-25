@@ -98,6 +98,26 @@
                 </p>
             </div>
         </div>
+
+        <!-- Alert Dialog -->
+        <AlertDialog :open="isAlertOpen" @update:open="isAlertOpen = $event">
+            <AlertDialogContent class="border-white/10 bg-slate-900/90 backdrop-blur-2xl shadow-2xl text-white">
+                <AlertDialogHeader class="space-y-3">
+                    <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10 text-red-500 ring-4 ring-red-500/5 animate-pulse">
+                        <ShieldAlert class="h-6 w-6" />
+                    </div>
+                    <AlertDialogTitle class="text-lg font-bold text-center">{{ alertTitle }}</AlertDialogTitle>
+                    <AlertDialogDescription class="text-slate-400 text-sm text-center">
+                        {{ alertDescription }}
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter class="sm:justify-center mt-2">
+                    <AlertDialogAction @click="isAlertOpen = false" class="bg-indigo-600 hover:bg-indigo-500 text-white font-medium px-8 h-10 shadow-lg shadow-indigo-600/20 active:scale-[0.98]">
+                        Close
+                    </AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
     </div>
 </template>
 
@@ -109,11 +129,30 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { 
+    AlertDialog, 
+    AlertDialogAction, 
+    AlertDialogContent, 
+    AlertDialogDescription, 
+    AlertDialogFooter, 
+    AlertDialogHeader, 
+    AlertDialogTitle 
+} from '@/components/ui/alert-dialog'
 import { useAuth } from '@/composables/useAuth'
-import { ChevronRight, Loader2, Info } from 'lucide-vue-next'
+import { ChevronRight, Loader2, Info, ShieldAlert } from 'lucide-vue-next'
 
 const router = useRouter()
 const { login, authState } = useAuth()
+
+const isAlertOpen = ref(false)
+const alertTitle = ref('')
+const alertDescription = ref('')
+
+function showAlert(title: string, description: string) {
+    alertTitle.value = title
+    alertDescription.value = description
+    isAlertOpen.value = true
+}
 
 useSeoMeta({
     title: 'Sign In | GravSpace',
@@ -138,10 +177,10 @@ async function handleLogin() {
             if (success) {
                 router.push('/')
             } else {
-                alert('Authentication failed. Please check your keys.')
+                showAlert('Authentication Failed', 'Please check your administrative credentials.')
             }
         } catch (e) {
-            alert('An unexpected error occurred during login.')
+            showAlert('Login Error', 'An unexpected error occurred during login. Please try again.')
         } finally {
             isLoading.value = false
         }

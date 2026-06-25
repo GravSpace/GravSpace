@@ -7,6 +7,7 @@ interface AuthState {
     token: string
     username: string
     isAuthenticated: boolean
+    isDefaultPassword?: boolean
 }
 
 const authState = ref<AuthState>({
@@ -14,7 +15,8 @@ const authState = ref<AuthState>({
     secretAccessKey: '',
     token: '',
     username: '',
-    isAuthenticated: false
+    isAuthenticated: false,
+    isDefaultPassword: false
 })
 
 // Load from sessionStorage on mount
@@ -64,7 +66,8 @@ export function useAuth() {
                 secretAccessKey,
                 token: data.token,
                 username: data.username,
-                isAuthenticated: true
+                isAuthenticated: true,
+                isDefaultPassword: !!data.is_default_password
             }
             return true
         } catch (err) {
@@ -79,7 +82,8 @@ export function useAuth() {
             secretAccessKey: '',
             token: '',
             username: '',
-            isAuthenticated: false
+            isAuthenticated: false,
+            isDefaultPassword: false
         }
         if (typeof window !== 'undefined') {
             sessionStorage.removeItem('gravspace_auth')
@@ -142,11 +146,21 @@ export function useAuth() {
         return res
     }
 
+    function setCompletedOnboarding() {
+        if (authState.value.isAuthenticated) {
+            authState.value = {
+                ...authState.value,
+                isDefaultPassword: false
+            }
+        }
+    }
+
     return {
         authState: readonly(authState),
         login,
         logout,
         getCredentials,
-        authFetch
+        authFetch,
+        setCompletedOnboarding
     }
 }
