@@ -55,7 +55,7 @@ function formatDate(d: string | null): string {
   return `${date.toLocaleString()} (${relative})`
 }
 
-export function TrashPage() {
+function TrashPage() {
   const { authFetch } = useAuth()
   const [items, setItems] = useState<TrashItem[]>([])
   const [loading, setLoading] = useState(false)

@@ -16,7 +16,7 @@ export const Route = createFileRoute('/admin/settings')({
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
-export function SettingsPage() {
+function SettingsPage() {
   const { authFetch } = useAuth()
   const [settings, setSettings] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(false)

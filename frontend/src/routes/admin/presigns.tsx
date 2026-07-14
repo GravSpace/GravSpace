@@ -38,7 +38,7 @@ function isExpired(date: string) {
   return new Date(date) < new Date()
 }
 
-export function PresignsPage() {
+function PresignsPage() {
   const { authFetch } = useAuth()
   const [links, setLinks] = useState<PresignEntry[]>([])
   const [loading, setLoading] = useState(false)

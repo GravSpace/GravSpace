@@ -1254,6 +1254,59 @@ func (h *AdminHandler) StreamAuditLogs(c *gin.Context) {
 	}
 }
 
+func (h *AdminHandler) GlobalSearch(c *gin.Context) {
+	query := c.Query("q")
+	if query == "" {
+		c.JSON(http.StatusOK, []interface{}{})
+		return
+	}
+
+	buckets, err := h.Storage.ListBuckets()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	type MatchedObject struct {
+		Bucket      string    `json:"Bucket"`
+		Key         string    `json:"Key"`
+		Size        int64     `json:"Size"`
+		ModTime     time.Time `json:"ModTime"`
+		ContentType string    `json:"ContentType"`
+	}
+
+	var results []MatchedObject
+
+	db := h.Storage.(*storage.FileStorage).DB
+	if db != nil {
+		for _, bucketName := range buckets {
+			// Query DB directly since it's super fast!
+			dbObjects, err := db.ListObjects(bucketName, "", query, 100)
+			if err == nil {
+				for _, o := range dbObjects {
+					// Skip directories
+					if o.ContentType != nil && *o.ContentType == "application/x-directory" {
+						continue
+					}
+					var ct string
+					if o.ContentType != nil {
+						ct = *o.ContentType
+					}
+					results = append(results, MatchedObject{
+						Bucket:      bucketName,
+						Key:         o.Key,
+						Size:        o.Size,
+						ModTime:     o.ModifiedAt,
+						ContentType: ct,
+					})
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, results)
+}
+
 func (h *AdminHandler) ListPresignedURLs(c *gin.Context) {
 	db := h.Storage.(*storage.FileStorage).DB
 	if db == nil {

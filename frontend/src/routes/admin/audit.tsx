@@ -104,7 +104,7 @@ function buildWsUrl(token: string): string {
   return `${WS_BASE}/admin/audit/stream?token=${encodeURIComponent(token)}`
 }
 
-export function AuditPage() {
+function AuditPage() {
   const { authFetch, authState } = useAuth()
   const [logs, setLogs] = useState<NormalisedEntry[]>([])
   const [loading, setLoading] = useState(false)

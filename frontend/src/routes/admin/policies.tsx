@@ -143,11 +143,12 @@ function defaultStatement(): Statement {
   return { effect: 'Allow', action: [], resource: 'arn:aws:s3:::*' }
 }
 
-export function PoliciesPage() {
+function PoliciesPage() {
   const { authFetch } = useAuth()
   const [policies, setPolicies] = useState<Policy[]>([])
   const [loading, setLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [buckets, setBuckets] = useState<string[]>([])
   const [expandedPolicy, setExpandedPolicy] = useState<string | null>(null)
   const [viewPolicy, setViewPolicy] = useState<Policy | null>(null)
 
@@ -184,7 +185,17 @@ export function PoliciesPage() {
     }
   }, [authFetch])
 
-  useEffect(() => { fetchPolicies() }, [])
+  const fetchBuckets = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/admin/buckets`)
+      if (res.ok) setBuckets((await res.json()) || [])
+    } catch {}
+  }, [authFetch])
+
+  useEffect(() => {
+    fetchPolicies()
+    fetchBuckets()
+  }, [])
 
   const filtered = policies.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()))
 
@@ -570,13 +581,31 @@ export function PoliciesPage() {
                           </div>
                         </div>
                         <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource ARN</Label>
-                          <Input
-                            value={stmt.resource}
-                            onChange={e => setResource(stmtIdx, e.target.value)}
-                            placeholder="arn:aws:s3:::*"
-                            className="h-8 text-xs font-mono"
-                          />
+                          <Label className="text-[10px] font-bold uppercase tracking-wider opacity-70">Resource Target</Label>
+                          <div className="flex gap-1.5">
+                            <select
+                              onChange={(e) => {
+                                const val = e.target.value
+                                if (val === '*') {
+                                  setResource(stmtIdx, 'arn:aws:s3:::*')
+                                } else if (val) {
+                                  setResource(stmtIdx, `arn:aws:s3:::${val}/*`)
+                                }
+                              }}
+                              className="h-8 rounded-md border border-slate-200 dark:border-slate-800 bg-background px-2 text-[10px] w-28 shrink-0 focus:outline-none"
+                            >
+                              <option value="*">All Buckets</option>
+                              {buckets.map((b) => (
+                                <option key={b} value={b}>{b}</option>
+                              ))}
+                            </select>
+                            <Input
+                              value={stmt.resource}
+                              onChange={e => setResource(stmtIdx, e.target.value)}
+                              placeholder="arn:aws:s3:::*"
+                              className="h-8 text-xs font-mono flex-1"
+                            />
+                          </div>
                         </div>
                       </div>
 

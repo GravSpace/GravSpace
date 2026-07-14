@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Download, Loader2, Copy, Check, FileText } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Download, Loader2, Copy, Check, FileText, Edit3, Save, X } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
@@ -51,13 +51,21 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
   const [textContent, setTextContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  const [editContent, setEditContent] = useState('')
+  const [saving, setSaving] = useState(false)
   const kind = getPreviewKind(object.Key)
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const lineNumbersRef = useRef<HTMLDivElement>(null)
+  const previewScrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
       setBlobUrl(null)
       setTextContent(null)
+      setIsEditing(false)
       try {
         const res = await authFetch(
           `${apiBase}/admin/buckets/${bucketName}/objects/${encodeURIComponent(object.Key)}`,
@@ -111,6 +119,69 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
   // Parse CSV
   const csvRows = kind === 'csv' && textContent ? parseCSV(textContent) : []
 
+  const handleStartEdit = () => {
+    const initialText = kind === 'json' ? getFormattedJson() : (textContent || '')
+    setEditContent(initialText)
+    setIsEditing(true)
+  }
+
+  const handleCancelEdit = () => {
+    setIsEditing(false)
+  }
+
+  const handleSave = async () => {
+    if (kind === 'json') {
+      try {
+        JSON.parse(editContent)
+      } catch (err) {
+        toast.error(`Invalid JSON: ${err}`)
+        return
+      }
+    }
+
+    setSaving(true)
+    try {
+      const res = await authFetch(
+        `${apiBase}/admin/buckets/${bucketName}/objects/${encodeURIComponent(object.Key)}`,
+        {
+          method: 'PUT',
+          body: new Blob([editContent], { type: object.ContentType || 'text/plain' }),
+          headers: {
+            'Content-Type': object.ContentType || 'text/plain',
+          },
+        },
+      )
+      if (res.ok) {
+        toast.success('File saved successfully')
+        setTextContent(editContent)
+        setIsEditing(false)
+      } else {
+        const txt = await res.text()
+        toast.error(`Save failed: ${txt}`)
+      }
+    } catch (err) {
+      toast.error(`Save failed: ${err}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Sync scrolling of textarea and line numbers
+  const handleTextareaScroll = () => {
+    if (textareaRef.current && lineNumbersRef.current) {
+      lineNumbersRef.current.scrollTop = textareaRef.current.scrollTop
+    }
+  }
+
+  // Sync scrolling of read-only pre and line numbers
+  const handlePreviewScroll = () => {
+    if (previewScrollRef.current && lineNumbersRef.current) {
+      lineNumbersRef.current.scrollTop = previewScrollRef.current.scrollTop
+    }
+  }
+
+  const isEditable = kind === 'text' || kind === 'markdown' || kind === 'json'
+
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="sm:max-w-4xl max-h-[92vh] flex flex-col overflow-hidden p-0 gap-0">
@@ -124,17 +195,40 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
               <Badge variant="outline" className="text-[10px] uppercase font-bold shrink-0">
                 {kind}
               </Badge>
+              {isEditing && (
+                <Badge className="bg-amber-500 hover:bg-amber-500 text-white border-0 text-[9px] font-bold">
+                  Editing mode
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              {textContent && (
+              {isEditable && !isEditing && (
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleStartEdit}>
+                  <Edit3 className="w-3.5 h-3.5" /> Edit File
+                </Button>
+              )}
+              {isEditing && (
+                <>
+                  <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleCancelEdit} disabled={saving}>
+                    <X className="w-3.5 h-3.5" /> Cancel
+                  </Button>
+                  <Button size="sm" className="h-8 text-xs gap-1.5" onClick={handleSave} disabled={saving}>
+                    {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    Save to S3
+                  </Button>
+                </>
+              )}
+              {!isEditing && textContent && (
                 <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={handleCopy}>
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
                   Copy Content
                 </Button>
               )}
-              <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => onDownload(object.Key)}>
-                <Download className="w-3.5 h-3.5" /> Download
-              </Button>
+              {!isEditing && (
+                <Button variant="outline" size="sm" className="h-8 text-xs gap-1.5" onClick={() => onDownload(object.Key)}>
+                  <Download className="w-3.5 h-3.5" /> Download
+                </Button>
+              )}
             </div>
           </div>
         </DialogHeader>
@@ -175,7 +269,33 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
             </div>
           )}
 
-          {!loading && kind === 'json' && textContent !== null && (
+          {!loading && isEditing && (
+            <div className="border rounded-xl bg-slate-950 overflow-hidden">
+              <div className="flex font-mono text-xs max-h-[65vh] overflow-hidden">
+                {/* Editable Code Line Numbers */}
+                <div
+                  ref={lineNumbersRef}
+                  className="select-none text-right px-3 py-4 bg-slate-900 border-r border-slate-800 text-slate-600 font-bold shrink-0 min-w-10 overflow-hidden"
+                >
+                  {(editContent.split('\n')).map((_, idx) => (
+                    <div key={idx} className="h-5 leading-5">{idx + 1}</div>
+                  ))}
+                </div>
+                {/* Editable Code Area */}
+                <textarea
+                  ref={textareaRef}
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  onScroll={handleTextareaScroll}
+                  className="flex-1 p-4 py-4 bg-slate-950 text-emerald-300 font-mono text-xs leading-5 border-0 focus:outline-none focus:ring-0 resize-none h-[65vh] overflow-auto whitespace-pre tab-size-4"
+                  spellCheck={false}
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+
+          {!loading && !isEditing && kind === 'json' && textContent !== null && (
             <div className="relative border rounded-xl overflow-hidden bg-slate-950">
               <pre className="p-4 text-xs font-mono text-emerald-400 overflow-x-auto max-h-[65vh] leading-relaxed whitespace-pre">
                 {getFormattedJson()}
@@ -183,7 +303,7 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
             </div>
           )}
 
-          {!loading && kind === 'csv' && csvRows.length > 0 && (
+          {!loading && !isEditing && kind === 'csv' && csvRows.length > 0 && (
             <div className="border rounded-xl bg-card shadow-sm overflow-hidden">
               <div className="overflow-x-auto max-h-[65vh]">
                 <table className="w-full text-xs">
@@ -212,21 +332,28 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
             </div>
           )}
 
-          {!loading && (kind === 'text' || kind === 'markdown') && textContent !== null && (
+          {!loading && !isEditing && (kind === 'text' || kind === 'markdown') && textContent !== null && (
             <div className="border rounded-xl bg-slate-950 overflow-hidden">
-              <div className="flex font-mono text-xs max-h-[65vh] overflow-auto">
+              <div className="flex font-mono text-xs max-h-[65vh] overflow-hidden">
                 {/* Line Numbers Sidebar */}
-                <div className="select-none text-right px-3 py-4 bg-slate-900 border-r border-slate-800 text-slate-600 font-bold shrink-0 min-w-10">
+                <div
+                  ref={lineNumbersRef}
+                  className="select-none text-right px-3 py-4 bg-slate-900 border-r border-slate-800 text-slate-600 font-bold shrink-0 min-w-10 overflow-hidden"
+                >
                   {textContent.split('\n').map((_, idx) => (
                     <div key={idx} className="h-5 leading-5">{idx + 1}</div>
                   ))}
                 </div>
                 {/* Code Body */}
-                <pre className="flex-1 p-4 py-4 text-emerald-300 overflow-x-auto whitespace-pre leading-5">
+                <div
+                  ref={previewScrollRef}
+                  onScroll={handlePreviewScroll}
+                  className="flex-1 p-4 py-4 text-emerald-300 overflow-auto whitespace-pre leading-5 h-[65vh]"
+                >
                   {textContent.split('\n').map((line, idx) => (
                     <div key={idx} className="h-5 leading-5 hover:bg-slate-900/50 px-1">{line || ' '}</div>
                   ))}
-                </pre>
+                </div>
               </div>
             </div>
           )}

@@ -37,7 +37,7 @@ interface IamUser {
   accessKeys?: AccessKey[]
 }
 
-export function UsersPage() {
+function UsersPage() {
   const { authFetch } = useAuth()
   const [users, setUsers] = useState<Record<string, IamUser>>({})
   const [loading, setLoading] = useState(false)

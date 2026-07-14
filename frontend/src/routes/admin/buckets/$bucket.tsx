@@ -37,8 +37,17 @@ import { ObjectLockDialog } from '../../../components/bucket/ObjectLockDialog'
 import { VersionExplorerDialog } from '../../../components/bucket/VersionExplorerDialog'
 import { BucketSettingsDialog } from '../../../components/bucket/BucketSettingsDialog'
 
+interface BucketSearch {
+  prefix?: string
+}
+
 export const Route = createFileRoute('/admin/buckets/$bucket')({
   component: BucketDetailPage,
+  validateSearch: (search: Record<string, unknown>): BucketSearch => {
+    return {
+      prefix: typeof search.prefix === 'string' ? search.prefix : undefined,
+    }
+  },
 })
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
@@ -81,13 +90,16 @@ function BucketDetailPage() {
   const { activeTransfersCount, addTransfer, updateProgress, setError, setAbort, setPauseResume } =
     useTransfers()
 
-  const [currentPrefix, setCurrentPrefix] = useState('')
+  const search = Route.useSearch()
+  const searchPrefix = search.prefix || ''
+  const [currentPrefix, setCurrentPrefix] = useState(searchPrefix)
   const [allItems, setAllItems] = useState<(string | S3Object)[]>([])
   const [loading, setLoading] = useState(false)
   const [bucketInfo, setBucketInfo] = useState<BucketInfo | null>(null)
   const [users, setUsers] = useState<Record<string, any>>({})
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
+  const [dragActive, setDragActive] = useState(false)
 
   // Dialog states
   const [showCreateFolderDialog, setShowCreateFolderDialog] = useState(false)
@@ -130,14 +142,103 @@ function BucketDetailPage() {
   }, [bucketName, authFetch])
 
   useEffect(() => {
-    fetchObjects('')
+    setCurrentPrefix(searchPrefix)
+    fetchObjects(searchPrefix)
     fetchBucketInfo()
-  }, [bucketName])
+  }, [bucketName, searchPrefix])
 
   function navigateTo(prefix: string) {
     setCurrentPrefix(prefix)
     setSelectedItems(new Set())
     fetchObjects(prefix)
+  }
+
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true)
+    } else if (e.type === 'dragleave') {
+      setDragActive(false)
+    }
+  }
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+
+    const items = e.dataTransfer.items
+    if (!items || items.length === 0) return
+
+    const filesToUpload: { file: File; path: string }[] = []
+
+    const traverseEntry = async (entry: any, path = '') => {
+      if (entry.isFile) {
+        const file = await new Promise<File>((resolve, reject) => entry.file(resolve, reject))
+        filesToUpload.push({ file, path: path + file.name })
+      } else if (entry.isDirectory) {
+        const dirReader = entry.createReader()
+        const readAllEntries = async () => {
+          let allEntries: any[] = []
+          const readBatch = async (): Promise<any[]> => {
+            const batch = await new Promise<any[]>((resolve) => {
+              dirReader.readEntries(resolve)
+            })
+            if (batch.length > 0) {
+              allEntries = allEntries.concat(batch)
+              return readBatch()
+            }
+            return allEntries
+          }
+          return readBatch()
+        }
+        const children = await readAllEntries()
+        for (const child of children) {
+          await traverseEntry(child, path + entry.name + '/')
+        }
+      }
+    }
+
+    const promises = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind === 'file') {
+        const entry = item.webkitGetAsEntry()
+        if (entry) {
+          promises.push(traverseEntry(entry, ''))
+        }
+      }
+    }
+
+    await Promise.all(promises)
+
+    if (filesToUpload.length === 0) return
+
+    toast.info(`Starting upload of ${filesToUpload.length} file(s)...`)
+
+    for (const item of filesToUpload) {
+      const key = currentPrefix + item.path
+      const id = crypto.randomUUID()
+      addTransfer({ id, name: item.path, bucket: bucketName, type: 'upload', size: item.file.size })
+      try {
+        const res = await authFetch(
+          `${API_BASE}/admin/buckets/${bucketName}/objects/${encodeURIComponent(key)}`,
+          {
+            method: 'PUT',
+            body: item.file,
+            headers: { 'Content-Type': item.file.type || 'application/octet-stream' },
+          },
+        )
+        if (!res.ok) throw new Error(await res.text())
+        updateProgress(id, 100)
+      } catch (err) {
+        setError(id, String(err))
+      }
+    }
+
+    toast.success(`Upload completed.`)
+    await fetchObjects()
   }
 
   function navigateUp() {
@@ -444,7 +545,22 @@ function BucketDetailPage() {
       </header>
 
       {/* Main Table */}
-      <main className="flex-1 overflow-auto p-6">
+      <main
+        className="flex-1 overflow-auto p-6 relative"
+        onDragEnter={handleDrag}
+        onDragOver={handleDrag}
+        onDragLeave={handleDrag}
+        onDrop={handleDrop}
+      >
+        {dragActive && (
+          <div className="absolute inset-0 bg-primary/5 backdrop-blur-[2px] border-2 border-dashed border-primary/40 m-6 rounded-xl z-50 flex flex-col items-center justify-center pointer-events-none transition-all duration-200">
+            <div className="bg-background/95 p-6 rounded-2xl shadow-xl border flex flex-col items-center gap-3 animate-in zoom-in-95 duration-150">
+              <Upload className="w-10 h-10 text-primary animate-bounce" />
+              <p className="text-sm font-semibold tracking-tight">Drop files or folders to upload</p>
+              <p className="text-xs text-muted-foreground">Uploading directly to <span className="font-mono font-bold">{currentPrefix || '/'}</span></p>
+            </div>
+          </div>
+        )}
         <BucketObjectTable
           bucketName={bucketName}
           items={filteredItems}

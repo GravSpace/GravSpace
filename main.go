@@ -301,6 +301,7 @@ func main() {
 	admin.DELETE("/trash", adminHandler.DeleteTrashObject)
 	admin.DELETE("/trash-bulk", adminHandler.BulkDeleteTrashObjects)
 	admin.DELETE("/trash/empty", adminHandler.EmptyTrash)
+	admin.GET("/search", adminHandler.GlobalSearch)
 
 	// Restricted Admin Routes (IAM & System)
 	iam := admin.Group("", auth.AdminOnlyMiddleware)
