@@ -5,7 +5,7 @@ FROM oven/bun:1.3.14-alpine AS builder
 WORKDIR /app
 
 # Copy package files
-COPY package.json ./
+COPY package.json bun.lock ./
 
 # Install dependencies using Bun
 RUN bun install --no-audit
@@ -13,7 +13,10 @@ RUN bun install --no-audit
 # Copy source code
 COPY . .
 
-# Build the application using Bun
+# Generate routes first
+RUN bun run generate-routes
+
+# Build the application
 RUN bun run build
 
 # Runtime stage
@@ -28,8 +31,8 @@ RUN adduser -D -h /app -s /bin/sh appuser
 # Set working directory
 WORKDIR /app
 
-# Copy built application from builder
-COPY --from=builder --chown=appuser:appuser /app/.output ./.output
+# Copy built application and package.json
+COPY --from=builder --chown=appuser:appuser /app/dist ./dist
 COPY --from=builder --chown=appuser:appuser /app/package.json ./
 
 # Switch to non-root user
@@ -42,6 +45,6 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
     CMD bun -e "fetch('http://localhost:3000/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))" || exit 1
 
-# Run the application with dumb-init
+# Run the application using Bun
 ENTRYPOINT ["dumb-init", "--"]
 CMD ["bun", ".output/server/index.mjs"]

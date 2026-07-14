@@ -745,7 +745,11 @@ func (h *AdminHandler) GetBucketCors(c *gin.Context) {
 	bucket := c.Param("bucket")
 	config, err := h.Storage.GetBucketCors(bucket)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusOK, []interface{}{})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, config)
@@ -779,11 +783,15 @@ func (h *AdminHandler) GetBucketWebsite(c *gin.Context) {
 	bucket := c.Param("bucket")
 	config, err := h.Storage.GetBucketWebsite(bucket)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusOK, nil)
+			return
+		}
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
 	if config == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Website configuration not found"})
+		c.JSON(http.StatusOK, nil)
 		return
 	}
 	c.JSON(http.StatusOK, config)
@@ -817,7 +825,7 @@ func (h *AdminHandler) SetBucketSoftDelete(c *gin.Context) {
 	bucket := c.Param("bucket")
 	var req struct {
 		Enabled       bool `json:"enabled"`
-		RetentionDays int  `json:"json:"retention_days""`
+		RetentionDays int  `json:"retention_days"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("Soft delete bind error: %v", err)
