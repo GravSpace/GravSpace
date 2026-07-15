@@ -73,6 +73,8 @@ services:
     environment:
       - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-/api}
       - NUXT_BACKEND_URL=${NUXT_BACKEND_URL:-http://localhost:8080}
+      - VITE_API_BASE=${NUXT_PUBLIC_API_BASE:-/api}
+      - SERVER_URL=${NUXT_BACKEND_URL:-http://gravspace-backend:8080}
       - NODE_ENV=production
     depends_on:
       backend:

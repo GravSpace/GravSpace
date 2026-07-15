@@ -745,7 +745,11 @@ func (h *AdminHandler) GetBucketCors(c *gin.Context) {
 	bucket := c.Param("bucket")
 	config, err := h.Storage.GetBucketCors(bucket)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusOK, []interface{}{})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, config)
@@ -779,11 +783,15 @@ func (h *AdminHandler) GetBucketWebsite(c *gin.Context) {
 	bucket := c.Param("bucket")
 	config, err := h.Storage.GetBucketWebsite(bucket)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusOK, nil)
+			return
+		}
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
 	if config == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Website configuration not found"})
+		c.JSON(http.StatusOK, nil)
 		return
 	}
 	c.JSON(http.StatusOK, config)
@@ -817,7 +825,7 @@ func (h *AdminHandler) SetBucketSoftDelete(c *gin.Context) {
 	bucket := c.Param("bucket")
 	var req struct {
 		Enabled       bool `json:"enabled"`
-		RetentionDays int  `json:"json:"retention_days""`
+		RetentionDays int  `json:"retention_days"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		log.Printf("Soft delete bind error: %v", err)
@@ -1244,6 +1252,59 @@ func (h *AdminHandler) StreamAuditLogs(c *gin.Context) {
 			break
 		}
 	}
+}
+
+func (h *AdminHandler) GlobalSearch(c *gin.Context) {
+	query := c.Query("q")
+	if query == "" {
+		c.JSON(http.StatusOK, []interface{}{})
+		return
+	}
+
+	buckets, err := h.Storage.ListBuckets()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	type MatchedObject struct {
+		Bucket      string    `json:"Bucket"`
+		Key         string    `json:"Key"`
+		Size        int64     `json:"Size"`
+		ModTime     time.Time `json:"ModTime"`
+		ContentType string    `json:"ContentType"`
+	}
+
+	var results []MatchedObject
+
+	db := h.Storage.(*storage.FileStorage).DB
+	if db != nil {
+		for _, bucketName := range buckets {
+			// Query DB directly since it's super fast!
+			dbObjects, err := db.ListObjects(bucketName, "", query, 100)
+			if err == nil {
+				for _, o := range dbObjects {
+					// Skip directories
+					if o.ContentType != nil && *o.ContentType == "application/x-directory" {
+						continue
+					}
+					var ct string
+					if o.ContentType != nil {
+						ct = *o.ContentType
+					}
+					results = append(results, MatchedObject{
+						Bucket:      bucketName,
+						Key:         o.Key,
+						Size:        o.Size,
+						ModTime:     o.ModifiedAt,
+						ContentType: ct,
+					})
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, results)
 }
 
 func (h *AdminHandler) ListPresignedURLs(c *gin.Context) {
