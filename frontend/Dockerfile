@@ -32,7 +32,7 @@ RUN adduser -D -h /app -s /bin/sh appuser
 WORKDIR /app
 
 # Copy built application and package.json
-COPY --from=builder --chown=appuser:appuser /app/dist ./dist
+COPY --from=builder --chown=appuser:appuser /app/.output ./.output
 COPY --from=builder --chown=appuser:appuser /app/package.json ./
 
 # Switch to non-root user
