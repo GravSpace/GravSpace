@@ -42,7 +42,7 @@ export function PasswordOnboardingModal({ isOpen }: Props) {
       const res = await authFetch(
         `${API_BASE}/admin/users/${authState.username}/password`,
         {
-          method: 'PUT',
+          method: 'POST',
           body: JSON.stringify({ password: newPassword }) as unknown as BodyInit,
           headers: { 'Content-Type': 'application/json' },
         },
