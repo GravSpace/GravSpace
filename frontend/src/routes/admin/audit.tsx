@@ -8,6 +8,7 @@ import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Input } from '../../components/ui/input'
 import { useAuth } from '../../hooks/useAuth'
+import { getAuditStreamWsUrl } from '../../lib/utils'
 
 export const Route = createFileRoute('/admin/audit')({
   component: AuditPage,
@@ -98,10 +99,7 @@ function getActionStyle(action: string): string {
 }
 
 function buildWsUrl(token: string): string {
-  // VITE_WS_BASE points directly to the backend (e.g. ws://localhost:8080)
-  // The TanStack Start SSR proxy only handles HTTP — WebSocket upgrades
-  // must go straight to the backend port.
-  return `${WS_BASE}/admin/audit/stream?token=${encodeURIComponent(token)}`
+  return getAuditStreamWsUrl(token)
 }
 
 function AuditPage() {

@@ -26,6 +26,7 @@ import {
 import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { useAuth } from '../../hooks/useAuth'
+import { getAuditStreamWsUrl } from '../../lib/utils'
 
 export const Route = createFileRoute('/admin/dashboard')({
   component: DashboardPage,
@@ -88,21 +89,9 @@ function DashboardPage() {
   const connectWS = useCallback(() => {
     if (wsRef.current) wsRef.current.close()
     setWsStatus('connecting')
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const token = authState?.token || ''
-    let wsUrl = ''
-    if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
-      const host = API_BASE.replace(/^https?:\/\//, '').replace(/\/$/, '')
-      wsUrl = `${protocol}//${host}/admin/audit/stream`
-    } else {
-      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        wsUrl = `${protocol}//localhost:8080/admin/audit/stream`
-      } else {
-        const cleanBase = API_BASE.startsWith('/') ? API_BASE : `/${API_BASE}`
-        wsUrl = `${protocol}//${window.location.host}${cleanBase.replace(/\/$/, '')}/admin/audit/stream`
-      }
-    }
-    const ws = new WebSocket(`${wsUrl}?token=${encodeURIComponent(token)}`)
+    const wsUrl = getAuditStreamWsUrl(token)
+    const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     ws.onopen = () => setWsStatus('connected')
     ws.onmessage = (event) => {
