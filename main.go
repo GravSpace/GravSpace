@@ -180,7 +180,7 @@ func main() {
 	metrics.StartMetricsUpdater()
 
 	// Auth Routes
-	adminApp.POST("/login", func(c *gin.Context) {
+	handleLogin := func(c *gin.Context) {
 		var login struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -223,7 +223,10 @@ func main() {
 			"username":            user.Username,
 			"is_default_password": isDefaultPassword,
 		})
-	})
+	}
+
+	adminApp.POST("/login", handleLogin)
+	adminApp.POST("/api/login", handleLogin)
 
 	// JWT Middleware for Admin
 	jwtMid := func(c *gin.Context) {
