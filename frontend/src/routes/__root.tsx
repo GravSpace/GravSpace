@@ -5,6 +5,7 @@ import {
   Outlet,
 } from '@tanstack/react-router'
 import { Toaster } from '../components/ui/sonner'
+import { NotFound } from '../components/NotFound'
 
 import appCss from '../styles.css?url'
 import type { QueryClient } from '@tanstack/react-query'
@@ -33,6 +34,7 @@ export const Route = createRootRouteWithContext<MyRouterContext>()({
     ],
   }),
   component: RootDocument,
+  notFoundComponent: NotFound,
 })
 
 function RootDocument() {
