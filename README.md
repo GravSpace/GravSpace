@@ -13,6 +13,7 @@ High Performance S3 Compatible Object Storage focused on speed and simplicity.
 ## Table of Contents
 - [Quick Install](#quick-install)
 - [Getting Started](#getting-started)
+- [Running Turso Database Locally](#running-turso-database-locally)
 - [Docker Deployment](#docker-deployment)
 - [Environment Variables](#environment-variables)
 - [S3 CLI Usage](#s3-cli-usage)
@@ -44,20 +45,52 @@ The easiest way to deploy GravSpace is using pre-built images with Docker Compos
 
 #### Backend
 1. Ensure you have Go installed (compatible with 1.24+).
-2. Run the server:
+2. Start the local Turso database:
    ```bash
-   ./storage-server
+   tursodb --sync-server 127.0.0.1:8085 db/turso.db
+   ```
+3. In a new terminal window, run the server:
+   ```bash
+   go run main.go
+   # or build and run
+   go build -o storage-server main.go && ./storage-server
    ```
    The Admin API will start on `:8080` and S3 API on `:9001`.
 
 #### Frontend
-1. Ensure you have Node.js installed (v20+).
+1. Ensure you have Node.js / Bun installed.
 2. Navigate to the `frontend` directory.
 3. Install dependencies and run in dev mode:
    ```bash
-   npm install
-   npm run dev
+   bun install # or npm install
+   bun run dev # or npm run dev
    ```
+
+## Running Turso Database Locally
+
+By default, the GravSpace backend connects to a local Turso / sqld instance at `http://127.0.0.1:8085` or a local SQLite file.
+
+### Option 1: Using `tursodb` Sync Server (Recommended for Local Dev)
+Run `tursodb` to start the local Turso sync database server:
+```bash
+tursodb --sync-server 127.0.0.1:8085 db/turso.db
+```
+The backend will automatically connect to `http://127.0.0.1:8085` when `DATABASE_URL` is empty.
+
+### Option 2: Using Local SQLite File Directly
+If you prefer using a local SQLite file without running `tursodb`:
+Set `DATABASE_URL` in your `.env` file:
+```bash
+DATABASE_URL=file:./db/metadata.db
+```
+
+### Option 3: Using Remote Turso Cloud
+To connect to a cloud Turso database instance:
+Set the following in `.env`:
+```bash
+DATABASE_URL=libsql://[your-database].turso.io
+DATABASE_AUTH_TOKEN=your-turso-auth-token
+```
 
 ## Docker Deployment
 
