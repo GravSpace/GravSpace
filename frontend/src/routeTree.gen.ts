@@ -13,6 +13,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminIndexRouteImport } from './routes/admin/index'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminTrashRouteImport } from './routes/admin/trash'
@@ -43,6 +44,11 @@ const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRoute,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
@@ -108,12 +114,12 @@ export interface FileRoutesByFullPath {
   '/admin/trash': typeof AdminTrashRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/$': typeof ApiSplatRoute
+  '/admin/': typeof AdminIndexRoute
   '/admin/buckets/$bucket': typeof AdminBucketsBucketRoute
   '/admin/buckets/': typeof AdminBucketsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteWithChildren
   '/health': typeof HealthRoute
   '/login': typeof LoginRoute
   '/admin/audit': typeof AdminAuditRoute
@@ -124,6 +130,7 @@ export interface FileRoutesByTo {
   '/admin/trash': typeof AdminTrashRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/$': typeof ApiSplatRoute
+  '/admin': typeof AdminIndexRoute
   '/admin/buckets/$bucket': typeof AdminBucketsBucketRoute
   '/admin/buckets': typeof AdminBucketsIndexRoute
 }
@@ -141,6 +148,7 @@ export interface FileRoutesById {
   '/admin/trash': typeof AdminTrashRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/$': typeof ApiSplatRoute
+  '/admin/': typeof AdminIndexRoute
   '/admin/buckets/$bucket': typeof AdminBucketsBucketRoute
   '/admin/buckets/': typeof AdminBucketsIndexRoute
 }
@@ -159,12 +167,12 @@ export interface FileRouteTypes {
     | '/admin/trash'
     | '/admin/users'
     | '/api/$'
+    | '/admin/'
     | '/admin/buckets/$bucket'
     | '/admin/buckets/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/admin'
     | '/health'
     | '/login'
     | '/admin/audit'
@@ -175,6 +183,7 @@ export interface FileRouteTypes {
     | '/admin/trash'
     | '/admin/users'
     | '/api/$'
+    | '/admin'
     | '/admin/buckets/$bucket'
     | '/admin/buckets'
   id:
@@ -191,6 +200,7 @@ export interface FileRouteTypes {
     | '/admin/trash'
     | '/admin/users'
     | '/api/$'
+    | '/admin/'
     | '/admin/buckets/$bucket'
     | '/admin/buckets/'
   fileRoutesById: FileRoutesById
@@ -232,6 +242,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/api/$': {
       id: '/api/$'
@@ -314,6 +331,7 @@ interface AdminRouteChildren {
   AdminSettingsRoute: typeof AdminSettingsRoute
   AdminTrashRoute: typeof AdminTrashRoute
   AdminUsersRoute: typeof AdminUsersRoute
+  AdminIndexRoute: typeof AdminIndexRoute
   AdminBucketsBucketRoute: typeof AdminBucketsBucketRoute
   AdminBucketsIndexRoute: typeof AdminBucketsIndexRoute
 }
@@ -326,6 +344,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminSettingsRoute: AdminSettingsRoute,
   AdminTrashRoute: AdminTrashRoute,
   AdminUsersRoute: AdminUsersRoute,
+  AdminIndexRoute: AdminIndexRoute,
   AdminBucketsBucketRoute: AdminBucketsBucketRoute,
   AdminBucketsIndexRoute: AdminBucketsIndexRoute,
 }

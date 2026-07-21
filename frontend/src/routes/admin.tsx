@@ -8,11 +8,9 @@ import { SidebarProvider, SidebarInset } from '../components/ui/sidebar'
 
 export const Route = createFileRoute('/admin')({
   beforeLoad: () => {
-    if (typeof window !== 'undefined') {
-      const auth = getAuthState()
-      if (!auth.isAuthenticated) {
-        throw redirect({ to: '/login' })
-      }
+    const auth = getAuthState()
+    if (!auth.isAuthenticated) {
+      throw redirect({ to: '/login' })
     }
   },
   component: AdminLayout,

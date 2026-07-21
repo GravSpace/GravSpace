@@ -24,10 +24,8 @@ import {
 
 export const Route = createFileRoute('/login')({
   beforeLoad: () => {
-    if (typeof window !== 'undefined') {
-      if (getAuthState().isAuthenticated) {
-        throw redirect({ to: '/admin/dashboard' })
-      }
+    if (getAuthState().isAuthenticated) {
+      throw redirect({ to: '/admin/dashboard' })
     }
   },
   component: LoginPage,
