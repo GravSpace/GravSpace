@@ -174,6 +174,10 @@ type Storage interface {
 	GetGlobalStats() (count int, size int64, err error)
 	GetBucketStats(bucket string) (count int, size int64, err error)
 	GetContentTypeBreakdown() ([]*database.ContentTypeBreakdown, error)
+
+	// Sync
+	SyncBucket(bucket string) (*SyncResult, error)
+	SyncAllBuckets() (*SyncResult, error)
 }
 
 // FileStorage implements Storage using the local filesystem
@@ -1185,6 +1189,8 @@ func (s *FileStorage) DeleteTrashFilesystem(bucket, key, versionID string) error
 }
 
 func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]Object, []string, error) {
+	prefix = strings.TrimPrefix(prefix, "/")
+
 	// Try cache first (only if no search query)
 	if search == "" && s.Cache != nil {
 		cacheKey := cache.ObjectListKey(bucket, prefix)
@@ -1197,19 +1203,43 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]O
 		}
 	}
 
-	// Try database first if available - it's much faster
+	var objects []Object
+	var commonPrefixes []string
+	seenPrefixes := make(map[string]bool)
+	seenObjects := make(map[string]bool)
+
+	// 1. Query database records
 	if s.DB != nil {
-		// Use a high limit for now or implement pagination
 		dbObjects, err := s.DB.ListObjects(bucket, prefix, search, 10000)
 		if err == nil {
-			var objects []Object
-			var commonPrefixes []string
-			seenPrefixes := make(map[string]bool)
-
 			for _, o := range dbObjects {
 				relKey := o.Key
 				if prefix != "" && !strings.HasPrefix(relKey, prefix) {
 					continue
+				}
+
+				// Check if this is a folder record
+				isFolder := (o.ContentType != nil && *o.ContentType == "application/x-directory") ||
+					o.VersionID == "folder" ||
+					strings.HasSuffix(o.Key, "/")
+
+				if isFolder {
+					normalizedFolder := strings.TrimSuffix(relKey, "/") + "/"
+					if prefix != "" && !strings.HasPrefix(normalizedFolder, prefix) {
+						continue
+					}
+					sub := normalizedFolder[len(prefix):]
+					if delimiter != "" {
+						idx := strings.Index(sub, delimiter)
+						if idx != -1 {
+							cp := prefix + sub[:idx+len(delimiter)]
+							if !seenPrefixes[cp] && cp != prefix {
+								commonPrefixes = append(commonPrefixes, cp)
+								seenPrefixes[cp] = true
+							}
+							continue
+						}
+					}
 				}
 
 				subKey := relKey[len(prefix):]
@@ -1217,7 +1247,7 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]O
 					idx := strings.Index(subKey, delimiter)
 					if idx != -1 {
 						cp := prefix + subKey[:idx+len(delimiter)]
-						if !seenPrefixes[cp] {
+						if !seenPrefixes[cp] && cp != prefix {
 							commonPrefixes = append(commonPrefixes, cp)
 							seenPrefixes[cp] = true
 						}
@@ -1225,142 +1255,125 @@ func (s *FileStorage) ListObjects(bucket, prefix, delimiter, search string) ([]O
 					}
 				}
 
-				obj := Object{
-					Key:       o.Key,
-					VersionID: o.VersionID,
-					Size:      o.Size,
-					IsLatest:  o.IsLatest,
-					ModTime:   o.ModifiedAt,
+				if !seenObjects[o.Key] {
+					seenObjects[o.Key] = true
+					obj := Object{
+						Key:       o.Key,
+						VersionID: o.VersionID,
+						Size:      o.Size,
+						IsLatest:  o.IsLatest,
+						ModTime:   o.ModifiedAt,
+					}
+					if o.LockMode != nil {
+						obj.LockMode = *o.LockMode
+					}
+					obj.RetainUntilDate = o.RetainUntilDate
+					obj.LegalHold = o.LegalHold
+					if o.EncryptionType != nil {
+						obj.EncryptionType = *o.EncryptionType
+					}
+					if o.ContentType != nil {
+						obj.ContentType = *o.ContentType
+					}
+					if o.CompressionType != nil {
+						obj.CompressionType = *o.CompressionType
+					}
+					if o.ContentHash != nil {
+						obj.ContentHash = *o.ContentHash
+					}
+					if o.OriginalSize != nil {
+						obj.OriginalSize = *o.OriginalSize
+					}
+					objects = append(objects, obj)
 				}
-				if o.LockMode != nil {
-					obj.LockMode = *o.LockMode
-				}
-				obj.RetainUntilDate = o.RetainUntilDate
-				obj.LegalHold = o.LegalHold
-				if o.EncryptionType != nil {
-					obj.EncryptionType = *o.EncryptionType
-				}
-				if o.ContentType != nil {
-					obj.ContentType = *o.ContentType
-				}
-				if o.CompressionType != nil {
-					obj.CompressionType = *o.CompressionType
-				}
-				if o.ContentHash != nil {
-					obj.ContentHash = *o.ContentHash
-				}
-				if o.OriginalSize != nil {
-					obj.OriginalSize = *o.OriginalSize
-				}
-				objects = append(objects, obj)
 			}
-
-			// Cache the results (only if no search query)
-			if search == "" && s.Cache != nil {
-				cacheKey := cache.ObjectListKey(bucket, prefix)
-				s.Cache.Set(cacheKey, struct {
-					Objects        []Object
-					CommonPrefixes []string
-				}{objects, commonPrefixes}, 5*time.Minute)
-			}
-
-			return objects, commonPrefixes, nil
 		}
 	}
 
-	// Fallback to filesystem - use ReadDir instead of Walk if possible for performance
+	// 2. Discover any unindexed filesystem directories/files on disk directly
 	bucketDir := filepath.Join(s.Root, bucket)
-	objects := []Object{}
-	commonPrefixes := []string{}
-
-	// If recursive walk is needed (delimiter="") we use Walk
-	if delimiter == "" {
-		err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || path == bucketDir {
-				return err
-			}
-			rel, _ := filepath.Rel(bucketDir, path)
-			if info.IsDir() {
-				// Object directory detection (has 'latest')
-				if _, err := os.Stat(filepath.Join(path, "latest")); err == nil {
-					data, _ := os.ReadFile(filepath.Join(path, "latest"))
-					vid := string(data)
-					vinfo, _ := os.Stat(filepath.Join(path, vid))
-					objects = append(objects, Object{
-						Key:       rel,
-						VersionID: vid,
-						Size:      vinfo.Size(),
-						IsLatest:  true,
-						ModTime:   vinfo.ModTime(),
-					})
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			// Legacy file
-			if filepath.Base(path) != "latest" && !strings.Contains(path, "/.uploads/") {
-				objects = append(objects, Object{
-					Key:       rel,
-					VersionID: "legacy",
-					Size:      info.Size(),
-					IsLatest:  true,
-					ModTime:   info.ModTime(),
-				})
-			}
-			return nil
-		})
-		return objects, commonPrefixes, err
-	}
-
-	// For specific prefix with delimiter, only read the relevant directory
 	searchDir := filepath.Join(bucketDir, prefix)
-	// Truncate to the nearest directory if prefix points to a file-like path part
-	if !strings.HasSuffix(prefix, "/") && prefix != "" {
-		searchDir = filepath.Dir(searchDir)
-	}
+	if search == "" {
+		if entries, err := os.ReadDir(searchDir); err == nil {
+			needsSync := false
+			for _, entry := range entries {
+				name := entry.Name()
+				if strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") || name == "latest" {
+					continue
+				}
 
-	entries, err := os.ReadDir(searchDir)
-	if err != nil {
-		return nil, nil, nil // Return empty if dir doesn't exist
-	}
-
-	for _, entry := range entries {
-		name := entry.Name()
-		if name == "latest" || name == ".uploads" || name == ".versions" {
-			continue
-		}
-
-		relPath := filepath.Join(prefix, name)
-		if !strings.HasPrefix(relPath, prefix) {
-			continue
-		}
-
-		if entry.IsDir() {
-			// Check if it's an object dir
-			if _, err := os.Stat(filepath.Join(searchDir, name, "latest")); err == nil {
-				data, _ := os.ReadFile(filepath.Join(searchDir, name, "latest"))
-				vid := string(data)
-				vinfo, _ := entry.Info()
-				objects = append(objects, Object{
-					Key:       relPath,
-					VersionID: vid,
-					Size:      vinfo.Size(),
-					IsLatest:  true,
-					ModTime:   vinfo.ModTime(),
-				})
-			} else {
-				commonPrefixes = append(commonPrefixes, relPath+"/")
+				itemRel := filepath.ToSlash(filepath.Join(prefix, name))
+				if entry.IsDir() {
+					latestFile := filepath.Join(searchDir, name, "latest")
+					if _, err := os.Stat(latestFile); err == nil {
+						// Versioned object on disk
+						if !seenObjects[itemRel] {
+							data, _ := os.ReadFile(latestFile)
+							vid := strings.TrimSpace(string(data))
+							vinfo, _ := os.Stat(filepath.Join(searchDir, name, vid))
+							var size int64
+							modTime := time.Now()
+							if vinfo != nil {
+								size = vinfo.Size()
+								modTime = vinfo.ModTime()
+							}
+							seenObjects[itemRel] = true
+							objects = append(objects, Object{
+								Key:       itemRel,
+								VersionID: vid,
+								Size:      size,
+								IsLatest:  true,
+								ModTime:   modTime,
+							})
+							needsSync = true
+						}
+					} else {
+						// Folder on disk
+						cp := itemRel + "/"
+						if !seenPrefixes[cp] && cp != prefix {
+							commonPrefixes = append(commonPrefixes, cp)
+							seenPrefixes[cp] = true
+							needsSync = true
+						}
+					}
+				} else {
+					// Plain file on disk
+					if !seenObjects[itemRel] {
+						info, _ := entry.Info()
+						var size int64
+						modTime := time.Now()
+						if info != nil {
+							size = info.Size()
+							modTime = info.ModTime()
+						}
+						seenObjects[itemRel] = true
+						objects = append(objects, Object{
+							Key:       itemRel,
+							VersionID: "simple",
+							Size:      size,
+							IsLatest:  true,
+							ModTime:   modTime,
+						})
+						needsSync = true
+					}
+				}
 			}
-		} else {
-			info, _ := entry.Info()
-			objects = append(objects, Object{
-				Key:       relPath,
-				VersionID: "legacy",
-				Size:      info.Size(),
-				IsLatest:  true,
-				ModTime:   info.ModTime(),
-			})
+
+			if needsSync && s.SyncWorker != nil {
+				go func() {
+					_, _ = s.SyncWorker.SyncBucket(bucket)
+				}()
+			}
 		}
+	}
+
+	// Cache the results (only if no search query)
+	if search == "" && s.Cache != nil {
+		cacheKey := cache.ObjectListKey(bucket, prefix)
+		s.Cache.Set(cacheKey, struct {
+			Objects        []Object
+			CommonPrefixes []string
+		}{objects, commonPrefixes}, 10*time.Second)
 	}
 
 	return objects, commonPrefixes, nil
@@ -2092,5 +2105,19 @@ func (s *FileStorage) DeleteReplicationRule(id int64) error {
 		return fmt.Errorf("database not available")
 	}
 	return s.DB.DeleteReplicationRule(id)
+}
+
+func (s *FileStorage) SyncBucket(bucket string) (*SyncResult, error) {
+	if s.SyncWorker != nil {
+		return s.SyncWorker.SyncBucket(bucket)
+	}
+	return nil, fmt.Errorf("sync worker is not initialized")
+}
+
+func (s *FileStorage) SyncAllBuckets() (*SyncResult, error) {
+	if s.SyncWorker != nil {
+		return s.SyncWorker.SyncAllBuckets()
+	}
+	return nil, fmt.Errorf("sync worker is not initialized")
 }
 

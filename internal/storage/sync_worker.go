@@ -1,10 +1,13 @@
 package storage
 
 import (
+	"fmt"
 	"log"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GravSpace/GravSpace/internal/cache"
@@ -12,14 +15,25 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// SyncResult contains the statistics of a synchronization operation
+type SyncResult struct {
+	Bucket   string `json:"bucket,omitempty"`
+	Synced   int    `json:"synced"`
+	Errors   int    `json:"errors"`
+	Pruned   int    `json:"pruned"`
+	Duration string `json:"duration"`
+}
+
 // SyncWorker handles periodic and event-driven filesystem-to-database synchronization
 type SyncWorker struct {
-	storage    *FileStorage
-	interval   time.Duration
-	stopChan   chan bool
-	watcher    *fsnotify.Watcher
-	debounceMs int
-	dirtyPaths map[string]time.Time
+	storage     *FileStorage
+	interval    time.Duration
+	stopChan    chan bool
+	watcher     *fsnotify.Watcher
+	debounceMs  int
+	dirtyPaths  map[string]time.Time
+	mu          sync.Mutex
+	activeSyncs map[string]bool // bucket -> bool, "*" for all buckets
 }
 
 // NewSyncWorker creates a new sync worker with 2s default debouncing
@@ -30,12 +44,13 @@ func NewSyncWorker(storage *FileStorage, interval time.Duration) *SyncWorker {
 	}
 
 	return &SyncWorker{
-		storage:    storage,
-		interval:   interval,
-		stopChan:   make(chan bool),
-		watcher:    watcher,
-		debounceMs: 2000,
-		dirtyPaths: make(map[string]time.Time),
+		storage:     storage,
+		interval:    interval,
+		stopChan:    make(chan bool),
+		watcher:     watcher,
+		debounceMs:  2000,
+		dirtyPaths:  make(map[string]time.Time),
+		activeSyncs: make(map[string]bool),
 	}
 }
 
@@ -52,6 +67,33 @@ func (sw *SyncWorker) Stop() {
 	sw.stopChan <- true
 }
 
+func (sw *SyncWorker) tryStartSync(bucket string) bool {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+
+	if sw.activeSyncs["*"] {
+		return false // Full sync already in progress
+	}
+	if bucket == "*" {
+		if len(sw.activeSyncs) > 0 {
+			return false // Specific bucket sync already in progress
+		}
+		sw.activeSyncs["*"] = true
+		return true
+	}
+	if sw.activeSyncs[bucket] {
+		return false // This bucket sync already in progress
+	}
+	sw.activeSyncs[bucket] = true
+	return true
+}
+
+func (sw *SyncWorker) finishSync(bucket string) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	delete(sw.activeSyncs, bucket)
+}
+
 func (sw *SyncWorker) run() {
 	// Start watching root and buckets
 	sw.setupWatcher()
@@ -62,14 +104,18 @@ func (sw *SyncWorker) run() {
 	debounceTicker := time.NewTicker(500 * time.Millisecond)
 	defer debounceTicker.Stop()
 
-	// Run initial sync
-	sw.syncFilesystemToDatabase()
+	// Initial sync runs asynchronously in background so it never blocks startup
+	go func() {
+		_, _ = sw.SyncAllBuckets()
+	}()
 
 	for {
 		select {
 		case <-ticker.C:
-			// Full periodic sync fallback
-			sw.syncFilesystemToDatabase()
+			// Full periodic sync runs asynchronously in background
+			go func() {
+				_, _ = sw.SyncAllBuckets()
+			}()
 
 		case <-debounceTicker.C:
 			// Check for debounced paths
@@ -109,20 +155,13 @@ func (sw *SyncWorker) setupWatcher() {
 		return
 	}
 
-	// Watch root directory for new buckets
-	sw.watcher.Add(sw.storage.Root)
-
-	// Recursively watch all buckets
-	buckets, err := os.ReadDir(sw.storage.Root)
-	if err != nil {
-		return
+	// Watch the root storage directory
+	if err := sw.watcher.Add(sw.storage.Root); err != nil {
+		log.Printf("Failed to watch storage root: %v\n", err)
 	}
 
-	for _, d := range buckets {
-		if d.IsDir() && !strings.HasPrefix(d.Name(), ".") {
-			sw.watchRecursive(filepath.Join(sw.storage.Root, d.Name()))
-		}
-	}
+	// Watch all existing buckets and subdirectories recursively
+	sw.watchRecursive(sw.storage.Root)
 }
 
 func (sw *SyncWorker) watchRecursive(path string) {
@@ -130,71 +169,138 @@ func (sw *SyncWorker) watchRecursive(path string) {
 		return
 	}
 
-	err := filepath.Walk(path, func(walkPath string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(path, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
 		if info.IsDir() {
-			// Skip special dirs
+			// Skip internal/hidden directories
 			name := info.Name()
-			if name == ".versions" || name == ".trash" || name == ".uploads" || strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") {
+			if strings.HasPrefix(name, ".") && walkPath != sw.storage.Root {
 				return filepath.SkipDir
 			}
-			sw.watcher.Add(walkPath)
+			_ = sw.watcher.Add(walkPath)
 		}
 		return nil
 	})
-
-	if err != nil {
-		log.Printf("Watcher recursive add error for %s: %v\n", path, err)
-	}
 }
 
 func (sw *SyncWorker) markDirty(path string) {
+	// Skip internal directories like .cas, .trash
+	rel, err := filepath.Rel(sw.storage.Root, path)
+	if err == nil && (strings.HasPrefix(rel, ".") || strings.Contains(rel, "/.")) {
+		return
+	}
+
+	sw.mu.Lock()
 	sw.dirtyPaths[path] = time.Now()
+	sw.mu.Unlock()
 }
 
 func (sw *SyncWorker) processDirtyPaths() {
-	if len(sw.dirtyPaths) == 0 {
-		return
-	}
-
 	now := time.Now()
-	threshold := time.Duration(sw.debounceMs) * time.Millisecond
+	debounceDuration := time.Duration(sw.debounceMs) * time.Millisecond
 
-	for path, lastEvent := range sw.dirtyPaths {
-		if now.Sub(lastEvent) >= threshold {
-			// Trigger sync for this specific component
-			log.Printf("Event-driven sync triggered for: %s\n", path)
+	bucketsToSync := make(map[string]bool)
+
+	sw.mu.Lock()
+	for path, timestamp := range sw.dirtyPaths {
+		if now.Sub(timestamp) >= debounceDuration {
 			delete(sw.dirtyPaths, path)
 
-			// Simple approach: run the full sync logic but it will be faster
-			// since it's targeted or just rely on the existing syncFilesystemToDatabase
-			// which is already quite fast once it skips unchanged files.
-			// For now, let's just trigger a full sync to ensure consistency.
-			sw.syncFilesystemToDatabase()
-			break // Only trigger once per cycle to avoid overlaps
+			// Extract affected bucket from path
+			rel, err := filepath.Rel(sw.storage.Root, path)
+			if err == nil && rel != "." && !strings.HasPrefix(rel, ".") {
+				parts := strings.Split(filepath.ToSlash(rel), "/")
+				if len(parts) > 0 && parts[0] != "" {
+					bucketsToSync[parts[0]] = true
+				}
+			}
 		}
+	}
+	sw.mu.Unlock()
+
+	// Sync each affected bucket in non-blocking background goroutines
+	for b := range bucketsToSync {
+		bucket := b
+		go func() {
+			log.Printf("Event-driven sync triggered for bucket: %s\n", bucket)
+			_, _ = sw.SyncBucket(bucket)
+		}()
 	}
 }
 
-func (sw *SyncWorker) syncFilesystemToDatabase() {
+// SyncBucket synchronizes a single bucket from filesystem to database fast & non-blockingly
+func (sw *SyncWorker) SyncBucket(bucketName string) (*SyncResult, error) {
 	if sw.storage.DB == nil {
-		return
+		return nil, fmt.Errorf("database not available")
 	}
 
-	log.Println("Starting filesystem sync...")
+	if !sw.tryStartSync(bucketName) {
+		return &SyncResult{
+			Bucket:   bucketName,
+			Duration: "in-progress",
+		}, nil
+	}
+	defer sw.finishSync(bucketName)
+
+	startTime := time.Now()
+	bucketPath := filepath.Join(sw.storage.Root, bucketName)
+	if fi, err := os.Stat(bucketPath); err != nil || !fi.IsDir() {
+		return nil, fmt.Errorf("bucket directory '%s' does not exist on filesystem", bucketName)
+	}
+
+	// Ensure bucket exists in database
+	exists, _ := sw.storage.DB.BucketExists(bucketName)
+	if !exists {
+		if err := sw.storage.DB.CreateBucket(bucketName, "admin"); err != nil {
+			return nil, fmt.Errorf("failed to create bucket in database: %w", err)
+		}
+	}
+
+	synced, errors, pruned := sw.syncSingleBucket(bucketName)
+
+	// Invalidate cache for this bucket
+	if sw.storage.Cache != nil {
+		sw.storage.Cache.DeleteByPrefix("objects:" + bucketName + ":")
+		sw.storage.Cache.Delete(cache.BucketListKey())
+	}
+
+	return &SyncResult{
+		Bucket:   bucketName,
+		Synced:   synced,
+		Errors:   errors,
+		Pruned:   pruned,
+		Duration: time.Since(startTime).Round(time.Millisecond).String(),
+	}, nil
+}
+
+// SyncAllBuckets synchronizes all buckets from filesystem to database
+func (sw *SyncWorker) SyncAllBuckets() (*SyncResult, error) {
+	if sw.storage.DB == nil {
+		return nil, fmt.Errorf("database not available")
+	}
+
+	if !sw.tryStartSync("*") {
+		return &SyncResult{
+			Duration: "in-progress",
+		}, nil
+	}
+	defer sw.finishSync("*")
+
+	log.Println("Starting full filesystem sync...")
 	startTime := time.Now()
 
-	synced := 0
-	errors := 0
+	totalSynced := 0
+	totalErrors := 0
+	totalPruned := 0
 	affectedBuckets := make(map[string]bool)
 
 	// Walk through all buckets
 	buckets, err := os.ReadDir(sw.storage.Root)
 	if err != nil {
 		log.Printf("Sync error reading root: %v\n", err)
-		return
+		return nil, fmt.Errorf("failed to read storage root: %w", err)
 	}
 
 	for _, bucketEntry := range buckets {
@@ -207,85 +313,94 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 		// Ensure bucket exists in database
 		exists, _ := sw.storage.DB.BucketExists(bucketName)
 		if !exists {
-			sw.storage.DB.CreateBucket(bucketName, "admin")
+			_ = sw.storage.DB.CreateBucket(bucketName, "admin")
 		}
 
-		// Sync objects in this bucket
-		bucketPath := filepath.Join(sw.storage.Root, bucketName)
-		err := filepath.Walk(bucketPath, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
+		synced, errs, pruned := sw.syncSingleBucket(bucketName)
+		totalSynced += synced
+		totalErrors += errs
+		totalPruned += pruned
+		affectedBuckets[bucketName] = true
+	}
+
+	// Prune orphaned buckets (directories that were removed on disk)
+	sw.pruneOrphanedBuckets()
+
+	// Invalidate cache for affected buckets
+	if sw.storage.Cache != nil {
+		for bucket := range affectedBuckets {
+			sw.storage.Cache.DeleteByPrefix("objects:" + bucket + ":")
+		}
+		sw.storage.Cache.Delete(cache.BucketListKey())
+	}
+
+	duration := time.Since(startTime).Round(time.Millisecond)
+	log.Printf("Filesystem sync completed: %d objects synced, %d errors, %d pruned in %v\n", totalSynced, totalErrors, totalPruned, duration)
+
+	return &SyncResult{
+		Synced:   totalSynced,
+		Errors:   totalErrors,
+		Pruned:   totalPruned,
+		Duration: duration.String(),
+	}, nil
+}
+
+// syncSingleBucket performs fast in-memory batch synchronization and pruning for a single bucket
+func (sw *SyncWorker) syncSingleBucket(bucketName string) (int, int, int) {
+	bucketPath := filepath.Join(sw.storage.Root, bucketName)
+	synced := 0
+	errors := 0
+	pruned := 0
+
+	// 1. Batch load all existing objects for this bucket in ONE query
+	existingObjs, err := sw.storage.DB.ListAllObjectsByBucket(bucketName)
+	if err != nil {
+		log.Printf("Sync error prefetching objects for bucket %s: %v\n", bucketName, err)
+		existingObjs = nil
+	}
+
+	dbMap := make(map[string]*database.ObjectRow, len(existingObjs))
+	for _, obj := range existingObjs {
+		dbMap[obj.Key+"\x00"+obj.VersionID] = obj
+	}
+	visitedKeys := make(map[string]bool, len(existingObjs))
+
+	// 2. Walk filesystem and compare directly against in-memory map
+	_ = filepath.Walk(bucketPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+
+		// Skip bucket root
+		if path == bucketPath {
+			return nil
+		}
+
+		// Skip hidden files/directories (like .trash, .cas, .tmp-*, etc.)
+		name := info.Name()
+		if strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") {
+			if info.IsDir() {
+				return filepath.SkipDir
 			}
+			return nil
+		}
 
-			// Skip the bucket root itself
-			if path == bucketPath {
-				return nil
-			}
+		relPath, rErr := filepath.Rel(bucketPath, path)
+		if rErr != nil || relPath == "." {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
 
-			// Get relative key
-			relPath, _ := filepath.Rel(bucketPath, path)
-			if relPath == "." {
-				return nil
-			}
-
-			// Handle regular files (non-versioned)
-			if !info.IsDir() {
-				// Skip special files
-				name := info.Name()
-				if name == "latest" || strings.HasPrefix(name, ".") || strings.Contains(name, ".tmp-") {
-					return nil
-				}
-
-				// Check if object exists in database (including deleted)
-				dbObj, err := sw.storage.DB.GetObjectIncludeDeleted(bucketName, relPath, "simple")
-				if err != nil {
-					log.Printf("Sync error checking object %s in DB: %v\n", relPath, err)
-					errors++
-					return nil
-				}
-
-				if dbObj == nil {
-					// Object not in database, add it
-					contentType := "application/octet-stream"
-					objectRow := &database.ObjectRow{
-						Bucket:      bucketName,
-						Key:         relPath,
-						VersionID:   "simple",
-						Size:        info.Size(),
-						ETag:        &relPath,
-						ContentType: &contentType,
-						IsLatest:    true,
-					}
-					_, err := sw.storage.DB.CreateObject(objectRow)
-					if err == nil {
-						synced++
-						affectedBuckets[bucketName] = true
-					} else {
-						log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
-						errors++
-					}
-				} else if dbObj.DeletedAt != nil {
-					// Object is marked as deleted but file exists in bucket, un-delete it
-					err := sw.storage.DB.RestoreObject(bucketName, relPath, "simple")
-					if err == nil {
-						synced++
-						affectedBuckets[bucketName] = true
-						log.Printf("Ghost object detected: un-deleted %s/%s\n", bucketName, relPath)
-					} else {
-						log.Printf("Sync error restoring ghost object %s: %v\n", relPath, err)
-						errors++
-					}
-				}
-				return nil
-			}
-
-			// Handle versioned objects or organizational directories
+		// Handle directories
+		if info.IsDir() {
 			latestPath := filepath.Join(path, "latest")
 			if _, err := os.Stat(latestPath); err != nil {
-				// This is a directory but not a versioned object container.
-				// Index it as a folder placeholder if it's not a special dir.
+				// Directory placeholder
 				folderKey := relPath + "/"
-				dbObj, _ := sw.storage.DB.GetObjectIncludeDeleted(bucketName, folderKey, "folder")
+				mapKey := folderKey + "\x00folder"
+				visitedKeys[mapKey] = true
+
+				dbObj := dbMap[mapKey]
 				if dbObj == nil {
 					contentType := "application/x-directory"
 					objectRow := &database.ObjectRow{
@@ -296,87 +411,70 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 						IsLatest:    true,
 						ContentType: &contentType,
 					}
-					sw.storage.DB.CreateObject(objectRow)
+					_, err := sw.storage.DB.CreateObject(objectRow)
+					if err == nil {
+						synced++
+						log.Printf("Indexed folder placeholder: %s/%s\n", bucketName, folderKey)
+					} else {
+						errors++
+					}
+				} else if dbObj.DeletedAt != nil {
+					_ = sw.storage.DB.RestoreObject(bucketName, folderKey, "folder")
 					synced++
-					affectedBuckets[bucketName] = true
-					log.Printf("Indexed folder placeholder: %s/%s\n", bucketName, folderKey)
+					log.Printf("Restored folder placeholder: %s/%s\n", bucketName, folderKey)
 				}
 				return nil
 			}
 
-			// Read latest version
+			// Versioned container with "latest" file
 			versionData, err := os.ReadFile(latestPath)
 			if err != nil {
-				log.Printf("Sync error reading latest for %s: %v\n", relPath, err)
 				errors++
 				return nil
 			}
-			versionID := string(versionData)
-
-			// Get file info
+			versionID := strings.TrimSpace(string(versionData))
 			versionPath := filepath.Join(path, versionID)
 			versionInfo, err := os.Stat(versionPath)
 			if err != nil {
 				if os.IsNotExist(err) {
-					log.Printf("Warning: Latest version %s for %s missing. Attempting repair...", versionID, relPath)
-
 					entries, readErr := os.ReadDir(path)
 					if readErr == nil {
 						var newestFile os.FileInfo
 						var newestName string
-
 						for _, entry := range entries {
 							if entry.IsDir() || entry.Name() == "latest" {
 								continue
 							}
-							info, iErr := entry.Info()
-							if iErr != nil {
-								continue
-							}
-
-							if newestFile == nil || info.ModTime().After(newestFile.ModTime()) {
-								newestFile = info
+							i, iErr := entry.Info()
+							if iErr == nil && (newestFile == nil || i.ModTime().After(newestFile.ModTime())) {
+								newestFile = i
 								newestName = entry.Name()
 							}
 						}
-
 						if newestName != "" {
-							// Update latest pointer
-							if wErr := os.WriteFile(latestPath, []byte(newestName), 0644); wErr == nil {
-								log.Printf("Repaired: Promoted %s to latest for %s", newestName, relPath)
-								versionID = newestName
-								versionPath = filepath.Join(path, versionID)
-								versionInfo, err = os.Stat(versionPath) // Retry stat
-							} else {
-								log.Printf("Failed to write repaired latest file: %v", wErr)
-							}
-						} else {
-							// No versions found, remove broken pointer
-							os.Remove(latestPath)
-							log.Printf("Removed broken latest pointer for %s (no versions found)", relPath)
-							return filepath.SkipDir // Treat as deleted
+							_ = os.WriteFile(latestPath, []byte(newestName), 0644)
+							versionID = newestName
+							versionPath = filepath.Join(path, versionID)
+							versionInfo, err = os.Stat(versionPath)
 						}
 					}
 				}
-
 				if err != nil {
-					log.Printf("Sync error stating version %s for %s: %v\n", versionID, relPath, err)
 					errors++
 					return filepath.SkipDir
 				}
 			}
 
-			// Check if object exists in database (including deleted)
-			dbObj, err := sw.storage.DB.GetObjectIncludeDeleted(bucketName, relPath, versionID)
-			if err != nil {
-				log.Printf("Sync error checking object %s in DB: %v\n", relPath, err)
-				errors++
-				return nil
+			mapKey := relPath + "\x00" + versionID
+			visitedKeys[mapKey] = true
+
+			dbObj := dbMap[mapKey]
+			contentType := mime.TypeByExtension(filepath.Ext(relPath))
+			if contentType == "" {
+				contentType = "application/octet-stream"
 			}
 
-			if dbObj == nil {
-				// Object not in database, add it
-				contentType := "application/octet-stream"
+			if dbObj == nil || dbObj.Size != versionInfo.Size() {
 				objectRow := &database.ObjectRow{
 					Bucket:      bucketName,
 					Key:         relPath,
@@ -389,110 +487,75 @@ func (sw *SyncWorker) syncFilesystemToDatabase() {
 				_, err := sw.storage.DB.CreateObject(objectRow)
 				if err == nil {
 					synced++
-					affectedBuckets[bucketName] = true
 				} else {
-					log.Printf("Sync error creating object %s in DB: %v\n", relPath, err)
 					errors++
 				}
 			} else if dbObj.DeletedAt != nil {
-				// Object is marked as deleted but file exists in bucket, un-delete it
-				err := sw.storage.DB.RestoreObject(bucketName, relPath, versionID)
-				if err == nil {
-					synced++
-					affectedBuckets[bucketName] = true
-					log.Printf("Ghost object detected: un-deleted %s/%s\n", bucketName, relPath)
-				} else {
-					log.Printf("Sync error restoring ghost object %s: %v\n", relPath, err)
-					errors++
-				}
+				_ = sw.storage.DB.RestoreObject(bucketName, relPath, versionID)
+				synced++
 			} else if !dbObj.IsLatest {
-				// Object exists but is_latest is wrong, fix it
-				err := sw.storage.DB.UpdateObjectLatest(bucketName, relPath, versionID, true)
-				if err == nil {
-					synced++
-					affectedBuckets[bucketName] = true
-					log.Printf("Fixed is_latest for %s/%s\n", bucketName, relPath)
-				} else {
-					log.Printf("Sync error updating is_latest for %s: %v\n", relPath, err)
-					errors++
-				}
+				_ = sw.storage.DB.UpdateObjectLatest(bucketName, relPath, versionID, true)
+				synced++
 			}
 
-			return filepath.SkipDir // Don't descend into object directories
-		})
-
-		if err != nil {
-			log.Printf("Error syncing bucket %s: %v\n", bucketName, err)
-		}
-	}
-
-	duration := time.Since(startTime)
-	log.Printf("Filesystem sync completed: %d objects synced, %d errors in %v\n", synced, errors, duration)
-
-	// Prune orphaned records
-	prunedCount := sw.pruneOrphanedRecords()
-	sw.pruneOrphanedBuckets()
-
-	// Invalidate cache for affected buckets
-	if sw.storage.Cache != nil {
-		for bucket := range affectedBuckets {
-			// Invalidate all object lists for this bucket
-			sw.storage.Cache.DeleteByPrefix("objects:" + bucket + ":")
-			log.Printf("Invalidated object list cache for bucket: %s\n", bucket)
+			return filepath.SkipDir
 		}
 
-		if prunedCount > 0 {
-			// If we pruned objects, we might have affected many buckets.
-			// The pruneOrphanedRecords already invalidates per object but it's better to be safe.
-			// Actually let's make pruneOrphanedRecords return affected buckets too or just call DeleteByPrefix there.
+		// Handle regular non-versioned file
+		if name == "latest" {
+			return nil
 		}
-	}
-}
 
-func (sw *SyncWorker) pruneOrphanedRecords() int {
-	objs, err := sw.storage.DB.ListAllObjects()
-	if err != nil {
-		log.Printf("Prune error listing objects: %v\n", err)
-		return 0
-	}
+		mapKey := relPath + "\x00simple"
+		visitedKeys[mapKey] = true
 
-	prunedCount := 0
-	affectedBuckets := make(map[string]bool)
-	for _, obj := range objs {
-		// Skip pruning for soft-deleted objects (they are in .trash, monitored by TrashWorker)
+		dbObj := dbMap[mapKey]
+		contentType := mime.TypeByExtension(filepath.Ext(relPath))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+
+		if dbObj == nil || dbObj.Size != info.Size() {
+			objectRow := &database.ObjectRow{
+				Bucket:      bucketName,
+				Key:         relPath,
+				VersionID:   "simple",
+				Size:        info.Size(),
+				ETag:        &relPath,
+				ContentType: &contentType,
+				IsLatest:    true,
+			}
+			_, err := sw.storage.DB.CreateObject(objectRow)
+			if err == nil {
+				synced++
+			} else {
+				errors++
+			}
+		} else if dbObj.DeletedAt != nil {
+			_ = sw.storage.DB.RestoreObject(bucketName, relPath, "simple")
+			synced++
+		} else if !dbObj.IsLatest {
+			_ = sw.storage.DB.UpdateObjectLatest(bucketName, relPath, "simple", true)
+			synced++
+		}
+
+		return nil
+	})
+
+	// 3. Fast in-memory prune of records missing on disk
+	for _, obj := range existingObjs {
 		if obj.DeletedAt != nil {
 			continue
 		}
-
-		objectDir := filepath.Join(sw.storage.Root, obj.Bucket, obj.Key)
-		versionPath := filepath.Join(objectDir, obj.VersionID)
-
-		// Special cases for non-S3-standard versioning
-		if obj.VersionID == "simple" || obj.VersionID == "folder" {
-			versionPath = filepath.Join(sw.storage.Root, obj.Bucket, obj.Key)
-		}
-
-		if _, err := os.Stat(versionPath); os.IsNotExist(err) {
-			// Physical file/directory missing, prune DB record
-			err := sw.storage.DB.DeleteObject(obj.Bucket, obj.Key, obj.VersionID)
-			if err != nil {
-				log.Printf("Prune error deleting %s: %v\n", obj.Key, err)
-			} else {
-				prunedCount++
-				affectedBuckets[obj.Bucket] = true
+		mapKey := obj.Key + "\x00" + obj.VersionID
+		if !visitedKeys[mapKey] {
+			if err := sw.storage.DB.DeleteObject(obj.Bucket, obj.Key, obj.VersionID); err == nil {
+				pruned++
 			}
 		}
 	}
 
-	if prunedCount > 0 {
-		log.Printf("Filesystem sync: pruned %d orphaned object records\n", prunedCount)
-		if sw.storage.Cache != nil {
-			for bucket := range affectedBuckets {
-				sw.storage.Cache.DeleteByPrefix("objects:" + bucket + ":")
-			}
-		}
-	}
-	return prunedCount
+	return synced, errors, pruned
 }
 
 func (sw *SyncWorker) pruneOrphanedBuckets() {
@@ -519,7 +582,8 @@ func (sw *SyncWorker) pruneOrphanedBuckets() {
 
 	if prunedCount > 0 {
 		log.Printf("Filesystem sync: pruned %d orphaned bucket records\n", prunedCount)
-		// Invalidate bucket list cache
-		sw.storage.Cache.Delete(cache.BucketListKey())
+		if sw.storage.Cache != nil {
+			sw.storage.Cache.Delete(cache.BucketListKey())
+		}
 	}
 }

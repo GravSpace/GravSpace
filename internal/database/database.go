@@ -1,13 +1,13 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
-
-	"path/filepath"
 
 	"github.com/GravSpace/GravSpace/internal/metrics"
 	_ "github.com/tursodatabase/libsql-client-go/libsql" // Remote Turso/libSQL driver
@@ -168,12 +168,16 @@ type ReplicationRow struct {
 //	DATABASE_AUTH_TOKEN or TURSO_AUTH_TOKEN - Database authentication token
 func NewDatabase(dbPath string) (*Database, error) {
 	// Check for environment variables
+	explicitURL := true
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		dbURL = os.Getenv("TURSO_DATABASE_URL")
 	}
 	if dbURL == "" {
-		dbURL = "http://127.0.0.1:8085"
+		explicitURL = false
+		if dbPath == "" || dbPath == "./db/metadata.db" {
+			dbURL = "http://127.0.0.1:8085"
+		}
 	}
 
 	dbToken := os.Getenv("DATABASE_AUTH_TOKEN")
@@ -192,10 +196,22 @@ func NewDatabase(dbPath string) (*Database, error) {
 				connStr = fmt.Sprintf("%s?authToken=%s", dbURL, dbToken)
 			}
 			db, err = sql.Open("libsql", connStr)
-			if err != nil {
-				return nil, fmt.Errorf("failed to connect to remote database: %w", err)
+			if err == nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+				err = db.PingContext(ctx)
+				cancel()
 			}
-			fmt.Printf("Connected to remote database: %s\n", dbURL)
+			if err != nil {
+				if !explicitURL {
+					// Fallback to local SQLite if default 127.0.0.1:8085 is offline
+					db = nil
+					dbURL = ""
+				} else {
+					return nil, fmt.Errorf("failed to connect to remote database %s: %w", dbURL, err)
+				}
+			} else {
+				fmt.Printf("Connected to remote database: %s\n", dbURL)
+			}
 		} else if strings.HasPrefix(dbURL, "file:") {
 			// Local SQLite via DATABASE_URL
 			dbPath = strings.TrimPrefix(dbURL, "file:")
@@ -213,7 +229,9 @@ func NewDatabase(dbPath string) (*Database, error) {
 			}
 			fmt.Printf("Connected to remote database: %s\n", dbURL)
 		}
-	} else {
+	}
+
+	if db == nil {
 		// Use local SQLite fallback
 		if dbPath == "" {
 			dbPath = "./db/metadata.db"
@@ -679,8 +697,28 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	}
 
 	result, err := d.db.Exec(`
-		INSERT INTO objects (bucket, key, version_id, size, etag, content_type, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, content_hash, compression_type, original_size, is_deduplicated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO objects (
+			bucket, key, version_id, size, etag, content_type, is_latest,
+			encryption_type, retain_until_date, legal_hold, lock_mode,
+			content_hash, compression_type, original_size, is_deduplicated,
+			modified_at, deleted_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL)
+		ON CONFLICT(bucket, key, version_id) DO UPDATE SET
+			size = excluded.size,
+			etag = excluded.etag,
+			content_type = excluded.content_type,
+			is_latest = excluded.is_latest,
+			encryption_type = excluded.encryption_type,
+			retain_until_date = excluded.retain_until_date,
+			legal_hold = excluded.legal_hold,
+			lock_mode = excluded.lock_mode,
+			content_hash = excluded.content_hash,
+			compression_type = excluded.compression_type,
+			original_size = excluded.original_size,
+			is_deduplicated = excluded.is_deduplicated,
+			modified_at = CURRENT_TIMESTAMP,
+			deleted_at = NULL
 	`, obj.Bucket, obj.Key, obj.VersionID, obj.Size, obj.ETag, obj.ContentType, obj.IsLatest, obj.EncryptionType, obj.RetainUntilDate, obj.LegalHold, obj.LockMode, obj.ContentHash, obj.CompressionType, obj.OriginalSize, obj.IsDeduplicated)
 
 	metrics.RecordDBQuery("CreateObject", time.Since(start))
@@ -691,30 +729,86 @@ func (d *Database) CreateObject(obj *ObjectRow) (int64, error) {
 	return result.LastInsertId()
 }
 
+func parseTimeValue(v any) time.Time {
+	if v == nil {
+		return time.Time{}
+	}
+	switch t := v.(type) {
+	case time.Time:
+		return t
+	case *time.Time:
+		if t != nil {
+			return *t
+		}
+		return time.Time{}
+	case string:
+		if t == "" {
+			return time.Time{}
+		}
+		formats := []string{
+			time.RFC3339Nano,
+			time.RFC3339,
+			"2006-01-02 15:04:05.999999999-07:00",
+			"2006-01-02 15:04:05.999999999",
+			"2006-01-02 15:04:05",
+			"2006-01-02T15:04:05",
+			"2006-01-02",
+		}
+		for _, f := range formats {
+			if parsed, err := time.Parse(f, t); err == nil {
+				return parsed
+			}
+		}
+	case []byte:
+		return parseTimeValue(string(t))
+	}
+	return time.Time{}
+}
+
+func parseNullableTime(v any) *time.Time {
+	if v == nil {
+		return nil
+	}
+	t := parseTimeValue(v)
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+func scanObjectRow(scan func(dest ...any) error) (*ObjectRow, error) {
+	var obj ObjectRow
+	var rawModified, rawRetain, rawDeleted any
+	err := scan(
+		&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
+		&obj.ETag, &obj.ContentType, &rawModified, &obj.IsLatest, &obj.EncryptionType,
+		&rawRetain, &obj.LegalHold, &obj.LockMode, &rawDeleted,
+		&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated,
+	)
+	if err != nil {
+		return nil, err
+	}
+	obj.ModifiedAt = parseTimeValue(rawModified)
+	obj.RetainUntilDate = parseNullableTime(rawRetain)
+	obj.DeletedAt = parseNullableTime(rawDeleted)
+	return &obj, nil
+}
+
 func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) {
 	start := time.Now()
 	key = strings.TrimPrefix(key, "/")
 	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE bucket = ? AND key = ? AND deleted_at IS NULL`
 
-	var obj ObjectRow
-	var err error
-
+	var row *sql.Row
 	if versionID != "" {
 		query += " AND version_id = ?"
-		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
-			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
+		row = d.db.QueryRow(query, bucket, key, versionID)
 	} else {
 		query += " AND is_latest = TRUE"
-		err = d.db.QueryRow(query, bucket, key).Scan(
-			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
+		row = d.db.QueryRow(query, bucket, key)
 	}
+	obj, err := scanObjectRow(row.Scan)
 	metrics.RecordDBQuery("GetObject", time.Since(start))
 
 	if err == sql.ErrNoRows {
@@ -724,7 +818,7 @@ func (d *Database) GetObject(bucket, key, versionID string) (*ObjectRow, error) 
 		return nil, err
 	}
 
-	return &obj, nil
+	return obj, nil
 }
 
 func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*ObjectRow, error) {
@@ -733,24 +827,15 @@ func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*Obje
 	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE bucket = ? AND key = ?`
 
-	var obj ObjectRow
-	var err error
-
+	var row *sql.Row
 	if versionID != "" {
 		query += " AND version_id = ?"
-		err = d.db.QueryRow(query, bucket, key, versionID).Scan(
-			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
+		row = d.db.QueryRow(query, bucket, key, versionID)
 	} else {
 		query += " AND is_latest = TRUE"
-		err = d.db.QueryRow(query, bucket, key).Scan(
-			&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
+		row = d.db.QueryRow(query, bucket, key)
 	}
+	obj, err := scanObjectRow(row.Scan)
 	metrics.RecordDBQuery("GetObjectIncludeDeleted", time.Since(start))
 
 	if err == sql.ErrNoRows {
@@ -760,7 +845,7 @@ func (d *Database) GetObjectIncludeDeleted(bucket, key, versionID string) (*Obje
 		return nil, err
 	}
 
-	return &obj, nil
+	return obj, nil
 }
 
 func (d *Database) UpdateObjectLatest(bucket, key, versionID string, isLatest bool) error {
@@ -856,14 +941,11 @@ func (d *Database) ListTrashObjects(bucket, search string) ([]*ObjectRow, error)
 
 	var objects []*ObjectRow
 	for rows.Next() {
-		var obj ObjectRow
-		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
+		obj, err := scanObjectRow(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
-		objects = append(objects, &obj)
+		objects = append(objects, obj)
 	}
 	metrics.RecordDBQuery("ListTrashObjects", time.Since(start))
 	return objects, rows.Err()
@@ -935,14 +1017,11 @@ func (d *Database) ListObjects(bucket, prefix, search string, limit int) ([]*Obj
 
 	var objects []*ObjectRow
 	for rows.Next() {
-		var obj ObjectRow
-		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
+		obj, err := scanObjectRow(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
-		objects = append(objects, &obj)
+		objects = append(objects, obj)
 	}
 
 	return objects, rows.Err()
@@ -1333,14 +1412,11 @@ func (d *Database) GetExpiredObjects(bucket string, prefix string, days int) ([]
 
 	var objects []*ObjectRow
 	for rows.Next() {
-		var obj ObjectRow
-		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
+		obj, err := scanObjectRow(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
-		objects = append(objects, &obj)
+		objects = append(objects, obj)
 	}
 	metrics.RecordDBQuery("GetExpiredObjects", time.Since(start))
 	return objects, rows.Err()
@@ -1361,14 +1437,32 @@ func (d *Database) ListAllObjects() ([]*ObjectRow, error) {
 
 	var objects []*ObjectRow
 	for rows.Next() {
-		var obj ObjectRow
-		if err := rows.Scan(&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-			&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-			&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-			&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated); err != nil {
+		obj, err := scanObjectRow(rows.Scan)
+		if err != nil {
 			return nil, err
 		}
-		objects = append(objects, &obj)
+		objects = append(objects, obj)
+	}
+
+	return objects, rows.Err()
+}
+
+func (d *Database) ListAllObjectsByBucket(bucket string) ([]*ObjectRow, error) {
+	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
+	          FROM objects WHERE bucket = ?`
+	rows, err := d.db.Query(query, bucket)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []*ObjectRow
+	for rows.Next() {
+		obj, err := scanObjectRow(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		objects = append(objects, obj)
 	}
 
 	return objects, rows.Err()
@@ -1545,12 +1639,8 @@ func (d *Database) GetObjectByHash(hash string) (*ObjectRow, error) {
 	query := `SELECT id, bucket, key, version_id, size, etag, content_type, modified_at, is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, content_hash, compression_type, original_size, is_deduplicated
 	          FROM objects WHERE content_hash = ? AND deleted_at IS NULL LIMIT 1`
 
-	var obj ObjectRow
-	err := d.db.QueryRow(query, hash).Scan(
-		&obj.ID, &obj.Bucket, &obj.Key, &obj.VersionID, &obj.Size,
-		&obj.ETag, &obj.ContentType, &obj.ModifiedAt, &obj.IsLatest, &obj.EncryptionType,
-		&obj.RetainUntilDate, &obj.LegalHold, &obj.LockMode, &obj.DeletedAt,
-		&obj.ContentHash, &obj.CompressionType, &obj.OriginalSize, &obj.IsDeduplicated)
+	row := d.db.QueryRow(query, hash)
+	obj, err := scanObjectRow(row.Scan)
 	metrics.RecordDBQuery("GetObjectByHash", time.Since(start))
 
 	if err == sql.ErrNoRows {
@@ -1559,7 +1649,7 @@ func (d *Database) GetObjectByHash(hash string) (*ObjectRow, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &obj, nil
+	return obj, nil
 }
 
 func (d *Database) CountObjectHashReferences(hash string) (int, error) {

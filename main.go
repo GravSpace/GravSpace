@@ -192,13 +192,19 @@ func main() {
 
 		user, err := um.Authenticate(login.Username, login.Password)
 		if err != nil {
+			log.Printf("Login failed for user/key '%s': %v", login.Username, err)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			return
 		}
 
+		username := login.Username
+		if user != nil && user.Username != "" {
+			username = user.Username
+		}
+
 		// Create token
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-			"username": user.Username,
+			"username": username,
 			"exp":      time.Now().Add(time.Hour * 72).Unix(),
 		})
 
@@ -210,7 +216,7 @@ func main() {
 
 		// Check if user is using default password
 		isDefaultPassword := false
-		if user.Username == "admin" {
+		if username == "admin" {
 			defaultPass := os.Getenv("INITIAL_ADMIN_PASSWORD")
 			if defaultPass == "" {
 				defaultPass = "admin"
@@ -220,7 +226,7 @@ func main() {
 
 		c.JSON(http.StatusOK, gin.H{
 			"token":               t,
-			"username":            user.Username,
+			"username":            username,
 			"is_default_password": isDefaultPassword,
 		})
 	}
@@ -265,9 +271,11 @@ func main() {
 		// General Admin Routes
 		admin.POST("/auth/verify", adminHandler.VerifyAdminPassword)
 		admin.GET("/buckets", adminHandler.ListBuckets)
+		admin.POST("/buckets/sync", adminHandler.SyncAllBuckets)
 		admin.PUT("/buckets/:bucket", adminHandler.CreateBucket)
 		admin.DELETE("/buckets/:bucket", adminHandler.DeleteBucket)
 		admin.GET("/buckets/:bucket/info", adminHandler.GetBucketInfo)
+		admin.POST("/buckets/:bucket/sync", adminHandler.SyncBucket)
 		admin.PUT("/buckets/:bucket/versioning", adminHandler.SetBucketVersioning)
 		admin.PUT("/buckets/:bucket/object-lock", adminHandler.SetBucketObjectLock)
 		admin.PUT("/buckets/:bucket/retention", adminHandler.SetObjectRetention)

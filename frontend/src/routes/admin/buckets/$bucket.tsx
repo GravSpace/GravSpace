@@ -141,6 +141,28 @@ function BucketDetailPage() {
     } catch {}
   }, [bucketName, authFetch])
 
+  const [syncing, setSyncing] = useState(false)
+
+  const handleSyncBucket = async () => {
+    setSyncing(true)
+    toast.promise(
+      async () => {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${bucketName}/sync`, { method: 'POST' })
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        await Promise.all([fetchObjects(), fetchBucketInfo()])
+        return data
+      },
+      {
+        loading: `Synchronizing bucket "${bucketName}" with filesystem...`,
+        success: (data: any) =>
+          `Bucket synchronized: ${data.synced ?? 0} indexed, ${data.pruned ?? 0} pruned (${data.duration ?? ''})`,
+        error: (err: Error) => `Sync failed: ${err.message}`,
+        finally: () => setSyncing(false),
+      },
+    )
+  }
+
   useEffect(() => {
     setCurrentPrefix(searchPrefix)
     fetchObjects(searchPrefix)
@@ -532,6 +554,18 @@ function BucketDetailPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSyncBucket}
+            disabled={loading || syncing}
+            className="h-9 border-slate-200 dark:border-slate-800"
+            title="Scan filesystem and synchronize database"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading || syncing ? 'animate-spin' : ''}`} />
+            Sync
+          </Button>
 
           <Button
             variant="outline"
