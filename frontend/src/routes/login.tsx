@@ -110,13 +110,13 @@ function LoginPage() {
                   htmlFor="accessKeyId"
                   className="text-slate-400 text-[10px] font-bold uppercase tracking-wider ml-1"
                 >
-                  Access Key ID
+                  Username or Access Key ID
                 </Label>
                 <Input
                   id="accessKeyId"
                   value={accessKeyId}
                   onChange={(e) => setAccessKeyId(e.target.value)}
-                  placeholder="e.g. root"
+                  placeholder="admin"
                   required
                   autoComplete="username"
                   className="h-10 bg-slate-950/50 border-slate-800 text-white placeholder:text-slate-700 focus-visible:ring-indigo-500/50 focus-visible:border-indigo-500/50 transition-all text-sm"
@@ -128,7 +128,7 @@ function LoginPage() {
                   htmlFor="secretAccessKey"
                   className="text-slate-400 text-[10px] font-bold uppercase tracking-wider ml-1"
                 >
-                  Secret Access Key
+                  Password or Secret Key
                 </Label>
                 <Input
                   id="secretAccessKey"

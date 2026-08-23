@@ -88,6 +88,9 @@ func (um *UserManager) Initialize() error {
 				SecretAccessKey: adminSecret,
 			})
 		}
+	} else if os.Getenv("INITIAL_ADMIN_PASSWORD") != "" {
+		hash, _ := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		_ = um.DB.UpsertUser("admin", string(hash))
 	}
 
 	// 2. Seed AdministratorAccess policy
@@ -473,23 +476,55 @@ func matchResource(resources []string, target string) bool {
 	return false
 }
 
-func (um *UserManager) Authenticate(username, password string) (*User, error) {
+func (um *UserManager) Authenticate(identifier, secret string) (*User, error) {
 	um.mu.RLock()
 	defer um.mu.RUnlock()
 
-	userRecord, err := um.DB.GetUser(username)
-	if err != nil {
-		return nil, err
-	}
-	if userRecord == nil {
-		return nil, os.ErrNotExist
-	}
-
-	if err := bcrypt.CompareHashAndPassword([]byte(userRecord.PasswordHash), []byte(password)); err != nil {
-		return nil, err
+	// 1. Try matching by Access Key ID
+	for _, user := range um.Users {
+		for _, key := range user.AccessKeys {
+			if key.AccessKeyID == identifier && key.SecretAccessKey == secret {
+				return user, nil
+			}
+		}
 	}
 
-	return um.Users[username], nil
+	if um.DB != nil {
+		userRec, _, err := um.DB.GetUserByAccessKey(identifier)
+		if err == nil && userRec != nil {
+			keys, err := um.DB.GetAccessKeys(userRec.Username)
+			if err == nil {
+				for _, k := range keys {
+					if k.AccessKeyID == identifier && k.SecretAccessKey == secret {
+						if u, ok := um.Users[userRec.Username]; ok {
+							return u, nil
+						}
+						return &User{Username: userRec.Username}, nil
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Try matching by Username (including "root" as alias for "admin")
+	usernamesToTry := []string{identifier}
+	if identifier == "root" {
+		usernamesToTry = append(usernamesToTry, "admin")
+	}
+
+	for _, username := range usernamesToTry {
+		userRecord, err := um.DB.GetUser(username)
+		if err == nil && userRecord != nil {
+			if err := bcrypt.CompareHashAndPassword([]byte(userRecord.PasswordHash), []byte(secret)); err == nil {
+				if u, ok := um.Users[username]; ok {
+					return u, nil
+				}
+				return &User{Username: username}, nil
+			}
+		}
+	}
+
+	return nil, os.ErrNotExist
 }
 
 func (um *UserManager) UpdatePassword(username, newPassword string) error {

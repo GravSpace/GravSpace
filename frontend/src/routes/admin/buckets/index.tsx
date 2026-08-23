@@ -178,6 +178,46 @@ function BucketsPage() {
     }
   }
 
+  const [syncing, setSyncing] = useState(false)
+
+  async function handleSyncAll() {
+    setSyncing(true)
+    toast.promise(
+      async () => {
+        const res = await authFetch(`${API_BASE}/admin/buckets/sync`, { method: 'POST' })
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        await fetchBuckets()
+        return data
+      },
+      {
+        loading: 'Synchronizing all buckets with filesystem...',
+        success: (data: any) =>
+          `Sync completed: ${data.synced ?? 0} indexed, ${data.pruned ?? 0} pruned (${data.duration ?? ''})`,
+        error: (err: Error) => `Sync failed: ${err.message}`,
+        finally: () => setSyncing(false),
+      },
+    )
+  }
+
+  async function handleSyncBucket(name: string) {
+    toast.promise(
+      async () => {
+        const res = await authFetch(`${API_BASE}/admin/buckets/${name}/sync`, { method: 'POST' })
+        if (!res.ok) throw new Error(await res.text())
+        const data = await res.json()
+        await fetchBuckets()
+        return data
+      },
+      {
+        loading: `Synchronizing bucket "${name}"...`,
+        success: (data: any) =>
+          `Bucket "${name}" synchronized: ${data.synced ?? 0} indexed, ${data.pruned ?? 0} pruned`,
+        error: (err: Error) => `Sync failed: ${err.message}`,
+      },
+    )
+  }
+
   async function deleteBucket(name: string) {
     toast.promise(
       async () => {
@@ -212,9 +252,15 @@ function BucketsPage() {
               className="h-8 w-44 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60"
             />
           </div>
-          <Button variant="outline" size="sm" onClick={fetchBuckets} disabled={loading} className="h-8">
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Sync
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSyncAll}
+            disabled={loading || syncing}
+            className="h-8"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading || syncing ? 'animate-spin' : ''}`} />
+            Sync Filesystem
           </Button>
           <Button size="sm" onClick={() => setShowCreateDialog(true)} className="h-8">
             <Plus className="w-3.5 h-3.5 mr-2" /> New Bucket
@@ -333,6 +379,9 @@ function BucketsPage() {
                         <DropdownMenuContent align="end" className="w-48">
                           <DropdownMenuItem onClick={() => navigate({ to: '/admin/buckets/$bucket', params: { bucket } })}>
                             <Database className="w-4 h-4 mr-2" /> Browse Objects
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleSyncBucket(bucket)}>
+                            <RefreshCw className="w-4 h-4 mr-2" /> Sync Filesystem
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={() => togglePublic(bucket)}>

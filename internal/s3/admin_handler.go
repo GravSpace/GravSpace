@@ -101,6 +101,51 @@ func (h *AdminHandler) GetBucketInfo(c *gin.Context) {
 	})
 }
 
+func (h *AdminHandler) SyncBucket(c *gin.Context) {
+	bucket := c.Param("bucket")
+	result, err := h.Storage.SyncBucket(bucket)
+	if err != nil {
+		if h.AuditLogger != nil {
+			h.AuditLogger.LogDenied("admin", "s3:SyncBucket", bucket, c.ClientIP(), c.GetHeader("User-Agent"), err.Error())
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:SyncBucket", bucket, c.ClientIP(), c.GetHeader("User-Agent"), map[string]string{
+			"synced":   strconv.Itoa(result.Synced),
+			"pruned":   strconv.Itoa(result.Pruned),
+			"errors":   strconv.Itoa(result.Errors),
+			"duration": result.Duration,
+		})
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *AdminHandler) SyncAllBuckets(c *gin.Context) {
+	result, err := h.Storage.SyncAllBuckets()
+	if err != nil {
+		if h.AuditLogger != nil {
+			h.AuditLogger.LogDenied("admin", "s3:SyncAllBuckets", "*", c.ClientIP(), c.GetHeader("User-Agent"), err.Error())
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	if h.AuditLogger != nil {
+		h.AuditLogger.LogSuccess("admin", "s3:SyncAllBuckets", "*", c.ClientIP(), c.GetHeader("User-Agent"), map[string]string{
+			"synced":   strconv.Itoa(result.Synced),
+			"pruned":   strconv.Itoa(result.Pruned),
+			"errors":   strconv.Itoa(result.Errors),
+			"duration": result.Duration,
+		})
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *AdminHandler) SetBucketVersioning(c *gin.Context) {
 	bucket := c.Param("bucket")
 	var req struct {
