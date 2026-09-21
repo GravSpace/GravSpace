@@ -1,11 +1,14 @@
 package s3
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -32,6 +35,44 @@ func init() {
 
 type S3Handler struct {
 	Storage storage.Storage
+}
+
+type LocationConstraintResult struct {
+	XMLName xml.Name `xml:"http://s3.amazonaws.com/doc/2006-03-01/ LocationConstraint"`
+	Region  string   `xml:",chardata"`
+}
+
+type AccessControlPolicy struct {
+	XMLName           xml.Name          `xml:"http://s3.amazonaws.com/doc/2006-03-01/ AccessControlPolicy"`
+	Owner             Owner             `xml:"Owner"`
+	AccessControlList AccessControlList `xml:"AccessControlList"`
+}
+
+type AccessControlList struct {
+	Grants []Grant `xml:"Grant"`
+}
+
+type Grant struct {
+	Grantee    Grantee `xml:"Grantee"`
+	Permission string  `xml:"Permission"`
+}
+
+type Grantee struct {
+	XMLNSXSI    string `xml:"xmlns:xsi,attr"`
+	XSIType     string `xml:"xsi:type,attr"`
+	ID          string `xml:"ID"`
+	DisplayName string `xml:"DisplayName"`
+}
+
+type S3Error struct {
+	XMLName    xml.Name `xml:"Error"`
+	Code       string   `xml:"Code"`
+	Message    string   `xml:"Message"`
+	Key        string   `xml:"Key,omitempty"`
+	BucketName string   `xml:"BucketName,omitempty"`
+	Resource   string   `xml:"Resource,omitempty"`
+	RequestId  string   `xml:"RequestId,omitempty"`
+	HostId     string   `xml:"HostId,omitempty"`
 }
 
 type ListAllMyBucketsResult struct {
@@ -201,8 +242,26 @@ type DefaultRetention struct {
 	Days int    `xml:"Days"`
 }
 
+func (h *S3Handler) getBucketAndKey(c *gin.Context) (bucket, key string) {
+	bucket = c.Param("bucket")
+	key = c.Param("key")
+
+	if bucket == "" {
+		p := strings.TrimPrefix(c.Request.URL.Path, "/")
+		parts := strings.SplitN(p, "/", 2)
+		if len(parts) > 0 {
+			bucket = parts[0]
+			if len(parts) > 1 {
+				key = parts[1]
+			}
+		}
+	}
+	key = strings.TrimPrefix(key, "/")
+	return bucket, key
+}
+
 func (h *S3Handler) PostBucket(c *gin.Context) {
-	bucket := c.Param("bucket")
+	bucket, _ := h.getBucketAndKey(c)
 
 	// Batch Delete
 	if c.Query("delete") != "" || strings.Contains(c.Request.URL.RawQuery, "delete") {
@@ -238,7 +297,7 @@ func (h *S3Handler) PostBucket(c *gin.Context) {
 }
 
 func (h *S3Handler) PutBucket(c *gin.Context) {
-	bucket := c.Param("bucket")
+	bucket, _ := h.getBucketAndKey(c)
 
 	// CORS
 	if c.Query("cors") != "" || strings.Contains(c.Request.URL.RawQuery, "cors") {
@@ -336,14 +395,48 @@ func (h *S3Handler) PutBucket(c *gin.Context) {
 }
 
 func (h *S3Handler) sendS3Error(c *gin.Context, code, message, bucket, key string) {
-	// Simple helper to match existing error patterns if any, or just return status
-	c.String(http.StatusInternalServerError, message)
+	status := http.StatusInternalServerError
+	switch code {
+	case "NoSuchBucket", "NoSuchKey", "NotFound":
+		status = http.StatusNotFound
+	case "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch":
+		status = http.StatusForbidden
+	case "NoSuchCORSConfiguration", "NoSuchLifecycleConfiguration":
+		status = http.StatusNotFound
+	case "BucketAlreadyExists", "BucketAlreadyOwnedByYou":
+		status = http.StatusConflict
+	case "InvalidArgument", "InvalidBucketName", "MalformedXML":
+		status = http.StatusBadRequest
+	}
+
+	reqID := make([]byte, 8)
+	rand.Read(reqID)
+	hostID := make([]byte, 32)
+	rand.Read(hostID)
+
+	resource := "/" + bucket
+	if key != "" {
+		resource += "/" + strings.TrimPrefix(key, "/")
+	}
+
+	errRes := S3Error{
+		Code:       code,
+		Message:    message,
+		Key:        key,
+		BucketName: bucket,
+		Resource:   resource,
+		RequestId:  strings.ToUpper(hex.EncodeToString(reqID)),
+		HostId:     hex.EncodeToString(hostID),
+	}
+
+	c.Header("Content-Type", "application/xml")
+	c.XML(status, errRes)
 }
 
 func (h *S3Handler) ListBuckets(c *gin.Context) {
 	buckets, err := h.Storage.ListBuckets()
 	if err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		h.sendS3Error(c, "InternalError", err.Error(), "", "")
 		return
 	}
 
@@ -359,10 +452,10 @@ func (h *S3Handler) ListBuckets(c *gin.Context) {
 }
 
 func (h *S3Handler) CreateBucket(c *gin.Context) {
-	bucket := c.Param("bucket")
+	bucket, _ := h.getBucketAndKey(c)
 	exists, err := h.Storage.BucketExists(bucket)
 	if err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
 		return
 	}
 	if exists {
@@ -371,14 +464,18 @@ func (h *S3Handler) CreateBucket(c *gin.Context) {
 		return
 	}
 	if err := h.Storage.CreateBucket(bucket); err != nil {
-		c.String(http.StatusInternalServerError, err.Error())
+		h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
 		return
 	}
 	c.Status(http.StatusOK)
 }
 
 func (h *S3Handler) HeadBucket(c *gin.Context) {
-	bucket := c.Param("bucket")
+	bucket, _ := h.getBucketAndKey(c)
+	if bucket == "" {
+		c.Status(http.StatusOK)
+		return
+	}
 	exists, err := h.Storage.BucketExists(bucket)
 	if err != nil {
 		c.Status(http.StatusInternalServerError)
@@ -392,8 +489,11 @@ func (h *S3Handler) HeadBucket(c *gin.Context) {
 }
 
 func (h *S3Handler) GetObject(c *gin.Context) {
-	bucket := c.Param("bucket")
-	key := c.Param("key")
+	bucket, key := h.getBucketAndKey(c)
+	if key == "" {
+		h.ListObjects(c)
+		return
+	}
 	versionID := c.Query("versionId")
 
 	if c.Query("tagging") != "" || strings.Contains(c.Request.URL.RawQuery, "tagging") {
@@ -435,7 +535,7 @@ func (h *S3Handler) GetObject(c *gin.Context) {
 	// Set S3 headers
 	c.Header("x-amz-version-id", obj.VersionID)
 	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
-	c.Header("Last-Modified", obj.ModTime.UTC().Format(time.RFC3339))
+	c.Header("Last-Modified", obj.ModTime.UTC().Format(http.TimeFormat))
 
 	// Handle Range Request
 	rangeHeader := c.GetHeader("Range")
@@ -469,8 +569,11 @@ func (h *S3Handler) GetObject(c *gin.Context) {
 }
 
 func (h *S3Handler) HeadObject(c *gin.Context) {
-	bucket := c.Param("bucket")
-	key := c.Param("key")
+	bucket, key := h.getBucketAndKey(c)
+	if key == "" {
+		h.HeadBucket(c)
+		return
+	}
 	versionID := c.Query("versionId")
 
 	obj, err := h.Storage.StatObject(bucket, key, versionID)
@@ -491,7 +594,7 @@ func (h *S3Handler) HeadObject(c *gin.Context) {
 
 	c.Header("Content-Type", contentType)
 	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
-	c.Header("Last-Modified", obj.ModTime.UTC().Format(time.RFC3339))
+	c.Header("Last-Modified", obj.ModTime.UTC().Format(http.TimeFormat))
 	c.Header("x-amz-version-id", obj.VersionID)
 	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
 	if obj.EncryptionType != "" {
@@ -502,8 +605,11 @@ func (h *S3Handler) HeadObject(c *gin.Context) {
 }
 
 func (h *S3Handler) PutObject(c *gin.Context) {
-	bucket := c.Param("bucket")
-	key := c.Param("key")
+	bucket, key := h.getBucketAndKey(c)
+	if key == "" {
+		h.PutBucket(c)
+		return
+	}
 	uploadID := c.Query("uploadId")
 	partNumber := c.Query("partNumber")
 	versionID := c.Query("versionId")
@@ -554,8 +660,11 @@ func (h *S3Handler) PutObject(c *gin.Context) {
 }
 
 func (h *S3Handler) PostObject(c *gin.Context) {
-	bucket := c.Param("bucket")
-	key := c.Param("key")
+	bucket, key := h.getBucketAndKey(c)
+	if key == "" {
+		h.PostBucket(c)
+		return
+	}
 	uploadID := c.Query("uploadId")
 
 	// Initiate Multipart Upload
@@ -613,8 +722,11 @@ func (h *S3Handler) PostObject(c *gin.Context) {
 }
 
 func (h *S3Handler) DeleteObject(c *gin.Context) {
-	bucket := c.Param("bucket")
-	key := c.Param("key")
+	bucket, key := h.getBucketAndKey(c)
+	if key == "" {
+		h.DeleteBucket(c)
+		return
+	}
 	versionID := c.Query("versionId")
 	uploadID := c.Query("uploadId")
 
@@ -636,7 +748,7 @@ func (h *S3Handler) DeleteObject(c *gin.Context) {
 }
 
 func (h *S3Handler) DeleteBucket(c *gin.Context) {
-	bucket := c.Param("bucket")
+	bucket, _ := h.getBucketAndKey(c)
 
 	// CORS
 	if c.Query("cors") != "" || strings.Contains(c.Request.URL.RawQuery, "cors") {
@@ -666,10 +778,58 @@ func (h *S3Handler) DeleteBucket(c *gin.Context) {
 }
 
 func (h *S3Handler) ListObjects(c *gin.Context) {
-	bucket := c.Param("bucket")
+	bucket, _ := h.getBucketAndKey(c)
 	prefix := c.Query("prefix")
 	delimiter := c.Query("delimiter")
 	listType := c.Query("list-type")
+
+	// Validate bucket exists
+	exists, err := h.Storage.BucketExists(bucket)
+	if err != nil {
+		h.sendS3Error(c, "InternalError", err.Error(), bucket, "")
+		return
+	}
+	if !exists {
+		h.sendS3Error(c, "NoSuchBucket", "The specified bucket does not exist.", bucket, "")
+		return
+	}
+
+	// Location Constraint
+	if c.Query("location") != "" || strings.Contains(c.Request.URL.RawQuery, "location") {
+		region := os.Getenv("AWS_REGION")
+		if region == "" {
+			region = "us-east-1"
+		}
+		result := LocationConstraintResult{
+			Region: region,
+		}
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
+	}
+
+	// ACL
+	if c.Query("acl") != "" || strings.Contains(c.Request.URL.RawQuery, "acl") {
+		result := AccessControlPolicy{
+			Owner: Owner{ID: "admin", DisplayName: "admin"},
+			AccessControlList: AccessControlList{
+				Grants: []Grant{
+					{
+						Grantee: Grantee{
+							XMLNSXSI:    "http://www.w3.org/2001/XMLSchema-instance",
+							XSIType:     "CanonicalUser",
+							ID:          "admin",
+							DisplayName: "admin",
+						},
+						Permission: "FULL_CONTROL",
+					},
+				},
+			},
+		}
+		c.Header("Content-Type", "application/xml")
+		c.XML(http.StatusOK, result)
+		return
+	}
 
 	// CORS
 	if c.Query("cors") != "" || strings.Contains(c.Request.URL.RawQuery, "cors") {
@@ -896,7 +1056,7 @@ func (h *S3Handler) ServeWebsite(c *gin.Context) {
 	// Set headers
 	c.Header("x-amz-version-id", obj.VersionID)
 	c.Header("ETag", fmt.Sprintf("\"%s\"", obj.VersionID))
-	c.Header("Last-Modified", obj.ModTime.UTC().Format(time.RFC3339))
+	c.Header("Last-Modified", obj.ModTime.UTC().Format(http.TimeFormat))
 	c.Header("Content-Length", fmt.Sprintf("%d", obj.Size))
 
 	c.DataFromReader(http.StatusOK, obj.Size, contentType, reader, nil)

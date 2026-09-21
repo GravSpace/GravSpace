@@ -365,23 +365,41 @@ func sendS3Error(c *gin.Context, code, message, bucket, key string) {
 	hostID := make([]byte, 32)
 	rand.Read(hostID)
 
+	status := http.StatusForbidden
+	switch code {
+	case "NoSuchBucket", "NoSuchKey", "NotFound":
+		status = http.StatusNotFound
+	case "AuthorizationHeaderMalformed", "InvalidArgument", "InvalidBucketName":
+		status = http.StatusBadRequest
+	case "SignatureDoesNotMatch", "AccessDenied", "InvalidAccessKeyId":
+		status = http.StatusForbidden
+	case "InternalError":
+		status = http.StatusInternalServerError
+	}
+
+	resource := "/" + bucket
+	if key != "" {
+		resource += "/" + strings.TrimPrefix(key, "/")
+	}
+
 	errRes := S3Error{
 		Code:       code,
 		Message:    message,
 		Key:        key,
 		BucketName: bucket,
-		Resource:   fmt.Sprintf("/%s/%s", bucket, key),
+		Resource:   resource,
 		RequestId:  strings.ToUpper(hex.EncodeToString(reqID)),
 		HostId:     hex.EncodeToString(hostID),
 	}
 
-	c.XML(http.StatusForbidden, errRes)
+	c.Header("Content-Type", "application/xml")
+	c.XML(status, errRes)
 }
 
 func determineS3Action(c *gin.Context) (string, string) {
 	method := c.Request.Method
 	bucket := c.Param("bucket")
-	key := c.Param("key") // In Gin, we'll use "key" for the * part
+	key := strings.TrimPrefix(c.Param("key"), "/")
 	path := c.Request.URL.Path
 
 	// Root path
@@ -406,6 +424,7 @@ func determineS3Action(c *gin.Context) (string, string) {
 			}
 		}
 	}
+	key = strings.TrimPrefix(key, "/")
 
 	resource := "arn:aws:s3:::" + bucket
 	if key != "" {
