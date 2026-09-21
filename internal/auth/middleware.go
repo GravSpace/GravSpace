@@ -5,7 +5,9 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -174,6 +176,47 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 			calculatedSignature := CalculateSignature(secretKey, date, region, service, stringToSign)
 
 			if providedSignature != calculatedSignature {
+				// Fallback: If host mismatch (e.g. client accessed via 127.0.0.1:port but signed for localhost:port or vice versa)
+				if isPresigned && len(signedHeaders) == 1 && strings.ToLower(signedHeaders[0]) == "host" {
+					var altHosts []string
+					hOnly, port, errH := net.SplitHostPort(c.Request.Host)
+					if errH == nil {
+						if hOnly == "127.0.0.1" {
+							altHosts = append(altHosts, net.JoinHostPort("localhost", port))
+						} else if hOnly == "localhost" {
+							altHosts = append(altHosts, net.JoinHostPort("127.0.0.1", port))
+						}
+					}
+					if envHost := os.Getenv("SERVER_HOST"); envHost != "" && envHost != c.Request.Host {
+						altHosts = append(altHosts, envHost)
+					}
+					// Support reverse proxy / CDN X-Forwarded-Host header
+					if xfh := c.GetHeader("X-Forwarded-Host"); xfh != "" && xfh != c.Request.Host {
+						altHosts = append(altHosts, xfh)
+					}
+					// Support configured CDN domains and alias hosts
+					for _, envKey := range []string{"CDN_HOSTS", "ALLOWED_HOSTS"} {
+						if hostsVal := os.Getenv(envKey); hostsVal != "" {
+							for _, h := range strings.Split(hostsVal, ",") {
+								h = strings.TrimSpace(h)
+								if h != "" && h != c.Request.Host {
+									altHosts = append(altHosts, h)
+								}
+							}
+						}
+					}
+					for _, altHost := range altHosts {
+						altReq := BuildCanonicalRequest(c.Request.Method, path, query, headers, signedHeaders, payloadHash, altHost)
+						altSign := CalculateSignature(secretKey, date, region, service, BuildStringToSign(algorithm, amzDate, credentialScope, altReq))
+						if providedSignature == altSign {
+							calculatedSignature = providedSignature
+							break
+						}
+					}
+				}
+			}
+
+			if providedSignature != calculatedSignature {
 				// Fallback: If signature fails but user is anonymous-eligible, we'll check permission later
 				// But usually, if they provided keys, they must be valid.
 				sendS3Error(c, "SignatureDoesNotMatch", "The request signature we calculated does not match the signature you provided.", "", "")
@@ -193,6 +236,26 @@ func S3AuthMiddleware(um *UserManager, auditLogger *audit.AuditLogger, store sto
 
 			// ADDITIONAL SECURITY CHECKS FOR PRESIGNED URLS
 			if isPresigned {
+				// 0. Expiration Check
+				amzDate := c.Query("X-Amz-Date")
+				expiresStr := c.Query("X-Amz-Expires")
+				if amzDate != "" && expiresStr != "" {
+					reqTime, err := time.Parse("20060102T150405Z", amzDate)
+					if err != nil {
+						reqTime, err = time.Parse("20060102T150405", amzDate)
+					}
+					if err == nil {
+						expiresSec, errExp := strconv.Atoi(expiresStr)
+						if errExp == nil && expiresSec > 0 {
+							if time.Now().UTC().After(reqTime.Add(time.Duration(expiresSec) * time.Second)) {
+								sendS3Error(c, "RequestExpired", "Request has expired", c.Param("bucket"), c.Param("key"))
+								c.Abort()
+								return
+							}
+						}
+					}
+				}
+
 				// 1. IP Restriction
 				allowedIP := c.Query("X-Amz-Allowed-IP")
 				if allowedIP != "" && allowedIP != c.ClientIP() {

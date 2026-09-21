@@ -23,6 +23,7 @@ interface PresignEntry {
   expires_at: string
   url: string
   method: string
+  is_revoked?: boolean
   created_at: string
 }
 
@@ -97,12 +98,15 @@ function PresignsPage() {
           body: JSON.stringify({
             key: newKey,
             expirySeconds: expiresIn,
+            method,
           }),
         },
       )
       if (res.ok) {
         toast.success('Presigned link created')
         setShowCreate(false)
+        setNewKey('')
+        setMethod('GET')
         fetchLinks()
       } else {
         toast.error('Failed to create link')
@@ -141,8 +145,9 @@ function PresignsPage() {
         <div className="space-y-3">
           {links.map((link) => {
             const expired = isExpired(link.expires_at)
+            const revoked = !!link.is_revoked
             return (
-              <div key={link.id} className={`rounded-xl border bg-card p-4 transition-all ${expired ? 'opacity-50' : 'hover:border-primary/20'}`}>
+              <div key={link.id} className={`rounded-xl border bg-card p-4 transition-all ${revoked ? 'opacity-40 bg-muted/20 border-destructive/20' : expired ? 'opacity-50' : 'hover:border-primary/20'}`}>
                 <div className="flex items-center justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
@@ -152,7 +157,13 @@ function PresignsPage() {
                       <span className="text-sm font-mono font-semibold truncate">
                         {link.bucket}/{link.key}
                       </span>
-                      {expired && <Badge variant="destructive" className="text-[9px]">Expired</Badge>}
+                      {revoked ? (
+                        <Badge variant="destructive" className="text-[9px]">Revoked</Badge>
+                      ) : expired ? (
+                        <Badge variant="destructive" className="text-[9px]">Expired</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[9px] text-emerald-600 dark:text-emerald-400 border-emerald-500/20 bg-emerald-500/10">Active</Badge>
+                      )}
                     </div>
                     <p className="text-[10px] text-muted-foreground font-mono truncate opacity-70">{link.url}</p>
                     <p className="text-[10px] text-muted-foreground mt-1">
@@ -163,9 +174,11 @@ function PresignsPage() {
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => copyUrl(link)}>
                       {copiedId === link.id ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => revokeLink(link.id)}>
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    {!revoked && (
+                      <Button variant="ghost" size="icon" title="Revoke Link" className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => revokeLink(link.id)}>
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    )}
                   </div>
                 </div>
               </div>

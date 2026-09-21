@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -576,51 +578,20 @@ func (h *AdminHandler) GeneratePresignURL(c *gin.Context) {
 	bucket := c.Query("bucket")
 	key := c.Query("key")
 	expires := c.Query("expires")
-	if expires == "" {
-		expires = "3600"
+	expiresSec := 3600
+	if expires != "" {
+		if sec, err := strconv.Atoi(expires); err == nil && sec > 0 {
+			expiresSec = sec
+		}
 	}
 
-	// For simplicity, we use the first key of the 'admin' user
-	user, ok := h.UserManager.Users["admin"]
-	if !ok || len(user.AccessKeys) == 0 {
-		c.String(http.StatusInternalServerError, "No admin user or keys found")
+	method := c.DefaultQuery("method", "GET")
+
+	presignedURL, err := h.GeneratePresignedURLWithMethodAndHost(method, bucket, key, "", time.Duration(expiresSec)*time.Second, "", false, c.Request.Host)
+	if err != nil {
+		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
-	accessKey := user.AccessKeys[0].AccessKeyID
-	secretKey := user.AccessKeys[0].SecretAccessKey
-
-	now := time.Now().UTC().Format("20060102T150405Z")
-	date := now[:8]
-	region := "us-east-1"
-	service := "s3"
-	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", date, region, service)
-	algorithm := "AWS4-HMAC-SHA256"
-
-	params := url.Values{}
-	params.Set("X-Amz-Algorithm", algorithm)
-	params.Set("X-Amz-Credential", fmt.Sprintf("%s/%s", accessKey, credentialScope))
-	params.Set("X-Amz-Date", now)
-	params.Set("X-Amz-Expires", expires)
-	params.Set("X-Amz-SignedHeaders", "host")
-
-	scheme := "http"
-	// Fiber check for TLS
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-
-	path := fmt.Sprintf("/%s/%s", bucket, key)
-	headers := http.Header{}
-	headers.Set("Host", c.Request.Host)
-
-	// Build Signature
-	canonicalRequest := auth.BuildCanonicalRequest("GET", path, params, headers, []string{"host"}, "UNSIGNED-PAYLOAD", c.Request.Host)
-	stringToSign := auth.BuildStringToSign(algorithm, now, credentialScope, canonicalRequest)
-	signature := auth.CalculateSignature(secretKey, date, region, service, stringToSign)
-
-	params.Set("X-Amz-Signature", signature)
-
-	presignedURL := fmt.Sprintf("%s://%s%s?%s", scheme, c.Request.Host, path, params.Encode())
 
 	c.JSON(http.StatusOK, map[string]string{
 		"url": presignedURL,
@@ -993,6 +964,7 @@ func (h *AdminHandler) ShareObject(c *gin.Context) {
 		ExpirySeconds int    `json:"expirySeconds"`
 		AllowedIP     string `json:"allowedIp"`
 		OneTimeUse    bool   `json:"oneTimeUse"`
+		Method        string `json:"method"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.String(http.StatusBadRequest, "Invalid request")
@@ -1002,8 +974,12 @@ func (h *AdminHandler) ShareObject(c *gin.Context) {
 	if req.ExpirySeconds <= 0 {
 		req.ExpirySeconds = 3600 // Default 1 hour
 	}
+	if req.Method == "" {
+		req.Method = "GET"
+	}
+	req.Method = strings.ToUpper(req.Method)
 
-	presignedURL, err := h.GeneratePresignedURL(bucket, req.Key, req.VersionID, time.Duration(req.ExpirySeconds)*time.Second, req.AllowedIP, req.OneTimeUse)
+	presignedURL, err := h.GeneratePresignedURLWithMethodAndHost(req.Method, bucket, req.Key, req.VersionID, time.Duration(req.ExpirySeconds)*time.Second, req.AllowedIP, req.OneTimeUse, c.Request.Host)
 	if err != nil {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
@@ -1023,6 +999,7 @@ func (h *AdminHandler) ShareObject(c *gin.Context) {
 			Key:        req.Key,
 			URL:        presignedURL,
 			Signature:  sig,
+			Method:     req.Method,
 			ExpiresAt:  expiresAt,
 			AllowedIP:  allowedIPPtr,
 			OneTimeUse: req.OneTimeUse,
@@ -1060,6 +1037,19 @@ func (h *AdminHandler) VerifyAdminPassword(c *gin.Context) {
 }
 
 func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expiry time.Duration, allowedIP string, oneTimeUse bool) (string, error) {
+	return h.GeneratePresignedURLWithMethodAndHost("GET", bucket, key, versionID, expiry, allowedIP, oneTimeUse, "")
+}
+
+func (h *AdminHandler) GeneratePresignedURLWithMethod(method, bucket, key, versionID string, expiry time.Duration, allowedIP string, oneTimeUse bool) (string, error) {
+	return h.GeneratePresignedURLWithMethodAndHost(method, bucket, key, versionID, expiry, allowedIP, oneTimeUse, "")
+}
+
+func (h *AdminHandler) GeneratePresignedURLWithMethodAndHost(method, bucket, key, versionID string, expiry time.Duration, allowedIP string, oneTimeUse bool, reqHost string) (string, error) {
+	if method == "" {
+		method = "GET"
+	}
+	method = strings.ToUpper(method)
+
 	keys, err := h.UserManager.GetAccessKeys("admin")
 	if err != nil || len(keys) == 0 {
 		// Fallback to "admin" if current user keys not found - simple hack for feature
@@ -1070,6 +1060,8 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 
 	region := "us-east-1"
 	date := time.Now().UTC()
+	dateStr := date.Format("20060102")
+	amzDate := date.Format("20060102T150405Z")
 	algorithm := "AWS4-HMAC-SHA256"
 	service := "s3"
 
@@ -1081,24 +1073,29 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 	host := "localhost:" + hostPort
 	if envHost := os.Getenv("SERVER_HOST"); envHost != "" {
 		host = envHost
+	} else if reqHost != "" {
+		hOnly, _, errH := net.SplitHostPort(reqHost)
+		if errH == nil && hOnly != "" {
+			host = net.JoinHostPort(hOnly, hostPort)
+		} else if !strings.Contains(reqHost, ":") && reqHost != "" {
+			host = net.JoinHostPort(reqHost, hostPort)
+		}
 	}
 
-	// URL components often need to be encoded
-	encodedKey := ""
-	parts := strings.Split(key, "/")
-	for i, part := range parts {
-		if i > 0 {
-			encodedKey += "/"
-		}
-		encodedKey += url.PathEscape(part)
+	cleanKey := strings.TrimPrefix(key, "/")
+	parts := strings.Split(cleanKey, "/")
+	var encodedParts []string
+	for _, part := range parts {
+		encodedParts = append(encodedParts, auth.UriEncode(part, true))
 	}
+	encodedKey := strings.Join(encodedParts, "/")
 
 	endpoint := fmt.Sprintf("http://%s/%s/%s", host, bucket, encodedKey)
 
 	query := url.Values{}
 	query.Set("X-Amz-Algorithm", algorithm)
-	query.Set("X-Amz-Credential", fmt.Sprintf("%s/%s/%s/%s/aws4_request", accessKey, date.Format("20060102"), region, service))
-	query.Set("X-Amz-Date", date.Format("20060102T150405Z"))
+	query.Set("X-Amz-Credential", fmt.Sprintf("%s/%s/%s/%s/aws4_request", accessKey, dateStr, region, service))
+	query.Set("X-Amz-Date", amzDate)
 	query.Set("X-Amz-Expires", strconv.Itoa(int(expiry.Seconds())))
 	query.Set("X-Amz-SignedHeaders", "host")
 	if versionID != "" && versionID != "simple" && versionID != "folder" {
@@ -1113,28 +1110,24 @@ func (h *AdminHandler) GeneratePresignedURL(bucket, key, versionID string, expir
 	}
 
 	canonicalURI := fmt.Sprintf("/%s/%s", bucket, encodedKey)
+	headers := http.Header{}
+	headers.Set("Host", host)
 
-	// Encode and fix spaces for canonical query
-	canonicalQuery := strings.ReplaceAll(query.Encode(), "+", "%20")
+	canonicalRequest := auth.BuildCanonicalRequest(method, canonicalURI, query, headers, []string{"host"}, "UNSIGNED-PAYLOAD", host)
+	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", dateStr, region, service)
+	stringToSign := auth.BuildStringToSign(algorithm, amzDate, credentialScope, canonicalRequest)
+	signature := auth.CalculateSignature(secretKey, dateStr, region, service, stringToSign)
 
-	canonicalHeaders := fmt.Sprintf("host:%s\n", host)
-	signedHeaders := "host"
-	payloadHash := "UNSIGNED-PAYLOAD"
-
-	canonicalRequest := fmt.Sprintf("GET\n%s\n%s\n%s\n%s\n%s", canonicalURI, canonicalQuery, canonicalHeaders, signedHeaders, payloadHash)
-
-	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", date.Format("20060102"), region, service)
-	stringToSign := fmt.Sprintf("%s\n%s\n%s\n%s", algorithm, date.Format("20060102T150405Z"), credentialScope, auth.Sha256Hex(canonicalRequest))
-
-	signature := auth.CalculateSignature(secretKey, date.Format("20060102"), region, service, stringToSign)
+	var queryParts []string
+	for k, vs := range query {
+		for _, v := range vs {
+			queryParts = append(queryParts, fmt.Sprintf("%s=%s", auth.UriEncode(k, true), auth.UriEncode(v, true)))
+		}
+	}
+	sort.Strings(queryParts)
+	canonicalQuery := strings.Join(queryParts, "&")
 
 	finalURL := fmt.Sprintf("%s?%s&X-Amz-Signature=%s", endpoint, canonicalQuery, signature)
-	// If versionID was added to endpoint manually above, we need to be careful not to duplicate ? or &
-	// Actually, endpoint has ?versionId=...
-	if strings.Contains(endpoint, "?") {
-		finalURL = fmt.Sprintf("%s&%s&X-Amz-Signature=%s", endpoint, canonicalQuery, signature)
-	}
-
 	return finalURL, nil
 }
 
@@ -1368,15 +1361,34 @@ func (h *AdminHandler) ListPresignedURLs(c *gin.Context) {
 
 func (h *AdminHandler) RevokePresignedURL(c *gin.Context) {
 	signature := c.Query("signature")
-	if signature == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing signature parameter"})
-		return
+	idStr := c.Param("id")
+	if idStr == "" {
+		idStr = c.Query("id")
 	}
+
 	db := h.Storage.(*storage.FileStorage).DB
 	if db == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database not available"})
 		return
 	}
+
+	if idStr != "" {
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err == nil {
+			if err := db.RevokePresignedURLByID(id); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.Status(http.StatusOK)
+			return
+		}
+	}
+
+	if signature == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Missing signature or id parameter"})
+		return
+	}
+
 	err := db.RevokeSignature(signature)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

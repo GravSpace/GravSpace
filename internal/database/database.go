@@ -135,6 +135,7 @@ type PresignedURLRow struct {
 	Key        string    `json:"key"`
 	URL        string    `json:"url"`
 	Signature  string    `json:"signature"`
+	Method     string    `json:"method"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	AllowedIP  *string   `json:"allowed_ip"`
 	OneTimeUse bool      `json:"one_time_use"`
@@ -465,6 +466,7 @@ func (d *Database) initSchema() error {
 		key TEXT NOT NULL,
 		url TEXT NOT NULL,
 		signature TEXT UNIQUE NOT NULL,
+		method TEXT DEFAULT 'GET',
 		expires_at TIMESTAMP NOT NULL,
 		allowed_ip TEXT,
 		one_time_use BOOLEAN DEFAULT FALSE,
@@ -546,6 +548,9 @@ func (d *Database) initSchema() error {
 		return err
 	}
 	if err := d.addColumnIfNotExists("buckets", "quota_bytes", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := d.addColumnIfNotExists("presigned_urls", "method", "TEXT DEFAULT 'GET'"); err != nil {
 		return err
 	}
 
@@ -1790,10 +1795,14 @@ func (d *Database) GetContentTypeBreakdown() ([]*ContentTypeBreakdown, error) {
 // Presigned URL Operations
 func (d *Database) CreatePresignedURL(row *PresignedURLRow) error {
 	start := time.Now()
+	method := row.Method
+	if method == "" {
+		method = "GET"
+	}
 	_, err := d.db.Exec(`
-		INSERT INTO presigned_urls (bucket, key, url, signature, expires_at, allowed_ip, one_time_use)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, row.Bucket, row.Key, row.URL, row.Signature, row.ExpiresAt, row.AllowedIP, row.OneTimeUse)
+		INSERT INTO presigned_urls (bucket, key, url, signature, method, expires_at, allowed_ip, one_time_use)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, row.Bucket, row.Key, row.URL, row.Signature, method, row.ExpiresAt, row.AllowedIP, row.OneTimeUse)
 	metrics.RecordDBQuery("CreatePresignedURL", time.Since(start))
 	return err
 }
@@ -1801,7 +1810,7 @@ func (d *Database) CreatePresignedURL(row *PresignedURLRow) error {
 func (d *Database) ListPresignedURLs() ([]*PresignedURLRow, error) {
 	start := time.Now()
 	rows, err := d.db.Query(`
-		SELECT id, bucket, key, url, signature, expires_at, allowed_ip, one_time_use, is_revoked, created_at
+		SELECT id, bucket, key, url, signature, COALESCE(method, 'GET'), expires_at, allowed_ip, one_time_use, is_revoked, created_at
 		FROM presigned_urls
 		ORDER BY created_at DESC
 	`)
@@ -1815,7 +1824,7 @@ func (d *Database) ListPresignedURLs() ([]*PresignedURLRow, error) {
 	for rows.Next() {
 		var row PresignedURLRow
 		err := rows.Scan(
-			&row.ID, &row.Bucket, &row.Key, &row.URL, &row.Signature,
+			&row.ID, &row.Bucket, &row.Key, &row.URL, &row.Signature, &row.Method,
 			&row.ExpiresAt, &row.AllowedIP, &row.OneTimeUse, &row.IsRevoked, &row.CreatedAt,
 		)
 		if err != nil {
@@ -1842,6 +1851,17 @@ func (d *Database) RevokeSignature(signature string) error {
 	`, signature)
 	metrics.RecordDBQuery("RevokeSignature", time.Since(start))
 	return err2
+}
+
+func (d *Database) RevokePresignedURLByID(id int64) error {
+	start := time.Now()
+	var sig string
+	err := d.db.QueryRow("SELECT signature FROM presigned_urls WHERE id = ?", id).Scan(&sig)
+	if err != nil {
+		return err
+	}
+	metrics.RecordDBQuery("RevokePresignedURLByID", time.Since(start))
+	return d.RevokeSignature(sig)
 }
 
 func (d *Database) IsSignatureRevoked(signature string) (bool, error) {

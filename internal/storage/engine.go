@@ -835,13 +835,37 @@ func (s *FileStorage) StatObject(bucket, key, versionID string) (*Object, error)
 	fullPath := filepath.Join(s.Root, bucket, key)
 	info, err := os.Stat(fullPath)
 	if err == nil && !info.IsDir() {
-		return &Object{
+		obj := &Object{
 			Key:       key,
 			VersionID: "legacy",
 			Size:      info.Size(),
 			IsLatest:  true,
 			ModTime:   info.ModTime(),
-		}, nil
+		}
+		if s.DB != nil {
+			dbObj, _ := s.DB.GetObject(bucket, key, "legacy")
+			if dbObj == nil {
+				dbObj, _ = s.DB.GetObject(bucket, key, "")
+			}
+			if dbObj != nil {
+				if dbObj.EncryptionType != nil {
+					obj.EncryptionType = *dbObj.EncryptionType
+				}
+				if dbObj.ContentType != nil {
+					obj.ContentType = *dbObj.ContentType
+				}
+				if dbObj.CompressionType != nil {
+					obj.CompressionType = *dbObj.CompressionType
+				}
+				if dbObj.ContentHash != nil {
+					obj.ContentHash = *dbObj.ContentHash
+				}
+				if dbObj.OriginalSize != nil {
+					obj.OriginalSize = *dbObj.OriginalSize
+				}
+			}
+		}
+		return obj, nil
 	}
 
 	objectDir := fullPath

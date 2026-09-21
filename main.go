@@ -295,6 +295,7 @@ func main() {
 		admin.DELETE("/buckets/:bucket/replication/:id", adminHandler.DeleteReplicationRule)
 		admin.GET("/presigns", adminHandler.ListPresignedURLs)
 		admin.DELETE("/presigns", adminHandler.RevokePresignedURL)
+		admin.DELETE("/presigns/:id", adminHandler.RevokePresignedURL)
 		admin.GET("/buckets/:bucket/tags/*key", adminHandler.GetObjectTagging)
 		admin.PUT("/buckets/:bucket/tags/*key", adminHandler.PutObjectTagging)
 		admin.GET("/buckets/:bucket/webhooks", adminHandler.ListWebhooks)
