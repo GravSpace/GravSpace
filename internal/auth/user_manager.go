@@ -468,6 +468,11 @@ func matchResource(resources []string, target string) bool {
 			if strings.HasPrefix(target, prefix) {
 				return true
 			}
+			// If resource policy is arn:aws:s3:::bucket/* or arn:aws:s3:::bucket*, also match bucket root arn:aws:s3:::bucket
+			bucketRoot := strings.TrimSuffix(prefix, "/")
+			if target == bucketRoot {
+				return true
+			}
 		}
 		if r == target {
 			return true
