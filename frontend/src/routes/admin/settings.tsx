@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useState, useEffect, useCallback } from 'react'
-import { Settings, RefreshCw, Loader2, Save, Server, Slack as SlackIcon } from 'lucide-react'
+import { RefreshCw, Loader2, Save, Server, Slack as SlackIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../../components/ui/button'
 import { Input } from '../../components/ui/input'

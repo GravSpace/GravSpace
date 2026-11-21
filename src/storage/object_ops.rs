@@ -1,0 +1,353 @@
+use super::FileStorage;
+use crate::crypto::aes_gcm::encrypt_bytes;
+use crate::db::{self, objects::ObjectRow};
+use crate::error::{AppError, StorageError};
+use sha2::{Digest, Sha256};
+use std::fs;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub struct ObjectMeta {
+    pub key: String,
+    pub version_id: String,
+    pub size: i64,
+    pub etag: String,
+    pub content_type: String,
+    pub mod_time: String,
+    pub encryption_type: Option<String>,
+    pub compression_type: Option<String>,
+}
+
+fn is_compressible(mime: &str) -> bool {
+    mime.starts_with("text/")
+        || mime.contains("json")
+        || mime.contains("xml")
+        || mime.contains("javascript")
+        || mime.contains("csv")
+        || mime == "image/svg+xml"
+}
+
+impl FileStorage {
+    pub fn object_path(&self, bucket: &str, key: &str, version_id: &str) -> PathBuf {
+        let base = self.root.join(bucket).join(key.trim_start_matches('/'));
+        let clean_vid = version_id.trim_matches('\'');
+        if clean_vid.is_empty() || clean_vid == "legacy" || clean_vid == "null" {
+            base
+        } else {
+            base.join(clean_vid)
+        }
+    }
+
+    pub async fn put_object_direct(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        encryption: Option<&str>,
+    ) -> Result<String, AppError> {
+        let conn = self.db.conn()?;
+        let is_versioning_enabled = db::buckets::get_bucket_versioning(&conn, bucket)
+            .await
+            .unwrap_or(false);
+
+        let version_id = if is_versioning_enabled {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            String::new()
+        };
+
+        let raw_target = self.object_path(bucket, key, &version_id);
+        let target_path = if !is_versioning_enabled && raw_target.is_dir() {
+            raw_target.join("latest")
+        } else {
+            raw_target
+        };
+
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| StorageError::Io(e.to_string()))?;
+        }
+
+        let is_encrypted = encryption == Some("AES256");
+        let mime = mime_guess::from_path(key)
+            .first_raw()
+            .unwrap_or("application/octet-stream");
+
+        let mut to_write = data.clone();
+        let mut compression_type = None;
+        let mut original_size = None;
+
+        if !is_encrypted && data.len() > 512 && is_compressible(mime) {
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            use std::io::Write;
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            if encoder.write_all(&data).is_ok() {
+                if let Ok(compressed) = encoder.finish() {
+                    if compressed.len() < data.len() {
+                        to_write = compressed;
+                        compression_type = Some("gzip".to_string());
+                        original_size = Some(data.len() as i64);
+                    }
+                }
+            }
+        }
+
+        if is_encrypted {
+            to_write = encrypt_bytes(&self.config.sse_master_key, &to_write)
+                .map_err(|e| StorageError::Io(e.to_string()))?;
+        }
+
+        let content_hash = hex::encode(Sha256::digest(&data));
+        let mut is_deduplicated = false;
+
+        if !is_encrypted {
+            let cas_dir = self.root.join(".cas").join(&content_hash[..2]);
+            let cas_path = cas_dir.join(&content_hash);
+            let _ = fs::create_dir_all(&cas_dir);
+            is_deduplicated = cas_path.exists();
+            if !is_deduplicated {
+                let _ = fs::write(&cas_path, &to_write);
+            }
+            let _ = fs::remove_file(&target_path);
+            if fs::hard_link(&cas_path, &target_path).is_err() {
+                fs::write(&target_path, &to_write).map_err(|e| StorageError::Io(e.to_string()))?;
+            }
+        } else {
+            fs::write(&target_path, &to_write).map_err(|e| StorageError::Io(e.to_string()))?;
+        }
+
+        let etag = format!("\"{}\"", hex::encode(Sha256::digest(&data)));
+        let physical_size = to_write.len() as i64;
+
+        // Check bucket default retention for object lock
+        let bucket_info = db::buckets::get_bucket(&conn, bucket).await.unwrap_or(None);
+        let mut retain_until_date = None;
+        let mut lock_mode = None;
+        if let Some(ref b) = bucket_info {
+            if b.object_lock_enabled {
+                if let Some(ref mode) = b.default_retention_mode {
+                    if !mode.is_empty() {
+                        if let Some(days) = b.default_retention_days {
+                            if days > 0 {
+                                lock_mode = Some(mode.clone());
+                                let retain_date = chrono::Utc::now() + chrono::Duration::days(days);
+                                retain_until_date = Some(retain_date.to_rfc3339());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let row = ObjectRow {
+            id: 0,
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            version_id: version_id.clone(),
+            size: physical_size,
+            etag: Some(etag),
+            content_type: Some(mime.to_string()),
+            modified_at: chrono::Utc::now().to_rfc3339(),
+            is_latest: true,
+            encryption_type: if is_encrypted {
+                Some("AES256".to_string())
+            } else {
+                None
+            },
+            retain_until_date,
+            legal_hold: false,
+            lock_mode,
+            deleted_at: None,
+            legal_hold_reason: None,
+            content_hash: Some(content_hash.clone()),
+            compression_type,
+            original_size: original_size.or(Some(data.len() as i64)),
+            is_deduplicated,
+        };
+
+        db::objects::upsert_object(&conn, &row).await?;
+        self.invalidate_object_list_cache(bucket, key).await;
+
+        Ok(version_id)
+    }
+
+    pub async fn copy_object_direct(
+        &self,
+        src_bucket: &str,
+        src_key: &str,
+        dst_bucket: &str,
+        dst_key: &str,
+    ) -> Result<String, AppError> {
+        let (data, meta, _) = self.get_object(src_bucket, src_key, None, None).await?;
+        self.put_object_direct(dst_bucket, dst_key, data, meta.encryption_type.as_deref())
+            .await
+    }
+
+    pub async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        encryption: Option<&str>,
+    ) -> Result<String, AppError> {
+        let physical_size = data.len() as i64;
+        let version_id = self.put_object_direct(bucket, key, data, encryption).await?;
+
+        // Webhook Event Notification on Put
+        if let Some(ref d) = self.dispatcher {
+            d.dispatch(crate::workers::notifications::S3Event {
+                event_name: "s3:ObjectCreated:Put".to_string(),
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+                size: physical_size,
+                etag: format!("\"{version_id}\""),
+                version_id: version_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            })
+            .await;
+        }
+
+        // Asynchronous Bucket Replication on Put
+        if let Ok(conn) = self.db.conn() {
+            if let Ok(rules) = db::replications::list_replication_rules(&conn, bucket).await {
+                for rule in rules {
+                    if rule.enabled {
+                        let pfx = rule.prefix.as_deref().unwrap_or("");
+                        if pfx.is_empty() || key.starts_with(pfx) {
+                            let storage_clone = self.clone();
+                            let src_b = bucket.to_string();
+                            let dst_b = rule.destination_bucket.clone();
+                            let k = key.to_string();
+                            tokio::spawn(async move {
+                                let _ = storage_clone.copy_object_direct(&src_b, &k, &dst_b, &k).await;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(version_id)
+    }
+
+    pub async fn delete_object_direct(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        bypass_governance: bool,
+    ) -> Result<(), AppError> {
+        let conn = self.db.conn()?;
+        let vid = version_id.unwrap_or("");
+
+        // 1. Check Object Lock & Legal Hold
+        if let Ok(Some(obj)) = db::objects::get_object(&conn, bucket, key, vid).await {
+            if obj.legal_hold {
+                return Err(StorageError::ObjectLocked(format!(
+                    "Object '{bucket}/{key}' is under legal hold and cannot be deleted"
+                ))
+                .into());
+            }
+
+            if let Some(ref retain_date_str) = obj.retain_until_date {
+                if let Ok(retain_date) = chrono::DateTime::parse_from_rfc3339(retain_date_str) {
+                    if chrono::Utc::now() < retain_date.with_timezone(&chrono::Utc) {
+                        let lock_mode = obj.lock_mode.as_deref().unwrap_or("COMPLIANCE");
+                        if lock_mode == "GOVERNANCE" && bypass_governance {
+                            // allowed to bypass governance retention
+                        } else {
+                            return Err(StorageError::ObjectLocked(format!(
+                                "Object '{bucket}/{key}' is under {lock_mode} retention until {retain_date_str} and cannot be deleted"
+                            ))
+                            .into());
+                        }
+                    }
+                }
+            }
+        }
+
+        let info = db::buckets::get_bucket(&conn, bucket).await?;
+        let soft_delete = info.map(|b| b.soft_delete_enabled).unwrap_or(false);
+
+        let src_path = self.object_path(bucket, key, vid);
+        if soft_delete {
+            db::objects::soft_delete_object(&conn, bucket, key, vid).await?;
+            let trash_path = self.trash_path(bucket, key, vid);
+            if let Some(parent) = trash_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if src_path.exists() {
+                let _ = fs::rename(&src_path, &trash_path);
+            }
+        } else {
+            db::objects::hard_delete_object(&conn, bucket, key, vid).await?;
+            if src_path.exists() {
+                let _ = fs::remove_file(&src_path);
+            }
+        }
+
+        self.invalidate_object_list_cache(bucket, key).await;
+        Ok(())
+    }
+
+    pub async fn delete_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        bypass_governance: bool,
+    ) -> Result<(), AppError> {
+        let vid = version_id.unwrap_or("");
+        self.delete_object_direct(bucket, key, version_id, bypass_governance).await?;
+
+        // Webhook Event Notification on Delete
+        if let Some(ref d) = self.dispatcher {
+            d.dispatch(crate::workers::notifications::S3Event {
+                event_name: "s3:ObjectRemoved:Delete".to_string(),
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+                size: 0,
+                etag: String::new(),
+                version_id: vid.to_string(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            })
+            .await;
+        }
+
+        // Asynchronous Bucket Replication of Deletion
+        if let Ok(conn) = self.db.conn() {
+            if let Ok(rules) = db::replications::list_replication_rules(&conn, bucket).await {
+                for rule in rules {
+                    if rule.enabled {
+                        let pfx = rule.prefix.as_deref().unwrap_or("");
+                        if pfx.is_empty() || key.starts_with(pfx) {
+                            let storage_clone = self.clone();
+                            let dst_b = rule.destination_bucket.clone();
+                            let k = key.to_string();
+                            let v = version_id.map(|s| s.to_string());
+                            tokio::spawn(async move {
+                                let _ = storage_clone
+                                    .delete_object_direct(&dst_b, &k, v.as_deref(), bypass_governance)
+                                    .await;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn copy_object(
+        &self,
+        src_bucket: &str,
+        src_key: &str,
+        dst_bucket: &str,
+        dst_key: &str,
+    ) -> Result<String, AppError> {
+        let (data, meta, _) = self.get_object(src_bucket, src_key, None, None).await?;
+        self.put_object(dst_bucket, dst_key, data, meta.encryption_type.as_deref())
+            .await
+    }
+}

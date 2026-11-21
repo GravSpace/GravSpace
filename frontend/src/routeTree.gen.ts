@@ -21,6 +21,7 @@ import { Route as AdminTrashRouteImport } from './routes/admin/trash'
 import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
 import { Route as AdminPresignsRouteImport } from './routes/admin/presigns'
 import { Route as AdminPoliciesRouteImport } from './routes/admin/policies'
+import { Route as AdminExplorerRouteImport } from './routes/admin/explorer'
 import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
 import { Route as AdminAuditRouteImport } from './routes/admin/audit'
 import { Route as AdminSplatRouteImport } from './routes/admin/$'
@@ -87,6 +88,11 @@ const AdminPoliciesRoute = AdminPoliciesRouteImport.update({
   path: '/policies',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminExplorerRoute = AdminExplorerRouteImport.update({
+  id: '/explorer',
+  path: '/explorer',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminDashboardRoute = AdminDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -122,6 +128,7 @@ export interface FileRoutesByFullPath {
   '/admin/$': typeof AdminSplatRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/explorer': typeof AdminExplorerRoute
   '/admin/policies': typeof AdminPoliciesRoute
   '/admin/presigns': typeof AdminPresignsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -140,6 +147,7 @@ export interface FileRoutesByTo {
   '/admin/$': typeof AdminSplatRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/explorer': typeof AdminExplorerRoute
   '/admin/policies': typeof AdminPoliciesRoute
   '/admin/presigns': typeof AdminPresignsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -160,6 +168,7 @@ export interface FileRoutesById {
   '/admin/$': typeof AdminSplatRoute
   '/admin/audit': typeof AdminAuditRoute
   '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/explorer': typeof AdminExplorerRoute
   '/admin/policies': typeof AdminPoliciesRoute
   '/admin/presigns': typeof AdminPresignsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -181,6 +190,7 @@ export interface FileRouteTypes {
     | '/admin/$'
     | '/admin/audit'
     | '/admin/dashboard'
+    | '/admin/explorer'
     | '/admin/policies'
     | '/admin/presigns'
     | '/admin/settings'
@@ -199,6 +209,7 @@ export interface FileRouteTypes {
     | '/admin/$'
     | '/admin/audit'
     | '/admin/dashboard'
+    | '/admin/explorer'
     | '/admin/policies'
     | '/admin/presigns'
     | '/admin/settings'
@@ -218,6 +229,7 @@ export interface FileRouteTypes {
     | '/admin/$'
     | '/admin/audit'
     | '/admin/dashboard'
+    | '/admin/explorer'
     | '/admin/policies'
     | '/admin/presigns'
     | '/admin/settings'
@@ -324,6 +336,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminPoliciesRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/explorer': {
+      id: '/admin/explorer'
+      path: '/explorer'
+      fullPath: '/admin/explorer'
+      preLoaderRoute: typeof AdminExplorerRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/dashboard': {
       id: '/admin/dashboard'
       path: '/dashboard'
@@ -366,6 +385,7 @@ interface AdminRouteChildren {
   AdminSplatRoute: typeof AdminSplatRoute
   AdminAuditRoute: typeof AdminAuditRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
+  AdminExplorerRoute: typeof AdminExplorerRoute
   AdminPoliciesRoute: typeof AdminPoliciesRoute
   AdminPresignsRoute: typeof AdminPresignsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
@@ -380,6 +400,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminSplatRoute: AdminSplatRoute,
   AdminAuditRoute: AdminAuditRoute,
   AdminDashboardRoute: AdminDashboardRoute,
+  AdminExplorerRoute: AdminExplorerRoute,
   AdminPoliciesRoute: AdminPoliciesRoute,
   AdminPresignsRoute: AdminPresignsRoute,
   AdminSettingsRoute: AdminSettingsRoute,

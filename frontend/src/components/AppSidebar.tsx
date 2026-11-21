@@ -13,6 +13,7 @@ import {
   Search,
   Sparkles,
   FileText,
+  Terminal,
 } from 'lucide-react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { Dialog, DialogContent } from './ui/dialog'
@@ -38,6 +39,7 @@ const navItems = [
   { path: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/admin/buckets', label: 'Buckets', icon: Database },
   { path: '/admin/presigns', label: 'Presigned Links', icon: LinkIcon },
+  { path: '/admin/explorer', label: 'S3 API Explorer', icon: Terminal },
   { path: '/admin/users', label: 'IAM Engine', icon: UserIcon },
   { path: '/admin/policies', label: 'Security Policies', icon: Shield },
   { path: '/admin/audit', label: 'Audit Logs', icon: ScrollText },

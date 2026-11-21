@@ -10,15 +10,12 @@ import {
   Trash2,
   ShieldCheck,
   ShieldOff,
-  Settings,
-  TrendingUp,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '../../../components/ui/button'
 import { Badge } from '../../../components/ui/badge'
 import { Input } from '../../../components/ui/input'
 import { Label } from '../../../components/ui/label'
-import { Switch } from '../../../components/ui/switch'
 import {
   Dialog,
   DialogContent,
@@ -120,17 +117,38 @@ function BucketsPage() {
 
   function isPublic(bucket: string): boolean {
     const anon = users['anonymous']
-    if (!anon?.policies) return false
+    if (!anon?.policies || !Array.isArray(anon.policies)) return false
     const resource = `arn:aws:s3:::${bucket}/*`
-    return anon.policies.some((p: any) =>
-      p.statement.some((s: any) => {
-        if (s.effect !== 'Allow' || !s.action.includes('s3:GetObject')) return false
-        return s.resource.some(
-          (r: string) =>
-            r === '*' || r === resource || (r.endsWith('*') && resource.startsWith(r.slice(0, -1))),
+    return anon.policies.some((p: any) => {
+      let statements: any[] = []
+      if (Array.isArray(p?.statement)) statements = p.statement
+      else if (Array.isArray(p?.Statement)) statements = p.Statement
+      else if (typeof p?.data === 'string') {
+        try {
+          const parsed = JSON.parse(p.data)
+          statements = parsed.Statement || parsed.statement || []
+        } catch {}
+      }
+
+      return Array.isArray(statements) && statements.some((s: any) => {
+        if (!s) return false
+        const effect = s.effect || s.Effect || ''
+        if (effect !== 'Allow') return false
+        const rawAction = s.action || s.Action || []
+        const actions = Array.isArray(rawAction) ? rawAction : [rawAction]
+        const hasGet = actions.some(
+          (a: any) => typeof a === 'string' && (a === '*' || a === 's3:*' || a.includes('s3:GetObject')),
         )
-      }),
-    )
+        if (!hasGet) return false
+        const rawRes = s.resource || s.Resource || []
+        const resources = Array.isArray(rawRes) ? rawRes : [rawRes]
+        return resources.some(
+          (r: any) =>
+            typeof r === 'string' &&
+            (r === '*' || r === resource || (r.endsWith('*') && resource.startsWith(r.slice(0, -1)))),
+        )
+      })
+    })
   }
 
   async function togglePublic(bucket: string) {
@@ -241,13 +259,17 @@ function BucketsPage() {
           <h1 className="text-lg font-semibold tracking-tight">Buckets</h1>
           <p className="text-xs text-muted-foreground">Manage your cloud storage infrastructure.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="relative">
+        <div className="flex items-center gap-3" suppressHydrationWarning>
+          <div className="relative" suppressHydrationWarning>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               type="text"
+              autoComplete="off"
+              data-protonpass-ignore="true"
+              data-1p-ignore="true"
+              suppressHydrationWarning
               placeholder="Filter buckets..."
               className="h-8 w-44 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60"
             />

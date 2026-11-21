@@ -1,30 +1,26 @@
 # Build stage
-FROM golang:1.25-bookworm AS builder
+FROM rust:bookworm AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Copy go mod files
-COPY go.mod go.sum ./
-
-# Download dependencies
-RUN go mod download
-
 # Download and install Turso CLI
-RUN apt-get update && apt-get install -y curl xz-utils && \
+RUN apt-get update && apt-get install -y curl xz-utils pkg-config libssl-dev && \
     curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tursodatabase/turso/releases/latest/download/turso_cli-installer.sh | sh
 
-# Copy source code
-COPY . .
+# Copy Cargo manifests
+COPY Cargo.toml Cargo.lock ./
 
-# Build the application
-# CGO_ENABLED=0: tursogo v0.6.1 uses purego (no CGO) — the native library is
-# embedded into the binary via go:embed and extracted to ~/.cache/turso-go/ at runtime.
-RUN CGO_ENABLED=0 GOOS=linux go build -a -o storage-server .
+# Pre-build dependencies for Docker layer caching
+RUN mkdir src && echo "fn main() {}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
 
-# Build a tiny static healthcheck utility
-RUN printf 'package main\nimport "net/http"\nimport "os"\nfunc main() {\n  res, err := http.Get("http://localhost:8080/health/live")\n  if err != nil || res.StatusCode != 200 {\n    os.Exit(1)\n  }\n}\n' > healthcheck.go && \
-    CGO_ENABLED=0 go build -o healthcheck healthcheck.go
+# Copy real source code
+COPY src ./src
+
+# Build release binary
+RUN touch src/main.rs && cargo build --release
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -40,23 +36,17 @@ COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 WORKDIR /app
 
 # Copy binaries and entrypoint from builder
-# Note: No .so files needed — libturso_sync_sdk_kit.so is embedded in the binary
-# via go:embed (turso-go-platform-libs) and extracted to ~/.cache/turso-go/ at runtime.
-COPY --from=builder /app/storage-server .
-COPY --from=builder /app/healthcheck /usr/local/bin/healthcheck
-COPY --from=builder /app/entrypoint.sh /app/entrypoint.sh
+COPY --from=builder /app/target/release/storage-server .
 COPY --from=builder /root/.turso/tursodb /usr/local/bin/tursodb
+COPY entrypoint.sh /app/entrypoint.sh
 
-# Ensure executables are runnable
-RUN chmod +x /usr/local/bin/tursodb /app/entrypoint.sh
+# Create healthcheck script
+RUN echo '#!/bin/sh\ncurl -fsS http://localhost:8080/health/live >/dev/null 2>&1' > /usr/local/bin/healthcheck && \
+    chmod +x /usr/local/bin/healthcheck /usr/local/bin/tursodb /app/entrypoint.sh
 
 # Create non-root user and home directory
 RUN groupadd -g 1000 appuser && \
     useradd -m -u 1000 -g appuser appuser
-
-# Pre-create the cache path so the library can be extracted at runtime
-RUN mkdir -p /home/appuser/.cache/turso-go && \
-    chown -R appuser:appuser /home/appuser/.cache
 
 # Create app data directories
 RUN mkdir -p /app/data /app/db /app/logs && \

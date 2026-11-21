@@ -9,6 +9,19 @@ import tailwindcss from '@tailwindcss/vite'
 
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
+  server: {
+    proxy: {
+      '/api': {
+        target: process.env.SERVER_URL || 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/s3': {
+        target: process.env.S3_URL || 'http://localhost:9001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/s3/, ''),
+      },
+    },
+  },
   plugins: [
     devtools(),
     tailwindcss(),

@@ -34,8 +34,6 @@ import {
 import { Badge } from '../ui/badge'
 import type { S3Object, BucketInfo } from '../../routes/admin/buckets/$bucket'
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
-
 function formatSize(bytes: number): string {
   if (!bytes || bytes === 0) return '0 B'
   const k = 1024
@@ -113,7 +111,7 @@ interface Props {
 }
 
 export function BucketObjectTable({
-  bucketName,
+  bucketName: _bucketName,
   items,
   loading,
   currentPrefix,
