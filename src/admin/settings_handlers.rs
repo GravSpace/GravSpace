@@ -11,7 +11,10 @@ use std::collections::HashMap;
 
 pub async fn get_system_settings(State(storage): State<FileStorage>) -> Result<Response, AppError> {
     let conn = storage.db.conn()?;
-    let settings = db::settings::list_settings(&conn).await?;
+    let mut settings = db::settings::list_settings(&conn).await?;
+    let version = env!("CARGO_PKG_VERSION");
+    settings.insert("app_version".to_string(), version.to_string());
+    settings.insert("version".to_string(), version.to_string());
     Ok((StatusCode::OK, Json(settings)).into_response())
 }
 
@@ -21,6 +24,9 @@ pub async fn update_system_settings(
 ) -> Result<Response, AppError> {
     let conn = storage.db.conn()?;
     for (k, v) in payload {
+        if k == "app_version" || k == "version" {
+            continue;
+        }
         db::settings::set_setting(&conn, &k, &v).await?;
     }
     Ok((StatusCode::OK, Json(serde_json::json!({ "success": true }))).into_response())

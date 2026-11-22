@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../../../hooks/useAuth'
@@ -13,7 +13,8 @@ import { ObjectLockDialog } from '../../../components/bucket/ObjectLockDialog'
 import { VersionExplorerDialog } from '../../../components/bucket/VersionExplorerDialog'
 import { BucketSettingsDialog } from '../../../components/bucket/BucketSettingsDialog'
 import { BucketHeader } from '../../../components/bucket/BucketHeader'
-import { extractDroppedFiles, encKey } from '../../../components/bucket/bucketUploadHelpers'
+import { encKey } from '../../../components/bucket/bucketUploadHelpers'
+import { useBucketUploads } from '../../../components/bucket/useBucketUploads'
 import type { CrossServerShare } from '../../../components/federation/federationTypes'
 
 interface BucketSearch {
@@ -37,6 +38,7 @@ export interface S3Object {
   ETag?: string
   ContentType?: string
   VersionID?: string
+  IsLatest?: boolean
   LockMode?: string
   LockUntil?: string
 }
@@ -63,12 +65,12 @@ function BucketDetailPage() {
   const [currentPrefix, setCurrentPrefix] = useState(searchPrefix)
   const [allItems, setAllItems] = useState<(string | S3Object)[]>([])
   const [loading, setLoading] = useState(false)
+  const [showVersions, setShowVersions] = useState(false)
   const [bucketInfo, setBucketInfo] = useState<BucketInfo | null>(null)
   const [shares, setShares] = useState<CrossServerShare[]>([])
   const [users, setUsers] = useState<Record<string, any>>({})
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
-  const [dragActive, setDragActive] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [showCreateFolderDialog, setShowCreateFolderDialog] = useState(false)
   const [previewObject, setPreviewObject] = useState<S3Object | null>(null)
@@ -78,20 +80,23 @@ function BucketDetailPage() {
   const [explorerObject, setExplorerObject] = useState<S3Object | null>(null)
   const [showBucketSettings, setShowBucketSettings] = useState(false)
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
-
   const fetchObjects = useCallback(
-    async (prefix = currentPrefix) => {
+    async (prefix = currentPrefix, versions = showVersions) => {
       setLoading(true)
       try {
+        const vParam = versions ? '&versions=true' : ''
         const res = await authFetch(
-          `${API_BASE}/admin/buckets/${bucketName}/objects?delimiter=/&prefix=${encodeURIComponent(prefix)}`,
+          `${API_BASE}/admin/buckets/${bucketName}/objects?delimiter=/&prefix=${encodeURIComponent(prefix)}${vParam}`,
         )
         if (res.ok) {
           const data = await res.json()
           const folders: string[] = (data.common_prefixes || []).filter((p: string) => p !== prefix)
-          const rawList = Array.isArray(data) ? data : (data.objects || data.Contents || [])
+          const rawList =
+            versions && Array.isArray(data.versions) && data.versions.length > 0
+              ? data.versions
+              : Array.isArray(data)
+                ? data
+                : data.objects || data.Contents || []
           const objects: S3Object[] = rawList
             .map((o: any) => ({
               Key: o.Key || o.key || '',
@@ -101,6 +106,7 @@ function BucketDetailPage() {
               ETag: o.ETag || o.etag,
               ContentType: o.ContentType || o.content_type,
               VersionID: o.VersionID || o.version_id,
+              IsLatest: o.IsLatest ?? o.is_latest,
               LockMode: o.LockMode || o.lock_mode,
               LockUntil: o.LockUntil || o.lock_until || o.RetainUntilDate || o.retain_until_date,
             }))
@@ -111,8 +117,29 @@ function BucketDetailPage() {
         setLoading(false)
       }
     },
-    [bucketName, authFetch, currentPrefix],
+    [bucketName, authFetch, currentPrefix, showVersions],
   )
+
+  const {
+    dragActive,
+    fileInputRef,
+    folderInputRef,
+    uploadFiles,
+    uploadFolder,
+    handleDrag,
+    handleDrop,
+  } = useBucketUploads({
+    bucketName,
+    currentPrefix,
+    apiBase: API_BASE,
+    authFetch,
+    addTransfer,
+    updateProgress,
+    setError,
+    fetchObjects: async () => {
+      await fetchObjects(currentPrefix, showVersions)
+    },
+  })
 
   const fetchBucketInfo = useCallback(async () => {
     try {
@@ -159,7 +186,7 @@ function BucketDetailPage() {
   function navigateTo(prefix: string) {
     setCurrentPrefix(prefix)
     setSelectedItems(new Set())
-    fetchObjects(prefix)
+    fetchObjects(prefix, showVersions)
   }
 
   function navigateUp() {
@@ -167,45 +194,6 @@ function BucketDetailPage() {
     parts.pop()
     const newPrefix = parts.length > 0 ? parts.join('/') + '/' : ''
     navigateTo(newPrefix)
-  }
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (e.type === 'dragenter' || e.type === 'dragover') setDragActive(true)
-    else if (e.type === 'dragleave') setDragActive(false)
-  }
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragActive(false)
-
-    const filesToUpload = await extractDroppedFiles(e.dataTransfer)
-    if (filesToUpload.length === 0) return
-
-    toast.info(`Starting upload of ${filesToUpload.length} file(s)...`)
-    for (const item of filesToUpload) {
-      const key = currentPrefix + item.path
-      const id = crypto.randomUUID()
-      addTransfer({ id, name: item.path, bucket: bucketName, type: 'upload', size: item.file.size })
-      try {
-        const res = await authFetch(
-          `${API_BASE}/admin/buckets/${bucketName}/objects/${encodeURIComponent(key)}`,
-          {
-            method: 'PUT',
-            body: item.file,
-            headers: { 'Content-Type': item.file.type || 'application/octet-stream' },
-          },
-        )
-        if (!res.ok) throw new Error(await res.text())
-        updateProgress(id, 100)
-      } catch (err) {
-        setError(id, String(err))
-      }
-    }
-    toast.success('Upload completed.')
-    await fetchObjects()
   }
 
   const filteredItems = useMemo(() => {
@@ -299,62 +287,6 @@ function BucketDetailPage() {
     )
   }
 
-  async function uploadFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || [])
-    if (!files.length) return
-    for (const file of files) {
-      const key = currentPrefix + file.name
-      const id = crypto.randomUUID()
-      addTransfer({ id, name: file.name, bucket: bucketName, type: 'upload', size: file.size })
-      try {
-        const res = await authFetch(
-          `${API_BASE}/admin/buckets/${bucketName}/objects/${encKey(key)}`,
-          {
-            method: 'PUT',
-            body: file,
-            headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          },
-        )
-        if (!res.ok) throw new Error(await res.text())
-        updateProgress(id, 100)
-        toast.success(`"${file.name}" uploaded successfully.`)
-      } catch (err) {
-        setError(id, String(err))
-        toast.error(`Failed to upload "${file.name}"`)
-      }
-    }
-    if (fileInputRef.current) fileInputRef.current.value = ''
-    await fetchObjects()
-  }
-
-  async function uploadFolder(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || [])
-    if (!files.length) return
-    for (const file of files) {
-      const relativePath = (file as any).webkitRelativePath || file.name
-      const key = currentPrefix + relativePath
-      const id = crypto.randomUUID()
-      addTransfer({ id, name: relativePath, bucket: bucketName, type: 'upload', size: file.size })
-      try {
-        const res = await authFetch(
-          `${API_BASE}/admin/buckets/${bucketName}/objects/${encKey(key)}`,
-          {
-            method: 'PUT',
-            body: file,
-            headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          },
-        )
-        if (!res.ok) throw new Error(await res.text())
-        updateProgress(id, 100)
-      } catch (err) {
-        setError(id, String(err))
-      }
-    }
-    if (folderInputRef.current) folderInputRef.current.value = ''
-    toast.success('Folder uploaded successfully.')
-    await fetchObjects()
-  }
-
   const prefixParts = currentPrefix.split('/').filter(Boolean)
 
   return (
@@ -366,6 +298,12 @@ function BucketDetailPage() {
         bucketInfo={bucketInfo}
         shares={shares}
         searchQuery={searchQuery}
+        showVersions={showVersions}
+        onToggleShowVersions={() => {
+          const next = !showVersions
+          setShowVersions(next)
+          fetchObjects(currentPrefix, next)
+        }}
         onSearchChange={setSearchQuery}
         onNavigate={navigateTo}
         onBack={() => navigate({ to: '/admin/buckets' })}
@@ -406,6 +344,7 @@ function BucketDetailPage() {
           items={filteredItems}
           loading={loading}
           currentPrefix={currentPrefix}
+          showVersions={showVersions}
           selectedItems={selectedItems}
           onSelectChange={setSelectedItems}
           onNavigate={navigateTo}

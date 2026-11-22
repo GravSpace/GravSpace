@@ -141,6 +141,32 @@ pub async fn list_objects(
     Ok(results)
 }
 
+pub async fn list_object_versions(
+    conn: &Connection,
+    bucket: &str,
+    prefix: &str,
+) -> Result<Vec<ObjectRow>, AppError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
+                    is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
+                    deleted_at, legal_hold_reason, content_hash, compression_type,
+                    original_size, is_deduplicated
+             FROM objects
+             WHERE bucket = ?1 AND deleted_at IS NULL AND key LIKE ?2
+             ORDER BY key ASC, modified_at DESC",
+            params![bucket, format!("{prefix}%")],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+        results.push(row_to_object(&row)?);
+    }
+    Ok(results)
+}
+
 pub async fn soft_delete_object(
     conn: &Connection,
     bucket: &str,

@@ -8,8 +8,11 @@ import {
   Settings,
   Loader2,
   RefreshCw,
+  Clock,
+  History,
 } from 'lucide-react'
 import { Button } from '../ui/button'
+import { Badge } from '../ui/badge'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -45,6 +48,8 @@ interface Props {
   loading: boolean
   syncing: boolean
   activeTransfersCount: number
+  showVersions?: boolean
+  onToggleShowVersions?: () => void
 }
 
 function formatSize(bytes: number): string {
@@ -72,6 +77,8 @@ export function BucketHeader({
   loading,
   syncing,
   activeTransfersCount,
+  showVersions = false,
+  onToggleShowVersions,
 }: Props) {
   const usagePercentage = bucketInfo?.QuotaBytes
     ? Math.min(100, Math.round(((bucketInfo.CurrentSize || 0) / bucketInfo.QuotaBytes) * 100))
@@ -117,6 +124,14 @@ export function BucketHeader({
           </Breadcrumb>
         </div>
         <BucketHeaderFederationBadge bucketName={bucketName} shares={shares} />
+        {bucketInfo?.VersioningEnabled && (
+          <Badge
+            variant="outline"
+            className="text-[9px] h-5 py-0 px-1.5 uppercase tracking-wider font-extrabold border-violet-500/30 text-violet-500 shrink-0 gap-1 flex items-center"
+          >
+            <Clock className="w-2.5 h-2.5" /> Versioned
+          </Badge>
+        )}
       </div>
 
       <div className="flex items-center gap-3" suppressHydrationWarning>
@@ -152,6 +167,21 @@ export function BucketHeader({
             className="h-9 pl-9 w-full rounded-md border border-slate-200 dark:border-slate-800 bg-background/50 text-sm focus:outline-none focus:ring-1 focus:ring-primary/20"
           />
         </div>
+
+        {bucketInfo?.VersioningEnabled && onToggleShowVersions && (
+          <Button
+            variant={showVersions ? 'secondary' : 'outline'}
+            size="sm"
+            onClick={onToggleShowVersions}
+            className={`h-9 border-slate-200 dark:border-slate-800 text-xs gap-1.5 ${
+              showVersions ? 'bg-violet-500/15 text-violet-600 dark:text-violet-400 border-violet-500/30' : ''
+            }`}
+            title={showVersions ? 'Hide older object versions' : 'Show all object versions'}
+          >
+            <History className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Versions</span>
+          </Button>
+        )}
 
         <Button
           variant="outline"

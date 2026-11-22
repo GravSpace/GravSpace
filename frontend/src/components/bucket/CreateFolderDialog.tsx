@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Loader2, FolderPlus } from 'lucide-react'
 import { toast } from 'sonner'
+import { encKey } from './bucketUploadHelpers'
 import {
   Dialog,
   DialogContent,
@@ -33,7 +34,7 @@ export function CreateFolderDialog({ open, onClose, onCreated, currentPrefix, bu
       const formattedName = name.trim()
       const key = currentPrefix + formattedName + (formattedName.endsWith('/') ? '' : '/')
       const res = await authFetch(
-        `${apiBase}/admin/buckets/${bucketName}/objects/${encodeURIComponent(key)}`,
+        `${apiBase}/admin/buckets/${bucketName}/objects/${encKey(key)}`,
         {
           method: 'PUT',
           body: new Blob([''], { type: 'application/octet-stream' }),

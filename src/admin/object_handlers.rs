@@ -17,6 +17,7 @@ pub struct ListObjectsQuery {
     pub prefix: Option<String>,
     pub delimiter: Option<String>,
     pub search: Option<String>,
+    pub versions: Option<bool>,
 }
 
 pub async fn list_objects(
@@ -77,10 +78,46 @@ pub async fn list_objects(
         }));
     }
 
+    let mut versions = Vec::new();
+    if query.versions == Some(true) {
+        let raw_versions = db::objects::list_object_versions(&conn, &bucket, &prefix).await?;
+        for v in raw_versions {
+            if let Some(ref q) = query.search {
+                if !q.is_empty() && !v.key.to_lowercase().contains(&q.to_lowercase()) {
+                    continue;
+                }
+            }
+            versions.push(json!({
+                "Key": v.key,
+                "key": v.key,
+                "Size": v.size,
+                "size": v.size,
+                "ETag": v.etag,
+                "etag": v.etag,
+                "ContentType": v.content_type,
+                "content_type": v.content_type,
+                "ModTime": v.modified_at,
+                "LastModified": v.modified_at,
+                "modified_at": v.modified_at,
+                "VersionID": v.version_id,
+                "version_id": v.version_id,
+                "IsLatest": v.is_latest,
+                "is_latest": v.is_latest,
+                "LockMode": v.lock_mode,
+                "lock_mode": v.lock_mode,
+                "LockUntil": v.retain_until_date,
+                "lock_until": v.retain_until_date,
+                "LegalHold": v.legal_hold,
+                "legal_hold": v.legal_hold,
+            }));
+        }
+    }
+
     Ok((
         StatusCode::OK,
         Json(json!({
             "objects": objects,
+            "versions": versions,
             "common_prefixes": common_prefixes,
         })),
     )

@@ -22,6 +22,8 @@ function SettingsPage() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  const currentVersion = settings.app_version || settings.version || (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0')
+
   const fetchSettings = useCallback(async () => {
     setLoading(true)
     try {
@@ -82,6 +84,30 @@ function SettingsPage() {
           </TabsList>
 
           <TabsContent value="general" className="space-y-6">
+            <div className="rounded-xl border bg-card p-5 space-y-3">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                <Server className="w-3.5 h-3.5" /> System Information
+              </h3>
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold tracking-wider">Application</span>
+                  <span className="font-semibold text-foreground">GravSpace Cloud Storage</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold tracking-wider">Current Version</span>
+                  <span className="font-mono font-semibold text-primary">v{currentVersion}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold tracking-wider">Engine Core</span>
+                  <span className="font-semibold text-foreground">Rust Axum &amp; Turso libSQL</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[10px] uppercase font-bold tracking-wider">Architecture</span>
+                  <span className="font-semibold text-foreground">S3 Multi-Tenant Object Storage</span>
+                </div>
+              </div>
+            </div>
+
             <div className="rounded-xl border bg-card p-5 space-y-4">
               <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
                 <Server className="w-3.5 h-3.5" /> Server Configuration
