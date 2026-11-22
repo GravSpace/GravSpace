@@ -1,5 +1,6 @@
-data
-db
+/data/
+/db/
+!src/db/
 storage-server
 
 # Logs
@@ -17,3 +18,4 @@ logs
 !.env.example
 
 .codegraph
+target

@@ -1,4 +1,5 @@
-import { createFileRoute, redirect, Outlet } from '@tanstack/react-router'
+import { createFileRoute, redirect, Outlet, useNavigate } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { getAuthState } from '../hooks/useAuth'
 import { useAuth } from '../hooks/useAuth'
 import { AppSidebar } from '../components/AppSidebar'
@@ -8,6 +9,8 @@ import { SidebarProvider, SidebarInset } from '../components/ui/sidebar'
 
 export const Route = createFileRoute('/admin')({
   beforeLoad: () => {
+    // Prevent SSR from redirecting to login on browser refresh before client-side hydration
+    if (typeof window === 'undefined') return
     const auth = getAuthState()
     if (!auth.isAuthenticated) {
       throw redirect({ to: '/login' })
@@ -18,6 +21,13 @@ export const Route = createFileRoute('/admin')({
 
 function AdminLayout() {
   const { authState } = useAuth()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (!authState.isAuthenticated) {
+      navigate({ to: '/login' })
+    }
+  }, [authState.isAuthenticated, navigate])
 
   return (
     <SidebarProvider>

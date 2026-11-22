@@ -16,8 +16,6 @@ export const Route = createFileRoute('/admin/audit')({
 })
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
-// WebSocket must connect directly to the backend (SSR proxy does not support WS upgrade)
-const WS_BASE = import.meta.env.VITE_WS_BASE ?? 'ws://localhost:8080'
 const LIMIT = 50
 
 // ─── Backend response shape (Go struct without json tags = PascalCase) ──────
@@ -57,34 +55,34 @@ interface NormalisedEntry {
   isLive?: boolean
 }
 
-function normaliseDB(r: AuditLogRecord): NormalisedEntry {
+function normaliseDB(r: any): NormalisedEntry {
   return {
-    id: String(r.ID),
-    timestamp: r.Timestamp,
-    username: r.Username || 'anonymous',
-    action: r.Action,
-    resource: r.Resource,
-    result: r.Result,
-    ip: r.IP,
+    id: String(r.ID ?? r.id ?? Math.random()),
+    timestamp: r.Timestamp || r.timestamp || '',
+    username: r.Username || r.username || 'anonymous',
+    action: r.Action || r.action || '',
+    resource: r.Resource || r.resource || '',
+    result: r.Result || r.result || '',
+    ip: r.IP || r.ip || '',
   }
 }
 
-function normaliseWS(r: AuditLogWS): NormalisedEntry {
+function normaliseWS(r: any): NormalisedEntry {
   return {
     id: `ws-${Date.now()}-${Math.random()}`,
-    timestamp: r.timestamp,
-    username: r.user || 'anonymous',
-    action: r.action,
-    resource: r.resource,
-    result: r.result,
-    ip: r.ip,
+    timestamp: r.timestamp || r.Timestamp || '',
+    username: r.user || r.username || r.Username || 'anonymous',
+    action: r.action || r.Action || '',
+    resource: r.resource || r.Resource || '',
+    result: r.result || r.Result || r.status || r.Status || '',
+    ip: r.ip || r.IP || '',
     isLive: true,
   }
 }
 
 // ─── Action colour map ────────────────────────────────────────────────────
-function getActionStyle(action: string): string {
-  const a = action.toLowerCase()
+function getActionStyle(action?: string): string {
+  const a = (action || '').toLowerCase()
   if (a.includes('put') || a.includes('create') || a.includes('upload'))
     return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
   if (a.includes('get') || a.includes('list') || a.includes('head') || a.includes('download'))
@@ -170,9 +168,9 @@ function AuditPage() {
 
   // ─── Derived filtered list ──────────────────────────────────────────────
   const filtered = logs.filter(l => {
-    const q = search.toLowerCase()
+    const q = (search || '').toLowerCase()
     const matchSearch = !q || [l.username, l.action, l.resource, l.ip]
-      .some(v => v?.toLowerCase().includes(q))
+      .some(v => (v || '').toLowerCase().includes(q))
     const matchResult = !filterResult || l.result === filterResult
     return matchSearch && matchResult
   })
@@ -218,12 +216,15 @@ function AuditPage() {
           </div>
 
           {/* Search */}
-          <div className="relative">
+          <div className="relative" suppressHydrationWarning>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Search user, action, resource..."
+              autoComplete="off"
+              data-protonpass-ignore="true"
+              data-1p-ignore="true"
               className="h-8 w-52 pl-8 text-xs"
             />
             {search && (

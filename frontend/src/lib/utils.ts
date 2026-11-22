@@ -36,3 +36,30 @@ export function getAuditStreamWsUrl(token: string): string {
   return `ws://localhost:8080/admin/audit/stream?token=${encodedToken}`
 }
 
+export function getFederationStreamWsUrl(token: string): string {
+  const encodedToken = encodeURIComponent(token)
+
+  if (WS_BASE) {
+    const base = WS_BASE.replace(/\/$/, '')
+    return `${base}/admin/federation/stream?token=${encodedToken}`
+  }
+
+  const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+
+  if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
+    const host = API_BASE.replace(/^https?:\/\//, '').replace(/\/$/, '')
+    return `${protocol}//${host}/admin/federation/stream?token=${encodedToken}`
+  }
+
+  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
+    return `${protocol}//${window.location.hostname}:8080/admin/federation/stream?token=${encodedToken}`
+  }
+
+  if (typeof window !== 'undefined') {
+    const cleanBase = API_BASE.startsWith('/') ? API_BASE : `/${API_BASE}`
+    return `${protocol}//${window.location.host}${cleanBase.replace(/\/$/, '')}/admin/federation/stream?token=${encodedToken}`
+  }
+
+  return `ws://localhost:8080/admin/federation/stream?token=${encodedToken}`
+}
+

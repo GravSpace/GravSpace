@@ -1,8 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
 import '@tanstack/react-start'
 
-const BACKEND_URL =
-  process.env['SERVER_URL'] || process.env['NUXT_BACKEND_URL'] || 'http://localhost:8080'
+const BACKEND_URL = (
+  process.env['SERVER_URL'] || process.env['NUXT_BACKEND_URL'] || 'http://127.0.0.1:8080'
+).replace('//localhost:', '//127.0.0.1:')
 
 export const Route = createFileRoute('/api/$')({
   server: {
@@ -27,8 +28,11 @@ async function proxyToBackend(request: Request): Promise<Response> {
   const targetUrl = `${BACKEND_URL}${targetPath}${url.search}`
 
   const headers = new Headers(request.headers)
-  // Remove host header so it won't conflict
+  // Remove host and hop-by-hop / unsupported fetch headers so they won't conflict
   headers.delete('host')
+  headers.delete('connection')
+  headers.delete('keep-alive')
+  headers.delete('expect')
 
   const init: RequestInit = {
     method: request.method,
@@ -52,10 +56,15 @@ async function proxyToBackend(request: Request): Promise<Response> {
       statusText: response.statusText,
       headers: responseHeaders,
     })
-  } catch (err) {
-    console.error(`[Proxy] Error forwarding to ${targetUrl}:`, err)
+  } catch (err: any) {
+    console.error(`[Proxy] Error forwarding to ${targetUrl}:`, err, 'cause:', err?.cause)
     return new Response(
-      JSON.stringify({ error: 'Backend unreachable', details: String(err) }),
+      JSON.stringify({
+        error: 'Backend unreachable',
+        details: String(err),
+        cause: String(err?.cause),
+        code: err?.cause?.code,
+      }),
       {
         status: 502,
         headers: { 'Content-Type': 'application/json' },

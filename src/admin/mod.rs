@@ -1,0 +1,12 @@
+pub mod analytics_handlers;
+pub mod auth_handlers;
+pub mod bucket_handlers;
+pub mod federation_handlers;
+pub mod object_handlers;
+pub mod policy_handlers;
+pub mod presign_handlers;
+pub mod routes;
+pub mod settings_handlers;
+pub mod trash_handlers;
+pub mod user_handlers;
+pub mod webhook_handlers;

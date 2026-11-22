@@ -25,7 +25,7 @@ const defaultState: AuthState = {
 function loadStoredAuth(): AuthState {
   if (typeof window === 'undefined') return defaultState
   try {
-    const stored = sessionStorage.getItem(STORAGE_KEY)
+    const stored = localStorage.getItem(STORAGE_KEY) || sessionStorage.getItem(STORAGE_KEY)
     if (stored) return JSON.parse(stored)
   } catch {
     // ignore
@@ -35,10 +35,16 @@ function loadStoredAuth(): AuthState {
 
 function saveAuth(state: AuthState) {
   if (typeof window === 'undefined') return
-  if (state.isAuthenticated) {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  } else {
-    sessionStorage.removeItem(STORAGE_KEY)
+  try {
+    if (state.isAuthenticated) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    } else {
+      localStorage.removeItem(STORAGE_KEY)
+      sessionStorage.removeItem(STORAGE_KEY)
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -76,7 +82,11 @@ export function useAuth() {
           body: JSON.stringify({ username: accessKeyId, password: secretAccessKey }),
         })
 
-        if (!response.ok) throw new Error('Login failed')
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}))
+          const errMsg = errData.error || errData.message || `Login failed (${response.status})`
+          throw new Error(errMsg)
+        }
 
         const data = await response.json()
         setGlobalAuth({

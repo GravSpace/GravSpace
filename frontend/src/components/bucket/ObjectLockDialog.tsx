@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Lock, Loader2, ShieldAlert } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../ui/dialog'
@@ -33,13 +33,15 @@ export function ObjectLockDialog({ object, bucketName, onClose, onSaved, authFet
   async function saveLock() {
     setSaving(true)
     try {
+      const vParam = object.VersionId ? `&versionId=${encodeURIComponent(object.VersionId)}` : ''
       const res = await authFetch(
-        `${apiBase}/admin/buckets/${bucketName}/objects/${encodeURIComponent(object.Key)}/lock`,
+        `${apiBase}/admin/buckets/${encodeURIComponent(bucketName)}/retention?key=${encodeURIComponent(object.Key)}${vParam}`,
         {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: mode || null,
+            mode: mode || '',
+            retain_until: mode ? new Date(untilDate).toISOString() : null,
             retain_until_date: mode ? new Date(untilDate).toISOString() : null,
           }),
         },
@@ -49,7 +51,7 @@ export function ObjectLockDialog({ object, bucketName, onClose, onSaved, authFet
         toast.error(`Failed to set lock: ${err}`)
         return
       }
-      toast.success('Object lock updated.')
+      toast.success(mode ? 'Object lock updated.' : 'Object lock removed.')
       onSaved()
       onClose()
     } finally {

@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { ChevronRight, Loader2, ShieldAlert } from 'lucide-react'
 import { useAuth, getAuthState } from '../hooks/useAuth'
 import {
@@ -104,7 +104,7 @@ function LoginPage() {
           </CardHeader>
 
           <CardContent className="pt-4 pb-6">
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={handleLogin} className="space-y-4" suppressHydrationWarning>
               <div className="space-y-1.5">
                 <Label
                   htmlFor="accessKeyId"

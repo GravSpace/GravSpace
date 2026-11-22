@@ -13,6 +13,8 @@ import {
   Search,
   Sparkles,
   FileText,
+  Terminal,
+  Network,
 } from 'lucide-react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { Dialog, DialogContent } from './ui/dialog'
@@ -37,7 +39,9 @@ import { useTransfers } from '../hooks/useTransfers'
 const navItems = [
   { path: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/admin/buckets', label: 'Buckets', icon: Database },
+  { path: '/admin/federation', label: 'Federation & Sync', icon: Network },
   { path: '/admin/presigns', label: 'Presigned Links', icon: LinkIcon },
+  { path: '/admin/explorer', label: 'S3 API Explorer', icon: Terminal },
   { path: '/admin/users', label: 'IAM Engine', icon: UserIcon },
   { path: '/admin/policies', label: 'Security Policies', icon: Shield },
   { path: '/admin/audit', label: 'Audit Logs', icon: ScrollText },
@@ -117,11 +121,14 @@ export function AppSidebar() {
     <>
       <Sidebar>
         <SidebarHeader>
-          <div className="flex items-center gap-3 px-2 py-1">
-            <div className="bg-gradient-to-br from-indigo-500 to-purple-600 w-9 h-9 flex items-center justify-center rounded-lg p-1.5 shrink-0">
-              <img src="/logo.png" alt="GravSpace" className="w-full h-full object-contain" />
+          <div className="flex items-center gap-2.5 px-2 py-1.5">
+            <div className="w-8 h-8 flex items-center justify-center rounded-xl shrink-0 overflow-hidden shadow-xs ring-1 ring-border/50 bg-black/40">
+              <img src="/logo.png" alt="GravSpace" className="w-full h-full object-cover" />
             </div>
-            <span className="text-lg font-bold tracking-tight">GravSpace</span>
+            <div className="flex flex-col">
+              <span className="text-sm font-extrabold tracking-tight leading-none">GravSpace</span>
+              <span className="text-[10px] text-muted-foreground font-mono mt-0.5 tracking-wider uppercase opacity-75">Cloud Storage</span>
+            </div>
           </div>
           <div className="px-2 mb-2 mt-1">
             <button
