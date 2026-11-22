@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y curl xz-utils pkg-config libssl-dev && 
 COPY Cargo.toml Cargo.lock ./
 
 # Pre-build dependencies for Docker layer caching
-RUN mkdir src && echo "fn main() {}" > src/main.rs && \
+RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
     cargo build --release && \
-    rm -rf src
+    rm -rf src target/release/deps/storage_server* target/release/storage-server*
 
 # Copy real source code
 COPY src ./src
