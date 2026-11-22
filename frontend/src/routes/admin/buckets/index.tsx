@@ -31,6 +31,8 @@ import {
   DropdownMenuTrigger,
 } from '../../../components/ui/dropdown-menu'
 import { useAuth } from '../../../hooks/useAuth'
+import { BucketFederationBadge } from '../../../components/bucket/FederationBadge'
+import type { CrossServerShare } from '../../../components/federation/federationTypes'
 
 export const Route = createFileRoute('/admin/buckets/')({
   component: BucketsPage,
@@ -59,6 +61,7 @@ function BucketsPage() {
   const { authFetch } = useAuth()
   const navigate = useNavigate()
   const [buckets, setBuckets] = useState<string[]>([])
+  const [shares, setShares] = useState<CrossServerShare[]>([])
   const [users, setUsers] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -76,7 +79,11 @@ function BucketsPage() {
   const fetchBuckets = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await authFetch(`${API_BASE}/admin/buckets`)
+      const [res, sharesRes] = await Promise.all([
+        authFetch(`${API_BASE}/admin/buckets`),
+        authFetch(`${API_BASE}/admin/federation/shares`),
+      ])
+      if (sharesRes.ok) setShares((await sharesRes.json()) || [])
       if (res.ok) {
         const list: string[] = await res.json()
         setBuckets(list)
@@ -358,6 +365,7 @@ function BucketsPage() {
                               <Lock className="w-2.5 h-2.5 mr-0.5" /> Locked
                             </Badge>
                           )}
+                          <BucketFederationBadge bucket={bucket} shares={shares} />
                         </div>
                         <div className="flex items-center gap-3 mt-0.5">
                           <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider opacity-50">

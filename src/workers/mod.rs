@@ -1,4 +1,5 @@
 pub mod analytics;
+pub mod federation_worker;
 pub mod lifecycle;
 pub mod notifications;
 pub mod sync;
@@ -27,7 +28,9 @@ pub fn start_workers(
 
     tokio::spawn(analytics::start_analytics_worker(storage.clone(), db.clone()));
 
-    tokio::spawn(trash::start_trash_worker(storage, db));
+    tokio::spawn(trash::start_trash_worker(storage.clone(), db));
+
+    tokio::spawn(federation_worker::start_federation_worker(storage));
 
     tokio::spawn(dispatcher.run());
 }

@@ -273,15 +273,24 @@ pub async fn set_object_retention(
     bucket: &str,
     key: &str,
     version_id: &str,
-    retain_until: &str,
-    mode: &str,
+    retain_until: Option<&str>,
+    mode: Option<&str>,
 ) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE objects SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5",
-        params![retain_until, mode, bucket, key, version_id],
-    )
-    .await
-    .map_err(|e| DbError::Query(e.to_string()))?;
+    if version_id.is_empty() {
+        conn.execute(
+            "UPDATE objects SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND (is_latest = 1 OR version_id = '' OR version_id IS NULL)",
+            params![retain_until, mode, bucket, key],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+    } else {
+        conn.execute(
+            "UPDATE objects SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5",
+            params![retain_until, mode, bucket, key, version_id],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+    }
     Ok(())
 }
 
@@ -293,12 +302,21 @@ pub async fn set_object_legal_hold(
     hold: bool,
     reason: &str,
 ) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE objects SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5",
-        params![hold as i64, reason, bucket, key, version_id],
-    )
-    .await
-    .map_err(|e| DbError::Query(e.to_string()))?;
+    if version_id.is_empty() {
+        conn.execute(
+            "UPDATE objects SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND (is_latest = 1 OR version_id = '' OR version_id IS NULL)",
+            params![hold as i64, reason, bucket, key],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+    } else {
+        conn.execute(
+            "UPDATE objects SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5",
+            params![hold as i64, reason, bucket, key, version_id],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+    }
     Ok(())
 }
 

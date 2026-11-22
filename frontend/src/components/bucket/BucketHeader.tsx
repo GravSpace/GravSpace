@@ -24,12 +24,15 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
 import type { BucketInfo } from '../../routes/admin/buckets/$bucket'
+import { BucketHeaderFederationBadge } from './FederationBadge'
+import type { CrossServerShare } from '../federation/federationTypes'
 
 interface Props {
   bucketName: string
   currentPrefix: string
   prefixParts: string[]
   bucketInfo: BucketInfo | null
+  shares?: CrossServerShare[]
   searchQuery: string
   onSearchChange: (q: string) => void
   onNavigate: (prefix: string) => void
@@ -56,6 +59,7 @@ export function BucketHeader({
   bucketName,
   prefixParts,
   bucketInfo,
+  shares,
   searchQuery,
   onSearchChange,
   onNavigate,
@@ -75,7 +79,7 @@ export function BucketHeader({
 
   return (
     <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
-      <div className="flex items-center gap-4 overflow-hidden">
+      <div className="flex items-center gap-3 overflow-hidden">
         <Button
           variant="ghost"
           size="icon"
@@ -112,6 +116,7 @@ export function BucketHeader({
             </BreadcrumbList>
           </Breadcrumb>
         </div>
+        <BucketHeaderFederationBadge bucketName={bucketName} shares={shares} />
       </div>
 
       <div className="flex items-center gap-3" suppressHydrationWarning>

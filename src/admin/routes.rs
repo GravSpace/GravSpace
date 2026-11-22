@@ -1,6 +1,7 @@
 use super::{
-    analytics_handlers, auth_handlers, bucket_handlers, object_handlers, policy_handlers,
-    presign_handlers, settings_handlers, trash_handlers, user_handlers, webhook_handlers,
+    analytics_handlers, auth_handlers, bucket_handlers, federation_handlers, object_handlers,
+    policy_handlers, presign_handlers, settings_handlers, trash_handlers, user_handlers,
+    webhook_handlers,
 };
 use crate::audit::SharedAuditLogger;
 use crate::auth::middleware::{admin_jwt_middleware, admin_only_middleware};
@@ -135,7 +136,16 @@ pub fn admin_router(
         .route("/trash/restore-bulk", post(trash_handlers::bulk_restore_objects))
         .route("/trash-bulk", delete(trash_handlers::bulk_delete_trash_objects))
         .route("/trash/empty", delete(trash_handlers::empty_trash))
-        .route("/search", get(analytics_handlers::global_search));
+        .route("/search", get(analytics_handlers::global_search))
+        .route("/federation/peers", get(federation_handlers::list_peers).post(federation_handlers::create_peer))
+        .route("/federation/peers/{id}", delete(federation_handlers::delete_peer))
+        .route("/federation/peers/{id}/ping", post(federation_handlers::ping_peer))
+        .route("/federation/shares", get(federation_handlers::list_shares).post(federation_handlers::create_share))
+        .route("/federation/shares/{id}", delete(federation_handlers::delete_share))
+        .route("/federation/shares/{id}/reconcile", post(federation_handlers::reconcile_share))
+        .route("/federation/queue", get(federation_handlers::list_queue))
+        .route("/federation/queue/retry-failed", post(federation_handlers::retry_failed_queue))
+        .route("/federation/queue/completed", delete(federation_handlers::clear_completed_queue));
 
     let iam_routes = Router::new()
         .route("/stats", get(analytics_handlers::get_system_stats))
@@ -196,10 +206,17 @@ pub fn admin_router(
         config: config.clone(),
     };
 
+    let federation_stream_state = federation_handlers::FederationStreamState {
+        config: config.clone(),
+    };
+
     let ws_routes = Router::new()
         .route("/admin/audit/stream", get(analytics_handlers::stream_audit_logs))
         .route("/api/admin/audit/stream", get(analytics_handlers::stream_audit_logs))
-        .with_state(audit_stream_state);
+        .with_state(audit_stream_state)
+        .route("/admin/federation/stream", get(federation_handlers::stream_federation_events))
+        .route("/api/admin/federation/stream", get(federation_handlers::stream_federation_events))
+        .with_state(federation_stream_state);
 
     Router::new()
         .merge(auth_routes)

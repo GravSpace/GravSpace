@@ -227,6 +227,11 @@ impl FileStorage {
             }
         }
 
+        // Enqueue Cross-Server Federation Sync
+        let _ = self
+            .notify_federation_change(bucket, key, "PUT", &version_id, None, physical_size)
+            .await;
+
         Ok(version_id)
     }
 
@@ -335,6 +340,11 @@ impl FileStorage {
                 }
             }
         }
+
+        // Enqueue Cross-Server Federation Deletion
+        let _ = self
+            .notify_federation_change(bucket, key, "DELETE", vid, None, 0)
+            .await;
 
         Ok(())
     }

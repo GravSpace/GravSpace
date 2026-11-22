@@ -14,6 +14,7 @@ import { VersionExplorerDialog } from '../../../components/bucket/VersionExplore
 import { BucketSettingsDialog } from '../../../components/bucket/BucketSettingsDialog'
 import { BucketHeader } from '../../../components/bucket/BucketHeader'
 import { extractDroppedFiles, encKey } from '../../../components/bucket/bucketUploadHelpers'
+import type { CrossServerShare } from '../../../components/federation/federationTypes'
 
 interface BucketSearch {
   prefix?: string
@@ -63,6 +64,7 @@ function BucketDetailPage() {
   const [allItems, setAllItems] = useState<(string | S3Object)[]>([])
   const [loading, setLoading] = useState(false)
   const [bucketInfo, setBucketInfo] = useState<BucketInfo | null>(null)
+  const [shares, setShares] = useState<CrossServerShare[]>([])
   const [users, setUsers] = useState<Record<string, any>>({})
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
@@ -114,12 +116,17 @@ function BucketDetailPage() {
 
   const fetchBucketInfo = useCallback(async () => {
     try {
-      const [infoRes, usersRes] = await Promise.all([
+      const [infoRes, usersRes, sharesRes] = await Promise.all([
         authFetch(`${API_BASE}/admin/buckets/${bucketName}/info`),
         authFetch(`${API_BASE}/admin/users`),
+        authFetch(`${API_BASE}/admin/federation/shares`),
       ])
       if (infoRes.ok) setBucketInfo(await infoRes.json())
       if (usersRes.ok) setUsers(await usersRes.json())
+      if (sharesRes.ok) {
+        const data: CrossServerShare[] = (await sharesRes.json()) || []
+        setShares(data.filter((s) => s.source_bucket === bucketName && s.enabled))
+      }
     } catch {}
   }, [bucketName, authFetch])
 
@@ -357,6 +364,7 @@ function BucketDetailPage() {
         currentPrefix={currentPrefix}
         prefixParts={prefixParts}
         bucketInfo={bucketInfo}
+        shares={shares}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         onNavigate={navigateTo}
@@ -414,6 +422,7 @@ function BucketDetailPage() {
           authFetch={authFetch}
           apiBase={API_BASE}
           bucketInfo={bucketInfo}
+          shares={shares}
         />
       </main>
 
@@ -429,65 +438,44 @@ function BucketDetailPage() {
 
       {previewObject && (
         <PreviewDialog
-          onClose={() => setPreviewObject(null)}
-          object={previewObject}
-          bucketName={bucketName}
-          onDownload={downloadObject}
-          authFetch={authFetch}
-          apiBase={API_BASE}
+          onClose={() => setPreviewObject(null)} object={previewObject} bucketName={bucketName}
+          onDownload={downloadObject} authFetch={authFetch} apiBase={API_BASE}
         />
       )}
 
       {shareObject && (
         <ShareDialog
-          onClose={() => setShareObject(null)}
-          object={shareObject}
-          bucketName={bucketName}
-          authFetch={authFetch}
-          apiBase={API_BASE}
+          onClose={() => setShareObject(null)} object={shareObject} bucketName={bucketName}
+          authFetch={authFetch} apiBase={API_BASE}
         />
       )}
 
       {tagObject && (
         <TagEditorDialog
-          onClose={() => setTagObject(null)}
-          object={tagObject}
-          bucketName={bucketName}
-          authFetch={authFetch}
-          apiBase={API_BASE}
+          onClose={() => setTagObject(null)} object={tagObject} bucketName={bucketName}
+          authFetch={authFetch} apiBase={API_BASE}
         />
       )}
 
       {lockObject && (
         <ObjectLockDialog
-          object={lockObject}
-          bucketName={bucketName}
-          onClose={() => setLockObject(null)}
-          onSaved={() => fetchObjects()}
-          authFetch={authFetch}
-          apiBase={API_BASE}
+          object={lockObject} bucketName={bucketName} onClose={() => setLockObject(null)}
+          onSaved={() => fetchObjects()} authFetch={authFetch} apiBase={API_BASE}
         />
       )}
 
       {explorerObject && (
         <VersionExplorerDialog
-          onClose={() => setExplorerObject(null)}
-          bucketName={bucketName}
-          object={explorerObject}
-          onDownload={downloadObject}
-          authFetch={authFetch}
-          apiBase={API_BASE}
+          onClose={() => setExplorerObject(null)} object={explorerObject} bucketName={bucketName}
+          onDownload={downloadObject} authFetch={authFetch} apiBase={API_BASE}
         />
       )}
 
       <BucketSettingsDialog
-        open={showBucketSettings}
-        onClose={() => setShowBucketSettings(false)}
-        bucketName={bucketName}
-        bucketInfo={bucketInfo}
+        open={showBucketSettings} onClose={() => setShowBucketSettings(false)}
+        bucketName={bucketName} bucketInfo={bucketInfo}
         onInfoUpdated={() => { fetchBucketInfo(); fetchObjects() }}
-        authFetch={authFetch}
-        apiBase={API_BASE}
+        authFetch={authFetch} apiBase={API_BASE}
       />
     </div>
   )

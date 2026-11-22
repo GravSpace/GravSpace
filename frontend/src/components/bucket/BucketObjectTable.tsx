@@ -1,3 +1,4 @@
+import { useNavigate } from '@tanstack/react-router'
 import {
   Folder,
   File,
@@ -13,6 +14,7 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronUp,
+  Network,
 } from 'lucide-react'
 import {
   Table,
@@ -32,6 +34,8 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
 import { Badge } from '../ui/badge'
+import { FolderFederationBadge } from './FederationBadge'
+import type { CrossServerShare } from '../federation/federationTypes'
 import type { S3Object, BucketInfo } from '../../routes/admin/buckets/$bucket'
 
 function formatSize(bytes: number): string {
@@ -108,10 +112,11 @@ interface Props {
   authFetch: (url: string, init?: RequestInit) => Promise<Response>
   apiBase: string
   bucketInfo: BucketInfo | null
+  shares?: CrossServerShare[]
 }
 
 export function BucketObjectTable({
-  bucketName: _bucketName,
+  bucketName,
   items,
   loading,
   currentPrefix,
@@ -129,7 +134,9 @@ export function BucketObjectTable({
   isPublic,
   onTogglePublic,
   bucketInfo,
+  shares,
 }: Props) {
+  const navigate = useNavigate()
   const folders = items.filter((i) => typeof i === 'string') as string[]
   const objects = items.filter((i) => typeof i !== 'string') as S3Object[]
 
@@ -238,6 +245,7 @@ export function BucketObjectTable({
                       <Folder className="w-4 h-4 text-amber-500" />
                     </div>
                     <span className="font-medium text-sm">{folderName}/</span>
+                    <FolderFederationBadge currentBucket={bucketName} folderPrefix={prefix} shares={shares} />
                     {pub && (
                       <Badge className="text-[8px] h-3.5 px-1 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/10 border-0">
                         public
@@ -254,9 +262,12 @@ export function BucketObjectTable({
                         <MoreHorizontal className="w-4 h-4" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuContent align="end" className="w-52">
                       <DropdownMenuItem onClick={() => onTogglePublic(prefix)}>
                         {pub ? 'Make Private' : 'Make Public'}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => navigate({ to: '/admin/federation' })}>
+                        <Network className="w-4 h-4 mr-2 text-sky-500" /> View in Federation & Sync
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem

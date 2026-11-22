@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod buckets;
+pub mod federation;
 pub mod multipart;
 pub mod objects;
 pub mod policies;
@@ -146,13 +147,33 @@ impl Database {
         }
 
         // Idempotent migrations for existing databases
-        let _ = conn
-            .execute(
-                "ALTER TABLE presigned_urls ADD COLUMN method TEXT DEFAULT 'GET';",
-                (),
-            )
-            .await;
+        ensure_column_exists(&conn, "presigned_urls", "method", "TEXT DEFAULT 'GET'").await?;
 
         Ok(())
     }
+}
+
+async fn ensure_column_exists(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    col_def: &str,
+) -> Result<(), AppError> {
+    let pragma_sql = format!("PRAGMA table_info({table});");
+    if let Ok(mut rows) = conn.query(&pragma_sql, ()).await {
+        let mut exists = false;
+        while let Ok(Some(row)) = rows.next().await {
+            if let Ok(name) = row.get::<String>(1) {
+                if name.eq_ignore_ascii_case(column) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+        if !exists {
+            let alter_sql = format!("ALTER TABLE {table} ADD COLUMN {column} {col_def};");
+            let _ = conn.execute(&alter_sql, ()).await;
+        }
+    }
+    Ok(())
 }

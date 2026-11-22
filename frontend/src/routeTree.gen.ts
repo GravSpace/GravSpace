@@ -21,6 +21,7 @@ import { Route as AdminTrashRouteImport } from './routes/admin/trash'
 import { Route as AdminSettingsRouteImport } from './routes/admin/settings'
 import { Route as AdminPresignsRouteImport } from './routes/admin/presigns'
 import { Route as AdminPoliciesRouteImport } from './routes/admin/policies'
+import { Route as AdminFederationRouteImport } from './routes/admin/federation'
 import { Route as AdminExplorerRouteImport } from './routes/admin/explorer'
 import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
 import { Route as AdminAuditRouteImport } from './routes/admin/audit'
@@ -88,6 +89,11 @@ const AdminPoliciesRoute = AdminPoliciesRouteImport.update({
   path: '/policies',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminFederationRoute = AdminFederationRouteImport.update({
+  id: '/federation',
+  path: '/federation',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminExplorerRoute = AdminExplorerRouteImport.update({
   id: '/explorer',
   path: '/explorer',
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/admin/audit': typeof AdminAuditRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/explorer': typeof AdminExplorerRoute
+  '/admin/federation': typeof AdminFederationRoute
   '/admin/policies': typeof AdminPoliciesRoute
   '/admin/presigns': typeof AdminPresignsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -148,6 +155,7 @@ export interface FileRoutesByTo {
   '/admin/audit': typeof AdminAuditRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/explorer': typeof AdminExplorerRoute
+  '/admin/federation': typeof AdminFederationRoute
   '/admin/policies': typeof AdminPoliciesRoute
   '/admin/presigns': typeof AdminPresignsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -169,6 +177,7 @@ export interface FileRoutesById {
   '/admin/audit': typeof AdminAuditRoute
   '/admin/dashboard': typeof AdminDashboardRoute
   '/admin/explorer': typeof AdminExplorerRoute
+  '/admin/federation': typeof AdminFederationRoute
   '/admin/policies': typeof AdminPoliciesRoute
   '/admin/presigns': typeof AdminPresignsRoute
   '/admin/settings': typeof AdminSettingsRoute
@@ -191,6 +200,7 @@ export interface FileRouteTypes {
     | '/admin/audit'
     | '/admin/dashboard'
     | '/admin/explorer'
+    | '/admin/federation'
     | '/admin/policies'
     | '/admin/presigns'
     | '/admin/settings'
@@ -210,6 +220,7 @@ export interface FileRouteTypes {
     | '/admin/audit'
     | '/admin/dashboard'
     | '/admin/explorer'
+    | '/admin/federation'
     | '/admin/policies'
     | '/admin/presigns'
     | '/admin/settings'
@@ -230,6 +241,7 @@ export interface FileRouteTypes {
     | '/admin/audit'
     | '/admin/dashboard'
     | '/admin/explorer'
+    | '/admin/federation'
     | '/admin/policies'
     | '/admin/presigns'
     | '/admin/settings'
@@ -336,6 +348,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminPoliciesRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/federation': {
+      id: '/admin/federation'
+      path: '/federation'
+      fullPath: '/admin/federation'
+      preLoaderRoute: typeof AdminFederationRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/explorer': {
       id: '/admin/explorer'
       path: '/explorer'
@@ -386,6 +405,7 @@ interface AdminRouteChildren {
   AdminAuditRoute: typeof AdminAuditRoute
   AdminDashboardRoute: typeof AdminDashboardRoute
   AdminExplorerRoute: typeof AdminExplorerRoute
+  AdminFederationRoute: typeof AdminFederationRoute
   AdminPoliciesRoute: typeof AdminPoliciesRoute
   AdminPresignsRoute: typeof AdminPresignsRoute
   AdminSettingsRoute: typeof AdminSettingsRoute
@@ -401,6 +421,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminAuditRoute: AdminAuditRoute,
   AdminDashboardRoute: AdminDashboardRoute,
   AdminExplorerRoute: AdminExplorerRoute,
+  AdminFederationRoute: AdminFederationRoute,
   AdminPoliciesRoute: AdminPoliciesRoute,
   AdminPresignsRoute: AdminPresignsRoute,
   AdminSettingsRoute: AdminSettingsRoute,

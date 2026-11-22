@@ -1,6 +1,7 @@
 pub mod bucket_ops;
 pub mod config_ops;
 pub mod engine;
+pub mod federation_ops;
 pub mod multipart_ops;
 pub mod object_ops;
 pub mod object_read_ops;

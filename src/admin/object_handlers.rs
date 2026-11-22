@@ -160,6 +160,12 @@ pub async fn put_object(
     Path((bucket, key)): Path<(String, String)>,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
+    let clean_key = key.trim_start_matches('/');
+    if clean_key.ends_with("/lock") || clean_key.ends_with("/legal-hold") {
+        return Err(AppError::BadRequest(
+            "Invalid object key: suffix reserved for object controls".to_string(),
+        ));
+    }
     let version_id = storage.put_object(&bucket, &key, body.to_vec(), None).await?;
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:PutObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
@@ -358,8 +364,9 @@ pub struct RetentionQuery {
 
 #[derive(Deserialize)]
 pub struct RetentionPayload {
-    #[serde(rename = "retainUntilDate")]
-    pub retain_until_date: String,
+    #[serde(default, rename = "retainUntilDate", alias = "retain_until_date", alias = "retain_until")]
+    pub retain_until_date: Option<String>,
+    #[serde(default)]
     pub mode: String,
 }
 
@@ -369,21 +376,25 @@ pub async fn set_object_retention(
     Query(query): Query<RetentionQuery>,
     Json(payload): Json<RetentionPayload>,
 ) -> Result<Response, AppError> {
-    if payload.mode != "COMPLIANCE" && payload.mode != "GOVERNANCE" {
+    let mode_upper = payload.mode.trim().to_uppercase();
+    let is_clear = mode_upper.is_empty() || mode_upper == "NONE";
+    if !is_clear && mode_upper != "COMPLIANCE" && mode_upper != "GOVERNANCE" {
         return Err(AppError::BadRequest(
-            "Mode must be COMPLIANCE or GOVERNANCE".to_string(),
+            "Mode must be COMPLIANCE, GOVERNANCE, or NONE".to_string(),
         ));
     }
     let conn = storage.db.conn()?;
     let key = query.key.trim_start_matches('/');
     let version_id = query.version_id.as_deref().unwrap_or("");
+    let mode_arg = if is_clear { None } else { Some(mode_upper.as_str()) };
+    let retain_arg = if is_clear { None } else { payload.retain_until_date.as_deref() };
     db::objects::set_object_retention(
         &conn,
         &bucket,
         key,
         version_id,
-        &payload.retain_until_date,
-        &payload.mode,
+        retain_arg,
+        mode_arg,
     )
     .await?;
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
