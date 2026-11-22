@@ -56,6 +56,7 @@ impl FileStorage {
             String::new()
         };
 
+        let is_folder = key.ends_with('/');
         let raw_target = self.object_path(bucket, key, &version_id);
         let target_path = if !is_versioning_enabled && raw_target.is_dir() {
             raw_target.join("latest")
@@ -63,61 +64,68 @@ impl FileStorage {
             raw_target
         };
 
-        if let Some(parent) = target_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| StorageError::Io(e.to_string()))?;
-        }
-
         let is_encrypted = encryption == Some("AES256");
-        let mime = mime_guess::from_path(key)
-            .first_raw()
-            .unwrap_or("application/octet-stream");
+        let mime = if is_folder {
+            "application/x-directory"
+        } else {
+            mime_guess::from_path(key)
+                .first_raw()
+                .unwrap_or("application/octet-stream")
+        };
 
+        let content_hash = hex::encode(Sha256::digest(&data));
         let mut to_write = data.clone();
         let mut compression_type = None;
         let mut original_size = None;
+        let mut is_deduplicated = false;
 
-        if !is_encrypted && data.len() > 512 && is_compressible(mime) {
-            use flate2::write::GzEncoder;
-            use flate2::Compression;
-            use std::io::Write;
-            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-            if encoder.write_all(&data).is_ok() {
-                if let Ok(compressed) = encoder.finish() {
-                    if compressed.len() < data.len() {
-                        to_write = compressed;
-                        compression_type = Some("gzip".to_string());
-                        original_size = Some(data.len() as i64);
+        if is_folder {
+            fs::create_dir_all(&target_path).map_err(|e| StorageError::Io(e.to_string()))?;
+        } else {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| StorageError::Io(e.to_string()))?;
+            }
+
+            if !is_encrypted && data.len() > 512 && is_compressible(mime) {
+                use flate2::write::GzEncoder;
+                use flate2::Compression;
+                use std::io::Write;
+                let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+                if encoder.write_all(&data).is_ok() {
+                    if let Ok(compressed) = encoder.finish() {
+                        if compressed.len() < data.len() {
+                            to_write = compressed;
+                            compression_type = Some("gzip".to_string());
+                            original_size = Some(data.len() as i64);
+                        }
                     }
                 }
             }
-        }
 
-        if is_encrypted {
-            to_write = encrypt_bytes(&self.config.sse_master_key, &to_write)
-                .map_err(|e| StorageError::Io(e.to_string()))?;
-        }
-
-        let content_hash = hex::encode(Sha256::digest(&data));
-        let mut is_deduplicated = false;
-
-        if !is_encrypted {
-            let cas_dir = self.root.join(".cas").join(&content_hash[..2]);
-            let cas_path = cas_dir.join(&content_hash);
-            let _ = fs::create_dir_all(&cas_dir);
-            is_deduplicated = cas_path.exists();
-            if !is_deduplicated {
-                let _ = fs::write(&cas_path, &to_write);
+            if is_encrypted {
+                to_write = encrypt_bytes(&self.config.sse_master_key, &to_write)
+                    .map_err(|e| StorageError::Io(e.to_string()))?;
             }
-            let _ = fs::remove_file(&target_path);
-            if fs::hard_link(&cas_path, &target_path).is_err() {
+
+            if !is_encrypted {
+                let cas_dir = self.root.join(".cas").join(&content_hash[..2]);
+                let cas_path = cas_dir.join(&content_hash);
+                let _ = fs::create_dir_all(&cas_dir);
+                is_deduplicated = cas_path.exists();
+                if !is_deduplicated {
+                    let _ = fs::write(&cas_path, &to_write);
+                }
+                let _ = fs::remove_file(&target_path);
+                if fs::hard_link(&cas_path, &target_path).is_err() {
+                    fs::write(&target_path, &to_write).map_err(|e| StorageError::Io(e.to_string()))?;
+                }
+            } else {
                 fs::write(&target_path, &to_write).map_err(|e| StorageError::Io(e.to_string()))?;
             }
-        } else {
-            fs::write(&target_path, &to_write).map_err(|e| StorageError::Io(e.to_string()))?;
         }
 
         let etag = format!("\"{}\"", hex::encode(Sha256::digest(&data)));
-        let physical_size = to_write.len() as i64;
+        let physical_size = if is_folder { 0 } else { to_write.len() as i64 };
 
         // Check bucket default retention for object lock
         let bucket_info = db::buckets::get_bucket(&conn, bucket).await.unwrap_or(None);

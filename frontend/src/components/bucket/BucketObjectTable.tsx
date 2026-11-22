@@ -113,6 +113,7 @@ interface Props {
   apiBase: string
   bucketInfo: BucketInfo | null
   shares?: CrossServerShare[]
+  showVersions?: boolean
 }
 
 export function BucketObjectTable({
@@ -135,6 +136,7 @@ export function BucketObjectTable({
   onTogglePublic,
   bucketInfo,
   shares,
+  showVersions = false,
 }: Props) {
   const navigate = useNavigate()
   const folders = items.filter((i) => typeof i === 'string') as string[]
@@ -288,9 +290,10 @@ export function BucketObjectTable({
             const name = getDisplayName(obj.Key, currentPrefix)
             const pub = isPublic(obj.Key)
             const isDir = obj.ContentType === 'application/x-directory' || obj.Key.endsWith('/')
+            const itemKey = `${obj.Key}:${obj.VersionID || 'latest'}`
             return (
               <TableRow
-                key={obj.Key}
+                key={itemKey}
                 className={`hover:bg-muted/30 transition-colors ${selectedItems.has(obj.Key) ? 'bg-primary/5' : ''}`}
               >
                 <TableCell onClick={() => toggleItem(obj.Key)} className="cursor-pointer">
@@ -324,6 +327,23 @@ export function BucketObjectTable({
                       <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
                         {obj.ContentType && (
                           <span className="text-[9px] text-muted-foreground font-mono">{obj.ContentType}</span>
+                        )}
+                        {showVersions && (
+                          <Badge
+                            variant={obj.IsLatest ? 'default' : 'secondary'}
+                            className={`text-[8px] h-3.5 px-1 font-mono tracking-wider ${
+                              obj.IsLatest
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30'
+                                : 'bg-muted text-muted-foreground border border-border/50'
+                            }`}
+                          >
+                            {obj.IsLatest ? 'latest' : `v: ${(obj.VersionID || '').slice(0, 8)}`}
+                          </Badge>
+                        )}
+                        {!showVersions && obj.VersionID && bucketInfo?.VersioningEnabled && (
+                          <span className="text-[9px] text-muted-foreground font-mono" title={`Version ID: ${obj.VersionID}`}>
+                            v: {obj.VersionID.slice(0, 8)}...
+                          </span>
                         )}
                         {pub && (
                           <Badge className="text-[8px] h-3.5 px-1 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/10 border-0">

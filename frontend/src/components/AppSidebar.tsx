@@ -126,7 +126,12 @@ export function AppSidebar() {
               <img src="/logo.png" alt="GravSpace" className="w-full h-full object-cover" />
             </div>
             <div className="flex flex-col">
-              <span className="text-sm font-extrabold tracking-tight leading-none">GravSpace</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-extrabold tracking-tight leading-none">GravSpace</span>
+                <Badge variant="outline" className="text-[9px] h-3.5 px-1 py-0 font-mono font-normal text-muted-foreground border-border/60">
+                  v{__APP_VERSION__}
+                </Badge>
+              </div>
               <span className="text-[10px] text-muted-foreground font-mono mt-0.5 tracking-wider uppercase opacity-75">Cloud Storage</span>
             </div>
           </div>
@@ -220,6 +225,10 @@ export function AppSidebar() {
               >
                 <LogOut className="w-3.5 h-3.5" />
               </Button>
+            </div>
+            <div className="flex items-center justify-between px-2 pt-1.5 pb-0.5 text-[10px] text-muted-foreground/60 font-mono border-t border-border/40 mt-1">
+              <span>GravSpace Core</span>
+              <span>v{__APP_VERSION__}</span>
             </div>
           </div>
         </SidebarFooter>

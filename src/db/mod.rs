@@ -54,7 +54,9 @@ impl Database {
                 db_url.to_string()
             };
 
+            let https = hyper_tls::HttpsConnector::new();
             match Builder::new_remote(remote_target, auth_token.to_string())
+                .connector(https)
                 .build()
                 .await
             {

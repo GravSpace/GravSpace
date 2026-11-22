@@ -82,6 +82,8 @@ pub async fn get_system_stats(State(storage): State<FileStorage>) -> Result<Resp
     Ok((
         StatusCode::OK,
         Json(json!({
+            "version": env!("CARGO_PKG_VERSION"),
+            "app_version": env!("CARGO_PKG_VERSION"),
             "buckets_count": buckets_count,
             "total_buckets": buckets_count,
             "objects_count": objects_count,

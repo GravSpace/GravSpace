@@ -37,3 +37,15 @@ pub fn verify_jwt(token: &str, secret: &str) -> Result<String, AppError> {
 
     Ok(token_data.claims.username)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_and_verify_jwt() {
+        let token = create_jwt("admin", "secret").expect("Failed to create jwt");
+        let username = verify_jwt(&token, "secret").expect("Failed to verify jwt");
+        assert_eq!(username, "admin");
+    }
+}
