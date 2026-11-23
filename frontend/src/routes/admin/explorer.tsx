@@ -27,6 +27,7 @@ export function S3ExplorerPage() {
   const [users, setUsers] = useState<Record<string, IAMUser>>({})
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [availableBuckets, setAvailableBuckets] = useState<string[]>([])
+  const [networkInfo, setNetworkInfo] = useState<any>(null)
 
   const [endpoint, setEndpoint] = useState<string>(() => {
     if (typeof window !== 'undefined') {
@@ -80,7 +81,13 @@ export function S3ExplorerPage() {
 
   useEffect(() => {
     fetchUsersAndBuckets()
-  }, [])
+    authFetch(`${API_BASE}/admin/system/network`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setNetworkInfo(data)
+      })
+      .catch(() => {})
+  }, [fetchUsersAndBuckets, authFetch])
 
   const handleExecute = async () => {
     if (!credentials.accessKeyId || !credentials.secretAccessKey) {
@@ -204,6 +211,7 @@ export function S3ExplorerPage() {
           onChangeEndpoint={setEndpoint}
           onTestConnection={handleTestConnection}
           testing={executing}
+          networkInfo={networkInfo}
         />
 
         {/* Test Suite Progress Bar (if ran) */}

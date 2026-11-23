@@ -4,6 +4,10 @@ FROM oven/bun:1.3.14-alpine AS builder
 # Set working directory
 WORKDIR /app
 
+# Optional build-time version injection
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
+
 # Copy package files
 COPY package.json bun.lock ./
 

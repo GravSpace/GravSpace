@@ -181,7 +181,7 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
     <Dialog open onOpenChange={onClose}>
       <DialogContent
         showCloseButton={false}
-        className="w-[94vw] sm:max-w-5xl h-[84vh] max-h-[calc(100dvh-3rem)] flex flex-col overflow-hidden p-0 gap-0 border border-border/80 bg-background shadow-2xl rounded-2xl"
+        className="w-[94vw] sm:max-w-5xl h-[84vh] max-h-[calc(100dvh-3.5rem)] flex flex-col overflow-hidden p-0 gap-0 border border-border/80 bg-background shadow-2xl rounded-2xl"
       >
         <DialogHeader className="px-4 sm:px-5 py-2.5 sm:py-3 border-b shrink-0 bg-background/95 backdrop-blur-xs">
           <div className="flex items-center justify-between gap-2 sm:gap-3">

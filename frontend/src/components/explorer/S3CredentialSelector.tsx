@@ -30,6 +30,7 @@ interface Props {
   onChangeEndpoint: (ep: string) => void
   onTestConnection: () => void
   testing: boolean
+  networkInfo?: any
 }
 
 export function S3CredentialSelector({
@@ -42,6 +43,7 @@ export function S3CredentialSelector({
   onChangeEndpoint,
   onTestConnection,
   testing,
+  networkInfo,
 }: Props) {
   const [selectedUsername, setSelectedUsername] = useState<string>('')
   const [showSecret, setShowSecret] = useState(false)
@@ -192,6 +194,52 @@ export function S3CredentialSelector({
             placeholder="http://localhost:9001"
             className="h-8 text-xs font-mono"
           />
+          <div className="flex items-center gap-1 flex-wrap pt-0.5">
+            <span className="text-[10px] text-muted-foreground/75 font-medium">Presets:</span>
+            {[
+              ...(networkInfo?.local_ip
+                ? [
+                    {
+                      label: `Rack IP (${networkInfo.local_ip})`,
+                      url: networkInfo.s3_endpoint || `http://${networkInfo.local_ip}:9001`,
+                    },
+                  ]
+                : []),
+              {
+                label: 'Browser Host',
+                url:
+                  typeof window !== 'undefined'
+                    ? `${window.location.protocol}//${window.location.hostname}:9001`
+                    : 'http://localhost:9001',
+              },
+              {
+                label: 'Proxy (/s3)',
+                url: typeof window !== 'undefined' ? `${window.location.origin}/s3` : '/s3',
+              },
+              {
+                label: 'Localhost',
+                url: 'http://127.0.0.1:9001',
+              },
+            ].map((p) => {
+              const active =
+                endpoint.trim().replace(/\/+$/, '') === p.url.trim().replace(/\/+$/, '')
+              return (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => onChangeEndpoint(p.url)}
+                  className={`text-[9px] px-1.5 py-0.5 rounded font-mono border transition-colors cursor-pointer ${
+                    active
+                      ? 'bg-primary text-primary-foreground border-primary font-bold'
+                      : 'bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50'
+                  }`}
+                  title={p.url}
+                >
+                  {p.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
       </div>
 

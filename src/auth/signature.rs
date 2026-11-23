@@ -132,9 +132,31 @@ pub fn candidate_hosts(request_host: &str, server_host: &str, cdn_hosts: &[Strin
         } else if h == "localhost" {
             hosts.push(format!("127.0.0.1:{port}"));
         }
+        if !hosts.contains(&h.to_string()) {
+            hosts.push(h.to_string());
+        }
+        for p in &["9001", "9000", "8080", "3000"] {
+            let hp = format!("{h}:{p}");
+            if !hosts.contains(&hp) {
+                hosts.push(hp);
+            }
+        }
+    } else {
+        for p in &["9001", "9000", "8080", "3000"] {
+            let hp = format!("{request_host}:{p}");
+            if !hosts.contains(&hp) {
+                hosts.push(hp);
+            }
+        }
     }
+
     if !server_host.is_empty() && !hosts.contains(&server_host.to_string()) {
         hosts.push(server_host.to_string());
+        if let Some((sh, _)) = server_host.split_once(':') {
+            if !hosts.contains(&sh.to_string()) {
+                hosts.push(sh.to_string());
+            }
+        }
     }
     for cdn in cdn_hosts {
         if !cdn.is_empty() && !hosts.contains(cdn) {

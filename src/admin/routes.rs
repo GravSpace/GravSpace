@@ -1,5 +1,5 @@
 use super::{
-    analytics_handlers, auth_handlers, bucket_handlers, federation_handlers, object_handlers,
+    analytics_handlers, auth_handlers, bucket_handlers, federation_handlers, network_handlers, object_handlers,
     policy_handlers, presign_handlers, settings_handlers, trash_handlers, user_handlers,
     webhook_handlers,
 };
@@ -102,6 +102,10 @@ pub fn admin_router(
             "/buckets/{bucket}/objects/delete-bulk",
             post(object_handlers::bulk_delete_objects),
         )
+        .route(
+            "/buckets/{bucket}/objects/bulk-delete",
+            post(object_handlers::bulk_delete_objects),
+        )
         .route("/buckets/{bucket}/copy", post(object_handlers::copy_objects))
         .route(
             "/buckets/{bucket}/webhooks",
@@ -137,6 +141,7 @@ pub fn admin_router(
         .route("/trash-bulk", delete(trash_handlers::bulk_delete_trash_objects))
         .route("/trash/empty", delete(trash_handlers::empty_trash))
         .route("/search", get(analytics_handlers::global_search))
+        .route("/federation/test-endpoint", post(federation_handlers::test_remote_endpoint))
         .route("/federation/peers", get(federation_handlers::list_peers).post(federation_handlers::create_peer))
         .route("/federation/peers/{id}", delete(federation_handlers::delete_peer))
         .route("/federation/peers/{id}/ping", post(federation_handlers::ping_peer))
@@ -148,6 +153,7 @@ pub fn admin_router(
         .route("/federation/queue/completed", delete(federation_handlers::clear_completed_queue));
 
     let iam_routes = Router::new()
+        .route("/system/network", get(network_handlers::get_network_info))
         .route("/stats", get(analytics_handlers::get_system_stats))
         .route("/audit-logs", get(analytics_handlers::get_audit_logs))
         .route("/analytics/storage", get(analytics_handlers::get_storage_analytics))

@@ -183,7 +183,14 @@ async fn verify_presigned(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("localhost");
 
-    let candidates = candidate_hosts(req_host, &config.server_host, &config.cdn_hosts);
+    let mut candidates = candidate_hosts(req_host, &config.server_host, &config.cdn_hosts);
+    if let Some(fwd_host) = headers.get("x-forwarded-host").and_then(|h| h.to_str().ok()) {
+        for ch in candidate_hosts(fwd_host, &config.server_host, &config.cdn_hosts) {
+            if !candidates.contains(&ch) {
+                candidates.push(ch);
+            }
+        }
+    }
     let mut signature_matched = false;
 
     for host in &candidates {
@@ -283,7 +290,14 @@ async fn verify_header_auth(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("localhost");
 
-    let candidates = candidate_hosts(req_host, &config.server_host, &config.cdn_hosts);
+    let mut candidates = candidate_hosts(req_host, &config.server_host, &config.cdn_hosts);
+    if let Some(fwd_host) = headers.get("x-forwarded-host").and_then(|h| h.to_str().ok()) {
+        for ch in candidate_hosts(fwd_host, &config.server_host, &config.cdn_hosts) {
+            if !candidates.contains(&ch) {
+                candidates.push(ch);
+            }
+        }
+    }
     let mut signature_matched = false;
 
     for host in &candidates {

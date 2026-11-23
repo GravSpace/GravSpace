@@ -49,7 +49,9 @@ export interface BucketInfo {
   CurrentSize?: number
   QuotaBytes?: number
   SoftDeleteEnabled?: boolean
+  soft_delete_enabled?: boolean
   SoftDeleteRetention?: number
+  soft_delete_retention?: number
   DefaultRetentionMode?: string
   DefaultRetentionDays?: number
 }
@@ -362,6 +364,7 @@ function BucketDetailPage() {
           apiBase={API_BASE}
           bucketInfo={bucketInfo}
           shares={shares}
+          onRefresh={() => fetchObjects()}
         />
       </main>
 

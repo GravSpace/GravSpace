@@ -58,25 +58,29 @@ function DialogContent({
   return (
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
-      <DialogPrimitive.Content
-        data-slot="dialog-content"
-        className={cn(
-          "fixed inset-0 z-50 m-auto grid w-full max-w-[calc(100%-2rem)] h-fit max-h-[calc(100dvh-2.5rem)] gap-4 rounded-xl border bg-background p-6 shadow-2xl duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
-          className
-        )}
-        {...props}
-      >
-        {children}
-        {showCloseButton && (
-          <DialogPrimitive.Close
-            data-slot="dialog-close"
-            className="absolute top-4 right-4 h-8 w-8 rounded-lg border-0 bg-transparent flex items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none cursor-pointer"
-          >
-            <XIcon className="w-4 h-4" />
-            <span className="sr-only">Close</span>
-          </DialogPrimitive.Close>
-        )}
-      </DialogPrimitive.Content>
+      <div className="fixed inset-0 z-50 overflow-y-auto overflow-x-hidden">
+        <div className="flex min-h-full items-center justify-center p-3 sm:p-6 text-center">
+          <DialogPrimitive.Content
+            data-slot="dialog-content"
+            className={cn(
+              "relative grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-3rem)] min-w-0 overflow-hidden gap-4 rounded-xl border bg-background p-6 text-left shadow-2xl duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
+              className
+            )}
+          {...props}
+        >
+          {children}
+          {showCloseButton && (
+            <DialogPrimitive.Close
+              data-slot="dialog-close"
+              className="absolute top-4 right-4 h-8 w-8 rounded-lg border-0 bg-transparent flex items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none cursor-pointer"
+            >
+              <XIcon className="w-4 h-4" />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          )}
+        </DialogPrimitive.Content>
+        </div>
+      </div>
     </DialogPortal>
   )
 }

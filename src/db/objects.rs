@@ -387,6 +387,29 @@ pub async fn get_object_tagging(
     Ok(map)
 }
 
+pub async fn get_keys_by_prefix(
+    conn: &Connection,
+    bucket: &str,
+    prefix: &str,
+) -> Result<Vec<String>, AppError> {
+    let pattern = format!("{}%", prefix);
+    let mut rows = conn
+        .query(
+            "SELECT DISTINCT key FROM objects WHERE bucket = ?1 AND key LIKE ?2 AND deleted_at IS NULL",
+            params![bucket, pattern.as_str()],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+    let mut keys = Vec::new();
+    while let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+        if let Ok(k) = row.get::<String>(0) {
+            keys.push(k);
+        }
+    }
+    Ok(keys)
+}
+
 fn row_to_object(row: &libsql::Row) -> Result<ObjectRow, AppError> {
     let is_latest: i64 = row.get(8).unwrap_or(0);
     let legal_hold: i64 = row.get(11).unwrap_or(0);

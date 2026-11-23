@@ -22,7 +22,7 @@ function SettingsPage() {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  const currentVersion = settings.app_version || settings.version || (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0')
+  const currentVersion = settings.app_version || settings.version || (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.4.1')
 
   const fetchSettings = useCallback(async () => {
     setLoading(true)

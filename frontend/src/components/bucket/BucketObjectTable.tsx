@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
   Folder,
@@ -35,6 +36,9 @@ import {
 } from '../ui/dropdown-menu'
 import { Badge } from '../ui/badge'
 import { FolderFederationBadge } from './FederationBadge'
+import { useBatchOperations } from './useBatchOperations'
+import { BulkActionsBar } from './BulkActionsBar'
+import { BulkDeleteDialog } from './BulkDeleteDialog'
 import type { CrossServerShare } from '../federation/federationTypes'
 import type { S3Object, BucketInfo } from '../../routes/admin/buckets/$bucket'
 
@@ -114,6 +118,7 @@ interface Props {
   bucketInfo: BucketInfo | null
   shares?: CrossServerShare[]
   showVersions?: boolean
+  onRefresh?: () => void
 }
 
 export function BucketObjectTable({
@@ -134,30 +139,26 @@ export function BucketObjectTable({
   onVersionExplorer,
   isPublic,
   onTogglePublic,
+  authFetch,
+  apiBase,
   bucketInfo,
   shares,
   showVersions = false,
+  onRefresh,
 }: Props) {
   const navigate = useNavigate()
   const folders = items.filter((i) => typeof i === 'string') as string[]
   const objects = items.filter((i) => typeof i !== 'string') as S3Object[]
 
-  function toggleAll(checked: boolean) {
-    if (checked) {
-      onSelectChange(new Set(objects.map((o) => o.Key)))
-    } else {
-      onSelectChange(new Set())
-    }
-  }
+  const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false)
+  const batchOps = useBatchOperations(items, selectedItems, onSelectChange)
 
-  function toggleItem(key: string) {
-    const next = new Set(selectedItems)
-    next.has(key) ? next.delete(key) : next.add(key)
-    onSelectChange(next)
-  }
+  const allKeys = useMemo(() => {
+    return items.map((i) => (typeof i === 'string' ? i : i.Key))
+  }, [items])
 
-  const allSelected = objects.length > 0 && objects.every((o) => selectedItems.has(o.Key))
-  const anySelected = selectedItems.size > 0
+  const allSelected = allKeys.length > 0 && allKeys.every((k) => selectedItems.has(k))
+  const isIndeterminate = !allSelected && allKeys.some((k) => selectedItems.has(k))
 
   if (loading && items.length === 0) {
     return (
@@ -170,39 +171,30 @@ export function BucketObjectTable({
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-card shadow-sm">
-      {/* Bulk Action Bar */}
-      {anySelected && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/5 border-b border-primary/10 animate-in fade-in duration-150">
-          <span className="text-xs font-bold text-primary">{selectedItems.size} selected</span>
-          <div className="flex items-center gap-2 ml-auto">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs"
-              onClick={() => {
-                selectedItems.forEach((key) => onDownload(key))
-              }}
-            >
-              <Download className="w-3 h-3 mr-1" /> Download All
-            </Button>
-          </div>
-        </div>
-      )}
-
-      <Table>
-        <TableHeader className="bg-muted/20">
-          <TableRow>
-            <TableHead className="w-10">
-              {objects.length > 0 && (
-                <Checkbox
-                  checked={allSelected}
-                  onCheckedChange={toggleAll}
-                  aria-label="Select all"
-                />
-              )}
+    <>
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-card shadow-sm">
+        <Table>
+          <TableHeader className="bg-muted/20">
+            <TableRow>
+              <TableHead className="w-10">
+                {allKeys.length > 0 && (
+                  <Checkbox
+                    checked={allSelected ? true : isIndeterminate ? 'indeterminate' : false}
+                    onCheckedChange={(checked) => batchOps.toggleAll(items, !!checked)}
+                    aria-label="Select all files and folders"
+                  />
+                )}
+              </TableHead>
+            <TableHead className="text-xs font-bold uppercase tracking-wider">
+              <div className="flex items-center gap-2">
+                <span>Name</span>
+                {selectedItems.size > 0 && (
+                  <span className="text-[10px] normal-case font-mono font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                    {selectedItems.size} selected
+                  </span>
+                )}
+              </div>
             </TableHead>
-            <TableHead className="text-xs font-bold uppercase tracking-wider">Name</TableHead>
             <TableHead className="text-xs font-bold uppercase tracking-wider text-right w-32 hidden md:table-cell">
               Size
             </TableHead>
@@ -238,9 +230,23 @@ export function BucketObjectTable({
             return (
               <TableRow
                 key={prefix}
-                className="group hover:bg-muted/30 transition-colors"
+                className={`group hover:bg-muted/30 transition-colors ${selectedItems.has(prefix) ? 'bg-primary/10 dark:bg-primary/15' : ''}`}
               >
-                <TableCell />
+                <TableCell
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    batchOps.toggleKey(prefix)
+                  }}
+                  className="w-10 px-3 cursor-pointer select-none"
+                >
+                  <div className="flex items-center justify-center pointer-events-none">
+                    <Checkbox
+                      checked={selectedItems.has(prefix)}
+                      tabIndex={-1}
+                      aria-label={`Select folder ${folderName}`}
+                    />
+                  </div>
+                </TableCell>
                 <TableCell onClick={() => onNavigate(prefix)} className="cursor-pointer">
                   <div className="flex items-center gap-2.5">
                     <div className="h-8 w-8 flex items-center justify-center rounded-lg bg-amber-500/10">
@@ -294,14 +300,22 @@ export function BucketObjectTable({
             return (
               <TableRow
                 key={itemKey}
-                className={`hover:bg-muted/30 transition-colors ${selectedItems.has(obj.Key) ? 'bg-primary/5' : ''}`}
+                className={`hover:bg-muted/30 transition-colors ${selectedItems.has(obj.Key) ? 'bg-primary/10 dark:bg-primary/15' : ''}`}
               >
-                <TableCell onClick={() => toggleItem(obj.Key)} className="cursor-pointer">
-                  <Checkbox
-                    checked={selectedItems.has(obj.Key)}
-                    onCheckedChange={() => toggleItem(obj.Key)}
-                    aria-label={`Select ${obj.Key}`}
-                  />
+                <TableCell
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    batchOps.toggleKey(obj.Key)
+                  }}
+                  className="w-10 px-3 cursor-pointer select-none"
+                >
+                  <div className="flex items-center justify-center pointer-events-none">
+                    <Checkbox
+                      checked={selectedItems.has(obj.Key)}
+                      tabIndex={-1}
+                      aria-label={`Select ${obj.Key}`}
+                    />
+                  </div>
                 </TableCell>
                 <TableCell
                   className="cursor-pointer"
@@ -436,6 +450,38 @@ export function BucketObjectTable({
           )}
         </TableBody>
       </Table>
-    </div>
+      </div>
+
+      <BulkActionsBar
+        summary={batchOps.summary}
+        onClear={batchOps.clearSelection}
+        onDownload={() => {
+          const fileKeys = batchOps.summary.keys.filter((k) => !k.endsWith('/'))
+          fileKeys.forEach((k) => onDownload(k))
+        }}
+        onDelete={() => setShowBulkDeleteDialog(true)}
+        onTogglePublic={async (makePublic) => {
+          for (const key of batchOps.summary.keys) {
+            if (isPublic(key) !== makePublic) {
+              await onTogglePublic(key)
+            }
+          }
+        }}
+      />
+
+      <BulkDeleteDialog
+        open={showBulkDeleteDialog}
+        onClose={() => setShowBulkDeleteDialog(false)}
+        summary={batchOps.summary}
+        isDeleting={batchOps.isDeleting}
+        softDeleteEnabled={bucketInfo?.SoftDeleteEnabled}
+        onConfirm={() => {
+          batchOps.executeBulkDelete(apiBase, bucketName, authFetch, () => {
+            setShowBulkDeleteDialog(false)
+            onRefresh?.()
+          })
+        }}
+      />
+    </>
   )
 }
