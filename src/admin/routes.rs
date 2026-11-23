@@ -1,6 +1,6 @@
 use super::{
     analytics_handlers, auth_handlers, bucket_handlers, federation_handlers, network_handlers, object_handlers,
-    policy_handlers, presign_handlers, settings_handlers, trash_handlers, user_handlers,
+    policy_handlers, presign_handlers, s3_explorer_handlers, settings_handlers, trash_handlers, user_handlers,
     webhook_handlers,
 };
 use crate::audit::SharedAuditLogger;
@@ -154,6 +154,7 @@ pub fn admin_router(
 
     let iam_routes = Router::new()
         .route("/system/network", get(network_handlers::get_network_info))
+        .route("/s3-explorer/execute", post(s3_explorer_handlers::execute_s3_command))
         .route("/stats", get(analytics_handlers::get_system_stats))
         .route("/audit-logs", get(analytics_handlers::get_audit_logs))
         .route("/analytics/storage", get(analytics_handlers::get_storage_analytics))

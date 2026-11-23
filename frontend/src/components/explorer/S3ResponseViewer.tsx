@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Copy, Code, FileJson, Clock, CheckCircle2, AlertTriangle, Layers } from 'lucide-react'
+import { Check, Copy, Code, FileCode, FileJson, Clock, CheckCircle2, AlertTriangle, Layers } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { toast } from 'sonner'
@@ -8,6 +8,48 @@ import type { S3ExecutionResult } from '../../lib/s3Client'
 interface Props {
   result: S3ExecutionResult | null
   codeSnippets: { ts: string; cli: string; python: string } | null
+}
+
+function isXmlString(val: unknown): val is string {
+  if (typeof val !== 'string') return false
+  const trimmed = val.trim()
+  return trimmed.startsWith('<?xml') || (trimmed.startsWith('<') && trimmed.endsWith('>'))
+}
+
+function formatXml(xml: string): string {
+  try {
+    let formatted = ''
+    let indent = 0
+    const tab = '  '
+    // Normalize and separate tags on individual lines
+    const clean = xml
+      .replace(/>\s*</g, '><')
+      .replace(/</g, '\n<')
+      .trim()
+
+    const lines = clean.split('\n')
+    for (let line of lines) {
+      line = line.trim()
+      if (!line) continue
+
+      if (line.startsWith('<?') || line.startsWith('<!')) {
+        formatted += tab.repeat(indent) + line + '\n'
+      } else if (line.startsWith('</')) {
+        if (indent > 0) indent--
+        formatted += tab.repeat(indent) + line + '\n'
+      } else if (line.endsWith('/>') || /<[^>]+>[^<]+<\/[^>]+>/.test(line)) {
+        formatted += tab.repeat(indent) + line + '\n'
+      } else if (line.startsWith('<')) {
+        formatted += tab.repeat(indent) + line + '\n'
+        indent++
+      } else {
+        formatted += tab.repeat(indent) + line + '\n'
+      }
+    }
+    return formatted.trim()
+  } catch {
+    return xml
+  }
 }
 
 export function S3ResponseViewer({ result, codeSnippets }: Props) {
@@ -31,6 +73,14 @@ export function S3ResponseViewer({ result, codeSnippets }: Props) {
     toast.success('Copied to clipboard')
     setTimeout(() => setCopied(false), 2000)
   }
+
+  const rawContent = result.data ?? result.rawError ?? result.error
+  const isXml = isXmlString(rawContent)
+  const displayContent = isXml
+    ? formatXml(rawContent)
+    : typeof rawContent === 'object'
+    ? JSON.stringify(rawContent, null, 2)
+    : String(rawContent ?? '')
 
   const currentCode = codeSnippets ? codeSnippets[codeLang] : ''
 
@@ -68,7 +118,7 @@ export function S3ResponseViewer({ result, codeSnippets }: Props) {
               activeTab === 'response' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            <FileJson className="w-3 h-3 inline mr-1" />
+            {isXml ? <FileCode className="w-3 h-3 inline mr-1" /> : <FileJson className="w-3 h-3 inline mr-1" />}
             Response
           </button>
           <button
@@ -88,22 +138,30 @@ export function S3ResponseViewer({ result, codeSnippets }: Props) {
       <div className="p-4 flex-1 overflow-auto max-h-[420px] font-mono text-xs">
         {activeTab === 'response' && (
           <div className="relative">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="absolute top-0 right-0 h-7 text-[10px] gap-1 z-10"
-              onClick={() => handleCopy(JSON.stringify(result.data || result.error, null, 2))}
-            >
-              {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-              Copy JSON
-            </Button>
+            <div className="absolute top-2 right-2 flex items-center gap-1.5 z-10">
+              <Badge
+                variant="outline"
+                className="text-[9px] uppercase font-mono px-1.5 py-0 h-5 bg-background/80 backdrop-blur-xs text-muted-foreground border-border/60"
+              >
+                {isXml ? 'XML' : 'JSON'}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-[10px] gap-1 bg-background/80 hover:bg-background border border-border/50 shadow-xs backdrop-blur-xs"
+                onClick={() => handleCopy(displayContent)}
+              >
+                {copied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                {isXml ? 'Copy XML' : 'Copy JSON'}
+              </Button>
+            </div>
             {result.error && (
-              <div className="p-3 mb-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs">
+              <div className="p-3 mb-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-sans">
                 <strong>Error: </strong> {result.error}
               </div>
             )}
-            <pre className="text-[11px] leading-relaxed text-foreground bg-muted/40 p-3 rounded-lg overflow-x-auto">
-              {JSON.stringify(result.data ?? result.rawError ?? result.error, null, 2)}
+            <pre className="text-[11px] leading-relaxed text-foreground bg-muted/40 p-3 pt-9 rounded-lg overflow-x-auto select-text font-mono">
+              {displayContent}
             </pre>
           </div>
         )}

@@ -7,6 +7,7 @@ import { useAuth } from '../../hooks/useAuth'
 import {
   createS3Client,
   executeS3Command,
+  executeS3ViaBackend,
   generateCodeSnippet,
   type S3Credentials,
   type S3ExecutionResult,
@@ -42,6 +43,7 @@ export function S3ExplorerPage() {
   })
 
   const [action, setAction] = useState<string>('ListBuckets')
+  const [executionMode, setExecutionMode] = useState<'relay' | 'browser'>('relay')
   const [params, setParams] = useState<Record<string, any>>({
     Bucket: '',
     Key: 'test.txt',
@@ -89,6 +91,14 @@ export function S3ExplorerPage() {
       .catch(() => {})
   }, [fetchUsersAndBuckets, authFetch])
 
+  const runCommand = async (act: string, p: Record<string, any>): Promise<S3ExecutionResult> => {
+    if (executionMode === 'relay') {
+      return executeS3ViaBackend(authFetch, API_BASE, endpoint, credentials, act, p)
+    }
+    const client = createS3Client(endpoint, credentials)
+    return executeS3Command(client, act, p)
+  }
+
   const handleExecute = async () => {
     if (!credentials.accessKeyId || !credentials.secretAccessKey) {
       toast.error('Please select or enter an Access Key and Secret Key')
@@ -97,8 +107,7 @@ export function S3ExplorerPage() {
 
     setExecuting(true)
     try {
-      const client = createS3Client(endpoint, credentials)
-      const res = await executeS3Command(client, action, params)
+      const res = await runCommand(action, params)
       setResult(res)
       if (res.success) {
         toast.success(`${action} succeeded (${res.latencyMs}ms)`)
@@ -118,8 +127,7 @@ export function S3ExplorerPage() {
     }
     setExecuting(true)
     try {
-      const client = createS3Client(endpoint, credentials)
-      const res = await executeS3Command(client, 'ListBuckets', {})
+      const res = await runCommand('ListBuckets', {})
       if (res.success) {
         toast.success(`Connected to S3 (${res.latencyMs}ms)`)
       } else {
@@ -140,7 +148,6 @@ export function S3ExplorerPage() {
     setSuiteRunning(true)
     setSuiteResults([])
     const suiteBucket = `sdk-test-${Date.now().toString().slice(-4)}`
-    const client = createS3Client(endpoint, credentials)
 
     const tests = [
       { name: '1. ListBuckets', act: 'ListBuckets', p: {} },
@@ -154,12 +161,12 @@ export function S3ExplorerPage() {
 
     const runs: Array<{ name: string; success: boolean; status?: number; latencyMs: number }> = []
     for (const t of tests) {
-      const res = await executeS3Command(client, t.act, t.p)
+      const res = await runCommand(t.act, t.p)
       runs.push({ name: t.name, success: res.success, status: res.status, latencyMs: res.latencyMs })
       setSuiteResults([...runs])
     }
     setSuiteRunning(false)
-    toast.success('SDK Test Suite completed')
+    toast.success('S3 Test Suite completed')
   }
 
   const codeSnippets = generateCodeSnippet(action, params, credentials, endpoint)
@@ -177,6 +184,16 @@ export function S3ExplorerPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {executionMode === 'relay' ? (
+            <span className="hidden md:inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              Backend Relay (Server LAN)
+            </span>
+          ) : (
+            <span className="hidden md:inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-muted px-2.5 py-1 rounded-full border border-border/50">
+              Direct Browser SDK
+            </span>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -212,6 +229,8 @@ export function S3ExplorerPage() {
           onTestConnection={handleTestConnection}
           testing={executing}
           networkInfo={networkInfo}
+          executionMode={executionMode}
+          onChangeExecutionMode={setExecutionMode}
         />
 
         {/* Test Suite Progress Bar (if ran) */}

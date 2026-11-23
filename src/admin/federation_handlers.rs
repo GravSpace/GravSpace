@@ -166,38 +166,74 @@ pub async fn ping_peer(
 
     let health_url = format!("{}/health", peer.endpoint.trim_end_matches('/'));
     let start = std::time::Instant::now();
-    match client.get(&health_url).send().await {
-        Ok(resp) if resp.status().is_success() || resp.status() == 404 => {
-            let latency = start.elapsed().as_millis() as i64;
-            let _ = db::federation::update_server_status(&conn, peer.id, "healthy", latency).await;
-            broadcast_federation_event("peer_status", json!({ "id": peer.id, "status": "healthy", "latency_ms": latency }));
-            Ok((
-                StatusCode::OK,
-                Json(json!({ "status": "healthy", "latency_ms": latency })),
-            )
-                .into_response())
-        }
-        Ok(resp) => {
-            let latency = start.elapsed().as_millis() as i64;
-            let status = if resp.status().is_server_error() { "degraded" } else { "healthy" };
-            let _ = db::federation::update_server_status(&conn, peer.id, status, latency).await;
-            broadcast_federation_event("peer_status", json!({ "id": peer.id, "status": status, "latency_ms": latency }));
-            Ok((
-                StatusCode::OK,
-                Json(json!({ "status": status, "latency_ms": latency })),
-            )
-                .into_response())
-        }
-        Err(e) => {
-            let _ = db::federation::update_server_status(&conn, peer.id, "unreachable", 0).await;
-            broadcast_federation_event("peer_status", json!({ "id": peer.id, "status": "unreachable", "latency_ms": 0 }));
-            Ok((
-                StatusCode::OK,
-                Json(json!({ "status": "unreachable", "error": e.to_string(), "latency_ms": 0 })),
-            )
-                .into_response())
+    let admin_res = client.get(&health_url).send().await;
+    let admin_latency = start.elapsed().as_millis() as i64;
+    let admin_ok = match &admin_res {
+        Ok(resp) => resp.status().is_success() || resp.status() == 404,
+        Err(_) => false,
+    };
+
+    let mut s3_latency: Option<i64> = None;
+    let mut s3_ok: Option<bool> = None;
+    if let Some(s3_ep) = &peer.s3_endpoint {
+        let clean_s3 = s3_ep.trim().trim_end_matches('/');
+        if !clean_s3.is_empty() {
+            let s3_start = std::time::Instant::now();
+            let mut req = client.get(clean_s3);
+            if !peer.access_key.is_empty() && !peer.secret_key.is_empty() {
+                req = crate::admin::s3_explorer_handlers::sign_s3_explorer_request(
+                    req,
+                    "GET",
+                    clean_s3,
+                    "/",
+                    "",
+                    &[],
+                    &peer.access_key,
+                    &peer.secret_key,
+                    "us-east-1",
+                    &[],
+                );
+            }
+            let s3_send = req.send().await;
+            let el = s3_start.elapsed().as_millis() as i64;
+            s3_latency = Some(el);
+            s3_ok = Some(match s3_send {
+                Ok(resp) => resp.status().is_success() || resp.status() == 403,
+                Err(_) => false,
+            });
         }
     }
+
+    let status = if admin_ok && s3_ok.unwrap_or(true) {
+        "healthy"
+    } else if admin_ok || s3_ok.unwrap_or(false) {
+        "degraded"
+    } else {
+        "unreachable"
+    };
+
+    let final_latency = if admin_ok { admin_latency } else { s3_latency.unwrap_or(0) };
+    let _ = db::federation::update_server_status(&conn, peer.id, status, final_latency).await;
+    broadcast_federation_event("peer_status", json!({
+        "id": peer.id,
+        "status": status,
+        "latency_ms": final_latency,
+        "admin_latency_ms": admin_latency,
+        "s3_latency_ms": s3_latency,
+    }));
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "status": status,
+            "latency_ms": final_latency,
+            "admin_latency_ms": admin_latency,
+            "s3_latency_ms": s3_latency,
+            "admin_ok": admin_ok,
+            "s3_ok": s3_ok,
+        })),
+    )
+        .into_response())
 }
 
 // ================= SHARE HANDLERS =================
@@ -309,6 +345,9 @@ pub async fn clear_completed_queue(
 #[derive(Deserialize)]
 pub struct TestEndpointPayload {
     pub endpoint: String,
+    pub s3_endpoint: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
 }
 
 pub async fn test_remote_endpoint(
@@ -350,53 +389,105 @@ pub async fn test_remote_endpoint(
         }
     }
 
-    let health_url = format!("{}/health", raw);
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(4))
+        .timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
+    let health_url = format!("{raw}/health");
     let start = std::time::Instant::now();
-    match client.get(&health_url).send().await {
+    let admin_res = client.get(&health_url).send().await;
+    let admin_latency = start.elapsed().as_millis() as u64;
+
+    let (admin_ok, admin_status, admin_msg) = match admin_res {
         Ok(resp) => {
-            let latency = start.elapsed().as_millis() as u64;
-            let status = resp.status();
-            if status.is_success() || status.as_u16() == 404 {
-                Ok((
-                    StatusCode::OK,
-                    Json(json!({
-                        "success": true,
-                        "latency_ms": latency,
-                        "status_code": status.as_u16(),
-                        "message": format!("Online ({}ms latency) - Ready to connect", latency),
-                    })),
-                )
-                    .into_response())
+            let s = resp.status();
+            if s.is_success() || s.as_u16() == 404 {
+                (true, s.as_u16(), format!("Online ({admin_latency}ms)"))
             } else {
-                Ok((
-                    StatusCode::OK,
-                    Json(json!({
-                        "success": false,
-                        "latency_ms": latency,
-                        "status_code": status.as_u16(),
-                        "message": format!("Server responded with status {}", status.as_u16()),
-                    })),
-                )
-                    .into_response())
+                (false, s.as_u16(), format!("Server responded with HTTP {}", s.as_u16()))
             }
         }
-        Err(e) => {
-            let latency = start.elapsed().as_millis() as u64;
-            Ok((
-                StatusCode::OK,
-                Json(json!({
-                    "success": false,
-                    "latency_ms": latency,
-                    "message": format!("Connection failed: {e}"),
-                })),
-            )
-                .into_response())
+        Err(e) => (false, 504, format!("Connection failed: {e}")),
+    };
+
+    let mut s3_result = None;
+    if let Some(raw_s3) = payload.s3_endpoint {
+        let s3_clean = raw_s3.trim().trim_end_matches('/');
+        if !s3_clean.is_empty() {
+            let s3_start = std::time::Instant::now();
+            let mut req = client.get(s3_clean);
+            let has_creds = payload.access_key_id.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+                && payload.secret_access_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false);
+
+            if has_creds {
+                let ak = payload.access_key_id.as_deref().unwrap_or("");
+                let sk = payload.secret_access_key.as_deref().unwrap_or("");
+                req = crate::admin::s3_explorer_handlers::sign_s3_explorer_request(
+                    req, "GET", s3_clean, "/", "", &[], ak, sk, "us-east-1", &[],
+                );
+            }
+
+            let s3_res = req.send().await;
+            let s3_latency = s3_start.elapsed().as_millis() as u64;
+
+            let (s3_ok, s3_status, s3_msg, authed) = match s3_res {
+                Ok(resp) => {
+                    let s = resp.status().as_u16();
+                    if s >= 200 && s < 300 {
+                        (true, s, format!("S3 Storage & Credentials Valid ({s3_latency}ms)"), true)
+                    } else if s == 403 {
+                        if has_creds {
+                            (false, s, "S3 Online but Credentials Invalid (HTTP 403)".to_string(), false)
+                        } else {
+                            (true, s, format!("S3 Online (requires credentials, {s3_latency}ms)"), false)
+                        }
+                    } else {
+                        (true, s, format!("S3 Responded with HTTP {s} ({s3_latency}ms)"), false)
+                    }
+                }
+                Err(e) => (false, 504, format!("S3 Port Unreachable: {e}"), false),
+            };
+
+            s3_result = Some(json!({
+                "success": s3_ok,
+                "latency_ms": s3_latency,
+                "status_code": s3_status,
+                "authenticated": authed,
+                "message": s3_msg,
+            }));
         }
     }
+
+    let overall_success = admin_ok && s3_result.as_ref().map(|v| v["success"].as_bool().unwrap_or(true)).unwrap_or(true);
+    let summary = if overall_success {
+        if s3_result.is_some() {
+            "Admin API & S3 Storage verified successfully".to_string()
+        } else {
+            format!("Online ({admin_latency}ms latency) - Ready to connect")
+        }
+    } else if !admin_ok {
+        admin_msg.clone()
+    } else {
+        s3_result.as_ref().and_then(|v| v["message"].as_str()).unwrap_or("S3 verification failed").to_string()
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "success": overall_success,
+            "latency_ms": admin_latency,
+            "status_code": admin_status,
+            "message": summary,
+            "admin": {
+                "success": admin_ok,
+                "latency_ms": admin_latency,
+                "status_code": admin_status,
+                "message": admin_msg,
+            },
+            "s3": s3_result,
+        })),
+    )
+        .into_response())
 }

@@ -37,7 +37,13 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
   const [secretKey, setSecretKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
-  const [testResult, setTestResult] = useState<{ success: boolean; latency?: number; msg: string } | null>(null)
+  const [testResult, setTestResult] = useState<{
+    success: boolean
+    latency?: number
+    msg: string
+    admin?: { success: boolean; latency_ms: number; message: string }
+    s3?: { success: boolean; latency_ms: number; message: string; authenticated: boolean }
+  } | null>(null)
 
   function resetForm() {
     setName('')
@@ -79,7 +85,12 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
       const res = await authFetch(`${apiBase}/admin/federation/test-endpoint`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ endpoint: cleanedUrl }),
+        body: JSON.stringify({
+          endpoint: cleanedUrl,
+          s3_endpoint: s3Endpoint.trim() ? s3Endpoint.trim().replace(/\/+$/, '') : undefined,
+          access_key_id: accessKey.trim() || undefined,
+          secret_access_key: secretKey.trim() || undefined,
+        }),
       })
 
       const data = await res.json().catch(() => ({}))
@@ -89,13 +100,17 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
           success: true,
           latency: data.latency_ms,
           msg: data.message || `Online (${data.latency_ms}ms) - Verified via Server Network`,
+          admin: data.admin,
+          s3: data.s3,
         })
-        toast.success(`Node reachable from server: ${data.latency_ms}ms`)
+        toast.success(`Server verified: ${data.message || `${data.latency_ms}ms`}`)
       } else {
         setTestResult({
           success: false,
           latency: data.latency_ms,
           msg: data.message || 'Node unreachable from this server.',
+          admin: data.admin,
+          s3: data.s3,
         })
         toast.warning(data.message || 'Connection test finished with notice.')
       }
@@ -210,15 +225,49 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
             </div>
 
             {testResult && (
-              <div
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono border ${
-                  testResult.success
-                    ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
-                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${testResult.success ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                <span>{testResult.msg}</span>
+              <div className="space-y-1.5 pt-1">
+                {testResult.admin && (
+                  <div
+                    className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11px] font-mono border ${
+                      testResult.admin.success
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                        : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border-rose-500/20'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${testResult.admin.success ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                      <span>Admin API (:8080)</span>
+                    </span>
+                    <span>{testResult.admin.message}</span>
+                  </div>
+                )}
+                {testResult.s3 && (
+                  <div
+                    className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-[11px] font-mono border ${
+                      testResult.s3.success
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${testResult.s3.success ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                      <span>S3 Storage (:9000)</span>
+                    </span>
+                    <span>{testResult.s3.message}</span>
+                  </div>
+                )}
+                {!testResult.admin && !testResult.s3 && (
+                  <div
+                    className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-mono border ${
+                      testResult.success
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full ${testResult.success ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                    <span>{testResult.msg}</span>
+                  </div>
+                )}
               </div>
             )}
           </div>
