@@ -31,6 +31,8 @@ interface Props {
   onTestConnection: () => void
   testing: boolean
   networkInfo?: any
+  executionMode?: 'relay' | 'browser'
+  onChangeExecutionMode?: (mode: 'relay' | 'browser') => void
 }
 
 export function S3CredentialSelector({
@@ -44,6 +46,8 @@ export function S3CredentialSelector({
   onTestConnection,
   testing,
   networkInfo,
+  executionMode = 'relay',
+  onChangeExecutionMode,
 }: Props) {
   const [selectedUsername, setSelectedUsername] = useState<string>('')
   const [showSecret, setShowSecret] = useState(false)
@@ -92,16 +96,42 @@ export function S3CredentialSelector({
           <Key className="w-4 h-4 text-primary" />
           <span className="text-xs font-bold tracking-tight">S3 SDK Credentials & Endpoint</span>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 text-[11px] gap-1 text-muted-foreground"
-          onClick={onRefreshUsers}
-          disabled={loadingUsers}
-        >
-          <RefreshCw className={`w-3 h-3 ${loadingUsers ? 'animate-spin' : ''}`} />
-          Sync IAM
-        </Button>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-0.5 bg-muted/60 p-0.5 rounded-lg border border-border/50 text-[10px]">
+            <button
+              type="button"
+              onClick={() => onChangeExecutionMode?.('relay')}
+              className={`px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${executionMode === 'relay'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+                }`}
+              title="Execute via backend server (No CORS / Works for internal rack IPs)"
+            >
+              ⚡ Relay
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeExecutionMode?.('browser')}
+              className={`px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${executionMode === 'browser'
+                ? 'bg-primary text-primary-foreground shadow-xs'
+                : 'text-muted-foreground hover:text-foreground'
+                }`}
+              title="Execute directly from client browser"
+            >
+              🌐 Browser
+            </button>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-[11px] gap-1 text-muted-foreground"
+            onClick={onRefreshUsers}
+            disabled={loadingUsers}
+          >
+            <RefreshCw className={`w-3 h-3 ${loadingUsers ? 'animate-spin' : ''}`} />
+            Sync IAM
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -194,52 +224,6 @@ export function S3CredentialSelector({
             placeholder="http://localhost:9001"
             className="h-8 text-xs font-mono"
           />
-          <div className="flex items-center gap-1 flex-wrap pt-0.5">
-            <span className="text-[10px] text-muted-foreground/75 font-medium">Presets:</span>
-            {[
-              ...(networkInfo?.local_ip
-                ? [
-                    {
-                      label: `Rack IP (${networkInfo.local_ip})`,
-                      url: networkInfo.s3_endpoint || `http://${networkInfo.local_ip}:9001`,
-                    },
-                  ]
-                : []),
-              {
-                label: 'Browser Host',
-                url:
-                  typeof window !== 'undefined'
-                    ? `${window.location.protocol}//${window.location.hostname}:9001`
-                    : 'http://localhost:9001',
-              },
-              {
-                label: 'Proxy (/s3)',
-                url: typeof window !== 'undefined' ? `${window.location.origin}/s3` : '/s3',
-              },
-              {
-                label: 'Localhost',
-                url: 'http://127.0.0.1:9001',
-              },
-            ].map((p) => {
-              const active =
-                endpoint.trim().replace(/\/+$/, '') === p.url.trim().replace(/\/+$/, '')
-              return (
-                <button
-                  key={p.label}
-                  type="button"
-                  onClick={() => onChangeEndpoint(p.url)}
-                  className={`text-[9px] px-1.5 py-0.5 rounded font-mono border transition-colors cursor-pointer ${
-                    active
-                      ? 'bg-primary text-primary-foreground border-primary font-bold'
-                      : 'bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50'
-                  }`}
-                  title={p.url}
-                >
-                  {p.label}
-                </button>
-              )
-            })}
-          </div>
         </div>
       </div>
 

@@ -7,6 +7,7 @@ pub mod object_handlers;
 pub mod policy_handlers;
 pub mod presign_handlers;
 pub mod routes;
+pub mod s3_explorer_handlers;
 pub mod settings_handlers;
 pub mod trash_handlers;
 pub mod user_handlers;

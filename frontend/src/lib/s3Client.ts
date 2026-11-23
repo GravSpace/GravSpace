@@ -33,6 +33,50 @@ export interface S3ExecutionResult {
   rawError?: any
 }
 
+export async function executeS3ViaBackend(
+  authFetch: (url: string, init?: RequestInit) => Promise<Response>,
+  apiBase: string,
+  endpoint: string,
+  creds: S3Credentials,
+  action: string,
+  params: Record<string, any>,
+  region = 'us-east-1',
+): Promise<S3ExecutionResult> {
+  const start = performance.now()
+  try {
+    const res = await authFetch(`${apiBase}/admin/s3-explorer/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint,
+        access_key_id: creds.accessKeyId.trim(),
+        secret_access_key: creds.secretAccessKey.trim(),
+        region,
+        action,
+        params,
+      }),
+    })
+    const data = await res.json()
+    return {
+      success: data.success ?? false,
+      command: data.command ?? action,
+      status: data.status,
+      latencyMs: data.latency_ms ?? Math.round(performance.now() - start),
+      data: data.data || data.raw_body,
+      error: data.error,
+      rawError: data,
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      command: action,
+      latencyMs: Math.round(performance.now() - start),
+      error: err.message || 'Failed to call backend S3 relay',
+      rawError: err,
+    }
+  }
+}
+
 export function createS3Client(endpoint: string, creds: S3Credentials): S3Client {
   let resolvedEndpoint = endpoint.trim()
   if (!resolvedEndpoint) {

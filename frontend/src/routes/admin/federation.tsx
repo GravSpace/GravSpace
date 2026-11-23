@@ -97,7 +97,10 @@ export default function FederationPage() {
       if (res.ok) {
         const data = await res.json()
         if (data.status === 'healthy') {
-          toast.success(`Peer ping OK (${data.latency_ms} ms)`)
+          const detail = data.s3_latency_ms != null ? ` (Admin: ${data.admin_latency_ms}ms, S3: ${data.s3_latency_ms}ms)` : ` (${data.latency_ms} ms)`
+          toast.success(`Peer healthy${detail}`)
+        } else if (data.status === 'degraded') {
+          toast.warning(`Peer degraded: Admin ${data.admin_ok ? 'OK' : 'Fail'}, S3 ${data.s3_ok ? 'OK' : 'Fail'}`)
         } else {
           toast.warning(`Peer unreachable: ${data.error || 'Connection timed out'}`)
         }
