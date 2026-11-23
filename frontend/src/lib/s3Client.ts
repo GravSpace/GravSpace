@@ -34,8 +34,19 @@ export interface S3ExecutionResult {
 }
 
 export function createS3Client(endpoint: string, creds: S3Credentials): S3Client {
+  let resolvedEndpoint = endpoint.trim()
+  if (!resolvedEndpoint) {
+    resolvedEndpoint = 'http://localhost:9001'
+  } else if (resolvedEndpoint.startsWith('/')) {
+    if (typeof window !== 'undefined') {
+      resolvedEndpoint = `${window.location.origin}${resolvedEndpoint}`
+    } else {
+      resolvedEndpoint = `http://127.0.0.1:3000${resolvedEndpoint}`
+    }
+  }
+
   return new S3Client({
-    endpoint: endpoint.trim() || 'http://localhost:9001',
+    endpoint: resolvedEndpoint,
     region: 'us-east-1',
     credentials: {
       accessKeyId: creds.accessKeyId.trim(),

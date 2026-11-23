@@ -138,6 +138,9 @@ export function S3ResponseViewer({ result, codeSnippets }: Props) {
             <pre className="text-[11px] leading-relaxed text-foreground bg-muted/50 p-3 rounded-lg overflow-x-auto">
               {currentCode}
             </pre>
+            <div className="p-2.5 rounded-lg bg-primary/5 border border-primary/20 text-[10px] text-muted-foreground font-sans leading-relaxed">
+              <strong className="text-foreground font-semibold">Tip Koneksi Jaringan:</strong> Gunakan endpoint IP lokal (misal <code className="font-mono text-primary">http://10.10.10.14:9001</code>) untuk script/worker yang berjalan di server 1 rak/LAN. Untuk client browser di luar VLAN rak, pilih preset <code className="font-mono text-primary">Web Proxy (/s3)</code>.
+            </div>
           </div>
         )}
       </div>

@@ -22,6 +22,7 @@ import { CreateShareDialog } from '@/components/federation/CreateShareDialog'
 import { SharesTable } from '@/components/federation/SharesTable'
 import { PeersTable } from '@/components/federation/PeersTable'
 import { QueueTable } from '@/components/federation/QueueTable'
+import { NodeNetworkCard } from '@/components/federation/NodeNetworkCard'
 import type {
   CrossServerShare,
   RemoteServer,
@@ -255,6 +256,8 @@ export default function FederationPage() {
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-auto p-4 flex flex-col gap-3.5 max-w-7xl w-full mx-auto">
+        <NodeNetworkCard apiBase={API_BASE} />
+
         {/* Interactive Metric Cards Banner */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {/* Card 1: Remote Peers */}

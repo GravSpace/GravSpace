@@ -233,10 +233,30 @@ pub async fn bulk_delete_objects(
     Path(bucket): Path<String>,
     Json(payload): Json<BulkDeletePayload>,
 ) -> Result<Response, AppError> {
-    for k in payload.keys {
-        let _ = storage.delete_object(&bucket, &k, None, false).await;
+    let mut deleted_count = 0;
+    for k in &payload.keys {
+        if storage.delete_object(&bucket, k, None, false).await.is_ok() {
+            deleted_count += 1;
+        }
     }
-    Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
+    if let Some(ref audit) = storage.audit {
+        audit
+            .log(
+                Some("admin"),
+                "s3:BulkDeleteObjects",
+                &format!("{bucket}: {} keys", payload.keys.len()),
+                "success",
+                None,
+                None,
+                None,
+            )
+            .await;
+    }
+    Ok((
+        StatusCode::OK,
+        Json(json!({ "success": true, "deleted_count": deleted_count })),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]

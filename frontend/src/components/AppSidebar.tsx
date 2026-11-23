@@ -67,10 +67,26 @@ export function AppSidebar() {
 
   const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
   const { authFetch } = useAuth()
+  const [appVersion, setAppVersion] = useState<string>(
+    typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__ ? __APP_VERSION__ : '0.4.1',
+  )
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
+
+  // Sync live version from backend if available
+  useEffect(() => {
+    if (!authState?.token) return
+    authFetch(`${API_BASE}/admin/settings`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.app_version) {
+          setAppVersion(data.app_version)
+        }
+      })
+      .catch(() => {})
+  }, [authState?.token, authFetch, API_BASE])
 
   // Keyboard shortcut listener (Cmd+K / Ctrl+K)
   useEffect(() => {
@@ -129,7 +145,7 @@ export function AppSidebar() {
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-extrabold tracking-tight leading-none">GravSpace</span>
                 <Badge variant="outline" className="text-[9px] h-3.5 px-1 py-0 font-mono font-normal text-muted-foreground border-border/60">
-                  v{__APP_VERSION__}
+                  v{appVersion}
                 </Badge>
               </div>
               <span className="text-[10px] text-muted-foreground font-mono mt-0.5 tracking-wider uppercase opacity-75">Cloud Storage</span>
@@ -228,7 +244,7 @@ export function AppSidebar() {
             </div>
             <div className="flex items-center justify-between px-2 pt-1.5 pb-0.5 text-[10px] text-muted-foreground/60 font-mono border-t border-border/40 mt-1">
               <span>GravSpace Core</span>
-              <span>v{__APP_VERSION__}</span>
+              <span>v{appVersion}</span>
             </div>
           </div>
         </SidebarFooter>

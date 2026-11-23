@@ -299,6 +299,17 @@ impl FileStorage {
             }
         }
 
+        // If key is a folder (ends with '/'), recursively delete all nested items under this prefix
+        if key.ends_with('/') {
+            if let Ok(sub_keys) = db::objects::get_keys_by_prefix(&conn, bucket, key).await {
+                for sub_key in sub_keys {
+                    if sub_key != key {
+                        let _ = Box::pin(self.delete_object_direct(bucket, &sub_key, None, bypass_governance)).await;
+                    }
+                }
+            }
+        }
+
         self.invalidate_object_list_cache(bucket, key).await;
         Ok(())
     }

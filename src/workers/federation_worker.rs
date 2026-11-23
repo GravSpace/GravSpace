@@ -142,13 +142,18 @@ pub async fn start_federation_worker(storage: FileStorage) {
                 || (!peer.access_key.is_empty() && !peer.secret_key.starts_with("eyJ"));
 
             let base_ep = if let Some(ref s3_ep) = peer.s3_endpoint {
-                if !s3_ep.trim().is_empty() {
-                    s3_ep.trim_end_matches('/')
+                let trimmed = s3_ep.trim().trim_end_matches('/');
+                if !trimmed.is_empty() {
+                    trimmed.to_string()
+                } else if peer.endpoint.contains(":8080") {
+                    peer.endpoint.trim_end_matches('/').replace(":8080", ":9001")
                 } else {
-                    peer.endpoint.trim_end_matches('/')
+                    peer.endpoint.trim_end_matches('/').to_string()
                 }
+            } else if peer.endpoint.contains(":8080") {
+                peer.endpoint.trim_end_matches('/').replace(":8080", ":9001")
             } else {
-                peer.endpoint.trim_end_matches('/')
+                peer.endpoint.trim_end_matches('/').to_string()
             };
 
             let encoded_key: String = item
@@ -177,7 +182,7 @@ pub async fn start_federation_worker(storage: FileStorage) {
                     sign_s3_request(
                         req_builder,
                         "DELETE",
-                        base_ep,
+                        &base_ep,
                         &item.target_bucket,
                         &encoded_key,
                         b"",
@@ -205,7 +210,7 @@ pub async fn start_federation_worker(storage: FileStorage) {
                             sign_s3_request(
                                 req_builder,
                                 "PUT",
-                                base_ep,
+                                &base_ep,
                                 &item.target_bucket,
                                 &encoded_key,
                                 &data,

@@ -12,19 +12,34 @@ import tailwindcss from '@tailwindcss/vite'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-let appVersion = '0.1.0'
-try {
-  const cargoPath = path.resolve(__dirname, '../Cargo.toml')
-  if (fs.existsSync(cargoPath)) {
-    const cargoToml = fs.readFileSync(cargoPath, 'utf-8')
-    const match = cargoToml.match(/^\s*version\s*=\s*"([^"]+)"/m)
-    if (match) {
-      appVersion = match[1]
+function resolveAppVersion(): string {
+  if (process.env.APP_VERSION) return process.env.APP_VERSION
+  if (process.env.VITE_APP_VERSION) return process.env.VITE_APP_VERSION
+  if (process.env.npm_package_version) return process.env.npm_package_version
+
+  // 1. Coba baca package.json lokal di direktori frontend (tersedia saat docker build)
+  try {
+    const pkgPath = path.resolve(__dirname, 'package.json')
+    if (fs.existsSync(pkgPath)) {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
+      if (pkg.version) return pkg.version
     }
-  }
-} catch {
-  // fallback
+  } catch {}
+
+  // 2. Coba baca Cargo.toml di direktori induk (lingkungan monorepo lokal)
+  try {
+    const cargoPath = path.resolve(__dirname, '../Cargo.toml')
+    if (fs.existsSync(cargoPath)) {
+      const cargoToml = fs.readFileSync(cargoPath, 'utf-8')
+      const match = cargoToml.match(/^\s*version\s*=\s*"([^"]+)"/m)
+      if (match) return match[1]
+    }
+  } catch {}
+
+  return '0.4.1'
 }
+
+const appVersion = resolveAppVersion()
 
 const config = defineConfig({
   define: {

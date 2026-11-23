@@ -15,6 +15,7 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as SplatRouteImport } from './routes/$'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as S3SplatRouteImport } from './routes/s3/$'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminTrashRouteImport } from './routes/admin/trash'
@@ -58,6 +59,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminRoute,
+} as any)
+const S3SplatRoute = S3SplatRouteImport.update({
+  id: '/s3/$',
+  path: '/s3/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSplatRoute = ApiSplatRouteImport.update({
   id: '/api/$',
@@ -142,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/admin/trash': typeof AdminTrashRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/$': typeof ApiSplatRoute
+  '/s3/$': typeof S3SplatRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/buckets/$bucket': typeof AdminBucketsBucketRoute
   '/admin/buckets/': typeof AdminBucketsIndexRoute
@@ -162,6 +169,7 @@ export interface FileRoutesByTo {
   '/admin/trash': typeof AdminTrashRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/$': typeof ApiSplatRoute
+  '/s3/$': typeof S3SplatRoute
   '/admin': typeof AdminIndexRoute
   '/admin/buckets/$bucket': typeof AdminBucketsBucketRoute
   '/admin/buckets': typeof AdminBucketsIndexRoute
@@ -184,6 +192,7 @@ export interface FileRoutesById {
   '/admin/trash': typeof AdminTrashRoute
   '/admin/users': typeof AdminUsersRoute
   '/api/$': typeof ApiSplatRoute
+  '/s3/$': typeof S3SplatRoute
   '/admin/': typeof AdminIndexRoute
   '/admin/buckets/$bucket': typeof AdminBucketsBucketRoute
   '/admin/buckets/': typeof AdminBucketsIndexRoute
@@ -207,6 +216,7 @@ export interface FileRouteTypes {
     | '/admin/trash'
     | '/admin/users'
     | '/api/$'
+    | '/s3/$'
     | '/admin/'
     | '/admin/buckets/$bucket'
     | '/admin/buckets/'
@@ -227,6 +237,7 @@ export interface FileRouteTypes {
     | '/admin/trash'
     | '/admin/users'
     | '/api/$'
+    | '/s3/$'
     | '/admin'
     | '/admin/buckets/$bucket'
     | '/admin/buckets'
@@ -248,6 +259,7 @@ export interface FileRouteTypes {
     | '/admin/trash'
     | '/admin/users'
     | '/api/$'
+    | '/s3/$'
     | '/admin/'
     | '/admin/buckets/$bucket'
     | '/admin/buckets/'
@@ -260,6 +272,7 @@ export interface RootRouteChildren {
   HealthRoute: typeof HealthRoute
   LoginRoute: typeof LoginRoute
   ApiSplatRoute: typeof ApiSplatRoute
+  S3SplatRoute: typeof S3SplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -305,6 +318,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/s3/$': {
+      id: '/s3/$'
+      path: '/s3/$'
+      fullPath: '/s3/$'
+      preLoaderRoute: typeof S3SplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/$': {
       id: '/api/$'
@@ -441,6 +461,7 @@ const rootRouteChildren: RootRouteChildren = {
   HealthRoute: HealthRoute,
   LoginRoute: LoginRoute,
   ApiSplatRoute: ApiSplatRoute,
+  S3SplatRoute: S3SplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

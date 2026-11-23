@@ -303,3 +303,100 @@ pub async fn clear_completed_queue(
     broadcast_federation_event("queue_changed", json!({ "action": "cleared" }));
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
 }
+
+// ================= TEST ENDPOINT HANDLER =================
+
+#[derive(Deserialize)]
+pub struct TestEndpointPayload {
+    pub endpoint: String,
+}
+
+pub async fn test_remote_endpoint(
+    Json(payload): Json<TestEndpointPayload>,
+) -> Result<Response, AppError> {
+    let raw = payload.endpoint.trim().trim_end_matches('/');
+    if raw.is_empty() {
+        return Err(AppError::BadRequest("Endpoint URL is required".to_string()));
+    }
+
+    let parsed = match reqwest::Url::parse(raw) {
+        Ok(u) => u,
+        Err(e) => {
+            return Err(AppError::BadRequest(format!("Invalid endpoint URL: {e}")));
+        }
+    };
+
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(AppError::BadRequest(
+            "Only HTTP and HTTPS endpoints are permitted".to_string(),
+        ));
+    }
+
+    if let Some(host_str) = parsed.host_str() {
+        if host_str == "169.254.169.254" {
+            return Err(AppError::BadRequest(
+                "Access to link-local metadata address is blocked".to_string(),
+            ));
+        }
+        if host_str == "localhost" || host_str == "127.0.0.1" || host_str == "::1" {
+            if let Some(port) = parsed.port() {
+                if port == 8085 || port == 6379 {
+                    return Err(AppError::BadRequest(
+                        "Access to internal database/cache port is blocked".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    let health_url = format!("{}/health", raw);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let start = std::time::Instant::now();
+    match client.get(&health_url).send().await {
+        Ok(resp) => {
+            let latency = start.elapsed().as_millis() as u64;
+            let status = resp.status();
+            if status.is_success() || status.as_u16() == 404 {
+                Ok((
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": true,
+                        "latency_ms": latency,
+                        "status_code": status.as_u16(),
+                        "message": format!("Online ({}ms latency) - Ready to connect", latency),
+                    })),
+                )
+                    .into_response())
+            } else {
+                Ok((
+                    StatusCode::OK,
+                    Json(json!({
+                        "success": false,
+                        "latency_ms": latency,
+                        "status_code": status.as_u16(),
+                        "message": format!("Server responded with status {}", status.as_u16()),
+                    })),
+                )
+                    .into_response())
+            }
+        }
+        Err(e) => {
+            let latency = start.elapsed().as_millis() as u64;
+            Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "success": false,
+                    "latency_ms": latency,
+                    "message": format!("Connection failed: {e}"),
+                })),
+            )
+                .into_response())
+        }
+    }
+}

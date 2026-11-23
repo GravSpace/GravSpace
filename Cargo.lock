@@ -78,9 +78,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.104"
+version = "1.0.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+checksum = "2cb931c189b85683d69a5cfad41d4d418671e1ac413dd209f3f2fc31e3cfd902"
 
 [[package]]
 name = "arc-swap"
@@ -2676,7 +2676,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage-server"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "aes-gcm",
  "anyhow",

@@ -52,15 +52,19 @@ function AlertDialogContent({
   return (
     <AlertDialogPortal>
       <AlertDialogOverlay />
-      <AlertDialogPrimitive.Content
-        data-slot="alert-dialog-content"
-        data-size={size}
-        className={cn(
-          "group/alert-dialog-content fixed inset-0 z-50 m-auto grid w-full max-w-[calc(100%-2rem)] h-fit max-h-[calc(100dvh-2rem)] gap-4 rounded-xl border bg-background p-6 shadow-2xl duration-200 data-[size=sm]:max-w-xs data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[size=default]:sm:max-w-lg",
-          className
-        )}
-        {...props}
-      />
+      <div className="fixed inset-0 z-50 overflow-y-auto">
+        <div className="flex min-h-full items-center justify-center p-3 sm:p-6 text-center">
+          <AlertDialogPrimitive.Content
+            data-slot="alert-dialog-content"
+            data-size={size}
+            className={cn(
+              "relative group/alert-dialog-content grid w-full max-w-[calc(100%-2rem)] max-h-[calc(100dvh-3rem)] gap-4 rounded-xl border bg-background p-6 text-left shadow-2xl duration-200 outline-none data-[size=sm]:max-w-xs data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[size=default]:sm:max-w-lg",
+              className
+            )}
+            {...props}
+          />
+        </div>
+      </div>
     </AlertDialogPortal>
   )
 }

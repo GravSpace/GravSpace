@@ -48,6 +48,23 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
     setTestResult(null)
   }
 
+  function handleEndpointChange(val: string) {
+    setEndpoint(val)
+    setTestResult(null)
+    if (!s3Endpoint || s3Endpoint.includes(':9001') || s3Endpoint.includes(':9000')) {
+      if (val.includes(':8080')) {
+        setS3Endpoint(val.replace(':8080', ':9001'))
+      } else if (val.startsWith('http://') || val.startsWith('https://')) {
+        try {
+          const u = new URL(val)
+          setS3Endpoint(`${u.protocol}//${u.hostname}:9001`)
+        } catch {
+          // ignore parsing error while typing
+        }
+      }
+    }
+  }
+
   async function handleTestConnection() {
     if (!endpoint.trim()) {
       toast.error('Please enter the Admin API Endpoint first.')
@@ -56,37 +73,36 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
 
     setTesting(true)
     setTestResult(null)
-    const start = Date.now()
 
     try {
       const cleanedUrl = endpoint.trim().replace(/\/+$/, '')
-      const testUrl = `${cleanedUrl}/health`
+      const res = await authFetch(`${apiBase}/admin/federation/test-endpoint`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: cleanedUrl }),
+      })
 
-      const ctrl = new AbortController()
-      const t = setTimeout(() => ctrl.abort(), 4000)
+      const data = await res.json().catch(() => ({}))
 
-      const res = await fetch(testUrl, { method: 'GET', signal: ctrl.signal }).catch(() => null)
-      clearTimeout(t)
-      const elapsed = Date.now() - start
-
-      if (res && (res.ok || res.status < 500)) {
+      if (res.ok && data.success) {
         setTestResult({
           success: true,
-          latency: elapsed,
-          msg: `Online (${elapsed}ms latency) - Ready to connect`,
+          latency: data.latency_ms,
+          msg: data.message || `Online (${data.latency_ms}ms) - Verified via Server Network`,
         })
-        toast.success(`Node reachable: ${elapsed}ms`)
+        toast.success(`Node reachable from server: ${data.latency_ms}ms`)
       } else {
         setTestResult({
           success: false,
-          msg: 'Node responded or behind proxy. Credentials will be verified on ping.',
+          latency: data.latency_ms,
+          msg: data.message || 'Node unreachable from this server.',
         })
-        toast.warning('Node check completed with notice.')
+        toast.warning(data.message || 'Connection test finished with notice.')
       }
     } catch (e: any) {
       setTestResult({
         success: false,
-        msg: `Pre-flight timeout: ${e.message || 'Connection refused'}. You can still register the peer for retry monitoring.`,
+        msg: `Test ping error: ${e.message || 'Failed to trigger test'}.`,
       })
     } finally {
       setTesting(false)
@@ -170,10 +186,7 @@ export function ConnectPeerDialog({ open, onClose, onSuccess, authFetch, apiBase
                 <Link2 className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
                 <Input
                   value={endpoint}
-                  onChange={(e) => {
-                    setEndpoint(e.target.value)
-                    setTestResult(null)
-                  }}
+                  onChange={(e) => handleEndpointChange(e.target.value)}
                   placeholder="http://192.168.1.50:8080"
                   className="h-9 text-xs pl-8.5 font-mono"
                   required
