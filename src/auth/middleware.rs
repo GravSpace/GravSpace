@@ -114,10 +114,18 @@ pub async fn verify_s3_request(
     }
 
     // 3. Anonymous / Public Check
-    if action == "s3:GetObject" && !bucket.is_empty() {
-        if let Ok(Some(b)) = db::buckets::get_bucket(&conn, bucket).await {
-            if b.owner == "anonymous" {
-                return Ok("anonymous".to_string());
+    if !bucket.is_empty() {
+        if authorize_user(&conn, "anonymous", action, bucket, key)
+            .await
+            .is_ok()
+        {
+            return Ok("anonymous".to_string());
+        }
+        if action == "s3:GetObject" {
+            if let Ok(Some(b)) = db::buckets::get_bucket(&conn, bucket).await {
+                if b.owner == "anonymous" {
+                    return Ok("anonymous".to_string());
+                }
             }
         }
     }

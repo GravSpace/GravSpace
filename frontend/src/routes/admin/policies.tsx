@@ -57,7 +57,13 @@ function PoliciesPage() {
       const res = await authFetch(`${API_BASE}/admin/policies`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          policy: {
+            Version: payload.version || '2012-10-17',
+            Statement: payload.statement || [],
+          },
+        }),
       })
       if (res.ok) {
         toast.success(`Policy "${payload.name}" created.`)

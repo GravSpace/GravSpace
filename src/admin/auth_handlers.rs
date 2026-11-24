@@ -59,21 +59,11 @@ pub async fn login_handler(
         .as_deref()
         .unwrap_or("admin");
 
-    let mut is_valid = if let Some(hash) = &user_rec.password_hash {
+    let is_valid = if let Some(hash) = &user_rec.password_hash {
         bcrypt::verify(secret, hash).unwrap_or(false)
     } else {
         false
     };
-
-    // Self-heal: If username is "admin" and the user provides the configured initial/default password
-    // (e.g. "admin" or INITIAL_ADMIN_PASSWORD), but the database has an old/unmatched hash,
-    // update the database hash so login succeeds and remains persistent.
-    if !is_valid && username == "admin" && secret == default_pass {
-        if let Ok(new_hash) = bcrypt::hash(default_pass, bcrypt::DEFAULT_COST) {
-            let _ = db::users::upsert_user(&conn, "admin", &new_hash).await;
-            is_valid = true;
-        }
-    }
 
     if !is_valid {
         return Err(AuthError::InvalidCredentials.into());

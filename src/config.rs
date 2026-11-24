@@ -55,9 +55,15 @@ impl Config {
             .filter(|s| !s.is_empty())
             .collect();
 
-        let initial_admin_password = env::var("INITIAL_ADMIN_PASSWORD").ok();
-        let initial_admin_access_key = env::var("INITIAL_ADMIN_ACCESS_KEY").ok();
-        let initial_admin_secret_key = env::var("INITIAL_ADMIN_SECRET_KEY").ok();
+        let initial_admin_password = env::var("INITIAL_ADMIN_PASSWORD")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let initial_admin_access_key = env::var("INITIAL_ADMIN_ACCESS_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
+        let initial_admin_secret_key = env::var("INITIAL_ADMIN_SECRET_KEY")
+            .ok()
+            .filter(|s| !s.trim().is_empty());
 
         let key_str = env::var("SSE_MASTER_KEY")
             .unwrap_or_else(|_| "this-is-a-very-secret-key-32byte".to_string());

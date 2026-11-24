@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Plus, Trash2, Copy, CheckCircle2, XCircle, Sparkles, Code2, Lock } from 'lucide-react'
+import { Plus, Trash2, Copy, CheckCircle2, XCircle, Sparkles, Code2, Lock, Shield } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
@@ -97,10 +97,17 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetDialog() }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden">
-        <DialogHeader className="px-6 pt-5 pb-4 border-b shrink-0">
-          <DialogTitle>Create Security Policy</DialogTitle>
-          <DialogDescription>Define access rules using the visual builder or raw JSON document.</DialogDescription>
+      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl bg-card">
+        <DialogHeader className="px-6 py-4 border-b border-border/50 shrink-0 bg-muted/20 flex flex-row items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
+            <Shield className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+          </div>
+          <div>
+            <DialogTitle className="text-base font-semibold tracking-tight">Create Security Policy</DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground mt-0.5">
+              Define access rules using the visual builder or raw JSON document.
+            </DialogDescription>
+          </div>
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
@@ -323,8 +330,8 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
           </Tabs>
         </div>
 
-        <div className="px-6 py-4 border-t border-slate-100 dark:border-slate-800/80 shrink-0 flex items-center justify-between">
-          <div className="text-[10px] text-muted-foreground">
+        <div className="px-6 py-3 border-t border-border/50 bg-muted/10 shrink-0 flex items-center justify-between">
+          <div className="text-[11px] text-muted-foreground font-sans">
             {!jsonMode && (
               <span>
                 <span className="font-bold text-foreground">{statements.reduce((acc, s) => acc + s.action.length, 0)}</span> actions across{' '}
@@ -333,13 +340,14 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" onClick={resetDialog}>Cancel</Button>
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={resetDialog}>Cancel</Button>
             <Button
-              className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              size="sm"
+              className="h-8 text-xs bg-indigo-600 hover:bg-indigo-700 text-white gap-1.5"
               onClick={handleSubmit}
               disabled={!policyName.trim() || submitting || (jsonMode && !!jsonError)}
             >
-              <Lock className="w-3.5 h-3.5 mr-2" />
+              <Lock className="w-3.5 h-3.5" />
               {submitting ? 'Creating...' : 'Create Policy'}
             </Button>
           </div>
