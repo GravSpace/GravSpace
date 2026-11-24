@@ -19,7 +19,14 @@ pub async fn list_policies(State(storage): State<FileStorage>) -> Result<Respons
 #[derive(Deserialize)]
 pub struct CreatePolicyPayload {
     pub name: String,
-    pub policy: serde_json::Value,
+    #[serde(default)]
+    pub policy: Option<serde_json::Value>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub statement: Option<serde_json::Value>,
+    #[serde(rename = "Statement", default)]
+    pub statement_upper: Option<serde_json::Value>,
 }
 
 pub async fn create_policy(
@@ -27,7 +34,17 @@ pub async fn create_policy(
     Json(payload): Json<CreatePolicyPayload>,
 ) -> Result<Response, AppError> {
     let conn = storage.db.conn()?;
-    let json_str = serde_json::to_string(&payload.policy).unwrap_or_default();
+    let policy_doc = if let Some(p) = payload.policy {
+        p
+    } else {
+        let stmts = payload.statement.or(payload.statement_upper).unwrap_or(json!([]));
+        let ver = payload.version.unwrap_or_else(|| "2012-10-17".to_string());
+        json!({
+            "Version": ver,
+            "Statement": stmts,
+        })
+    };
+    let json_str = serde_json::to_string(&policy_doc).unwrap_or_default();
     db::policies::upsert_global_policy(&conn, &payload.name, &json_str).await?;
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
 }

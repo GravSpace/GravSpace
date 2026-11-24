@@ -51,18 +51,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db = Database::new(&config.database_url, &config.database_auth_token).await?;
 
-    // Seed initial admin user if not present, or if INITIAL_ADMIN_PASSWORD is set
+    // Seed initial admin user if not present (never overwrite existing admin password)
     if let Ok(conn) = db.conn() {
         let admin_user = db::users::get_user(&conn, "admin").await.unwrap_or(None);
-        let should_seed = admin_user.is_none() || config.initial_admin_password.is_some();
-        if should_seed {
+        if admin_user.is_none() {
             let admin_pass = config
                 .initial_admin_password
                 .as_deref()
                 .unwrap_or("admin");
             let hash = bcrypt::hash(admin_pass, bcrypt::DEFAULT_COST).unwrap_or_default();
             let _ = db::users::upsert_user(&conn, "admin", &hash).await;
-            info!("Configured admin user credentials");
+            info!("Configured initial admin user credentials");
 
             if let (Some(k_id), Some(secret)) = (
                 &config.initial_admin_access_key,
@@ -72,6 +71,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 info!("Seeded initial admin access key");
             }
         }
+
+        // Ensure anonymous user exists in users table for public policies
+        let _ = db::users::upsert_user(&conn, "anonymous", "").await;
 
         // Seed AdministratorAccess policy
         let admin_policy = serde_json::json!({

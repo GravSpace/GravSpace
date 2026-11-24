@@ -10,10 +10,28 @@ interface Props {
   codeSnippets: { ts: string; cli: string; python: string } | null
 }
 
-function isXmlString(val: unknown): val is string {
-  if (typeof val !== 'string') return false
-  const trimmed = val.trim()
-  return trimmed.startsWith('<?xml') || (trimmed.startsWith('<') && trimmed.endsWith('>'))
+function unwrapXml(val: unknown): string | null {
+  if (typeof val === 'string') {
+    let s = val.trim()
+    if (s.startsWith('"') && s.endsWith('"')) {
+      try {
+        const parsed = JSON.parse(s)
+        if (typeof parsed === 'string') s = parsed.trim()
+      } catch {}
+    }
+    if (s.startsWith('<?xml') || (s.startsWith('<') && s.endsWith('>'))) {
+      return s
+    }
+  } else if (val && typeof val === 'object') {
+    const obj = val as Record<string, any>
+    if (typeof obj.raw_body === 'string') {
+      return unwrapXml(obj.raw_body)
+    }
+    if (typeof obj.body === 'string') {
+      return unwrapXml(obj.body)
+    }
+  }
+  return null
 }
 
 function formatXml(xml: string): string {
@@ -75,9 +93,10 @@ export function S3ResponseViewer({ result, codeSnippets }: Props) {
   }
 
   const rawContent = result.data ?? result.rawError ?? result.error
-  const isXml = isXmlString(rawContent)
+  const unwrappedXml = unwrapXml(rawContent)
+  const isXml = unwrappedXml !== null
   const displayContent = isXml
-    ? formatXml(rawContent)
+    ? formatXml(unwrappedXml)
     : typeof rawContent === 'object'
     ? JSON.stringify(rawContent, null, 2)
     : String(rawContent ?? '')

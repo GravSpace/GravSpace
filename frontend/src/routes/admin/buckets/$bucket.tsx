@@ -209,45 +209,111 @@ function BucketDetailPage() {
 
   function isPublic(key: string): boolean {
     const anon = users['anonymous']
-    if (!anon?.policies) return false
-    const resource = `arn:aws:s3:::${bucketName}/${key}*`
-    return anon.policies.some((p: any) =>
-      p.statement.some((s: any) => {
-        if (s.effect !== 'Allow' || !s.action.includes('s3:GetObject')) return false
-        return s.resource.some(
-          (r: string) => r === '*' || r === resource || (r.endsWith('*') && resource.startsWith(r.slice(0, -1))),
-        )
-      }),
-    )
+    if (!anon?.policies || !Array.isArray(anon.policies)) return false
+    const targetResource = key ? `arn:aws:s3:::${bucketName}/${key}` : `arn:aws:s3:::${bucketName}/*`
+    return anon.policies.some((p: any) => {
+      const statements = Array.isArray(p.statement)
+        ? p.statement
+        : Array.isArray(p.Statement)
+        ? p.Statement
+        : []
+      return statements.some((s: any) => {
+        const effect = s.effect || s.Effect
+        if (effect !== 'Allow') return false
+        const actions = Array.isArray(s.action)
+          ? s.action
+          : Array.isArray(s.Action)
+          ? s.Action
+          : [s.action || s.Action]
+        if (
+          !actions.some(
+            (a: any) => typeof a === 'string' && (a === '*' || a === 's3:*' || a.includes('s3:GetObject')),
+          )
+        ) {
+          return false
+        }
+        const rawRes = s.resource ?? s.Resource ?? []
+        const resources = Array.isArray(rawRes) ? rawRes : [rawRes]
+        return resources.some((r: any) => {
+          if (typeof r !== 'string') return false
+          if (r === '*' || r === `arn:aws:s3:::${bucketName}/*`) return true
+          if (r === targetResource) return true
+          if (r.endsWith('*') && targetResource.startsWith(r.slice(0, -1))) return true
+          return false
+        })
+      })
+    })
   }
 
   async function togglePublic(prefix = '') {
     const currentlyPublic = isPublic(prefix)
     const isDirectory = prefix.endsWith('/') || prefix === ''
-    const resource = 'arn:aws:s3:::' + bucketName + (prefix ? '/' + prefix : '')
-    const finalResource = isDirectory ? resource + '*' : resource
     const cleanPrefix = prefix.replace(/[\/\.]/g, '-').replace(/-+$/, '')
-    const pName = `Public-${bucketName}-${cleanPrefix || 'Root'}`
+    const defaultPName = `Public-${bucketName}-${cleanPrefix || 'Root'}`
+    const targetResource = prefix ? `arn:aws:s3:::${bucketName}/${prefix}` : `arn:aws:s3:::${bucketName}/*`
+    const finalResource = isDirectory
+      ? prefix
+        ? `arn:aws:s3:::${bucketName}/${prefix.replace(/\/+$/, '')}/*`
+        : `arn:aws:s3:::${bucketName}/*`
+      : targetResource
+
+    const anon = users['anonymous']
+    let policyToDelete = defaultPName
+    if (anon?.policies && Array.isArray(anon.policies)) {
+      const match = anon.policies.find((p: any) => {
+        const statements = Array.isArray(p.statement)
+          ? p.statement
+          : Array.isArray(p.Statement)
+          ? p.Statement
+          : []
+        return statements.some((s: any) => {
+          const rawRes = s.resource ?? s.Resource ?? []
+          const resources = Array.isArray(rawRes) ? rawRes : [rawRes]
+          return resources.some(
+            (r: any) =>
+              typeof r === 'string' &&
+              (r === finalResource ||
+                r === targetResource ||
+                (!prefix && (r === '*' || r === `arn:aws:s3:::${bucketName}/*`))),
+          )
+        })
+      })
+      if (match?.name) {
+        policyToDelete = match.name
+      }
+    }
 
     try {
       if (currentlyPublic) {
-        await authFetch(`${API_BASE}/admin/users/anonymous/policies/${pName}`, { method: 'DELETE' })
+        const res = await authFetch(
+          `${API_BASE}/admin/users/anonymous/policies/${encodeURIComponent(policyToDelete)}`,
+          { method: 'DELETE' },
+        )
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          throw new Error(errData.message || 'Failed to remove public policy')
+        }
         toast.success('Public access removed.')
       } else {
-        await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
+        const res = await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: pName,
+            name: defaultPName,
             version: '2012-10-17',
             statement: [{ effect: 'Allow', action: ['s3:GetObject', 's3:ListBucket'], resource: [finalResource] }],
+            policy: { Version: '2012-10-17', Statement: [{ Effect: 'Allow', Action: ['s3:GetObject', 's3:ListBucket'], Resource: [finalResource] }] },
           }),
         })
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          throw new Error(errData.message || 'Failed to apply public policy')
+        }
         toast.success('Access set to public.')
       }
       await fetchBucketInfo()
-    } catch {
-      toast.error('Failed to update public access.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update public access.')
     }
   }
 

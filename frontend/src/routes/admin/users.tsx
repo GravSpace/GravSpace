@@ -180,7 +180,13 @@ function UsersPage() {
       const res = await authFetch(`${API_BASE}/admin/users/${policyTarget}/policies`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(policy),
+        body: JSON.stringify({
+          ...policy,
+          policy: policy.policy || {
+            Version: policy.version || '2012-10-17',
+            Statement: policy.statement || [],
+          },
+        }),
       })
       if (res.ok) {
         toast.success('Inline policy attached.')

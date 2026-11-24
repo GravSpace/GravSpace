@@ -161,25 +161,46 @@ function BucketsPage() {
   async function togglePublic(bucket: string) {
     const currentlyPublic = isPublic(bucket)
     const resource = `arn:aws:s3:::${bucket}/*`
-    const pName = `PublicAccess-${bucket}-Root`
+    let policyToDelete = `PublicAccess-${bucket}-Root`
+
+    const anon = users['anonymous']
+    if (anon?.policies && Array.isArray(anon.policies)) {
+      const match = anon.policies.find((p: any) => {
+        let stmts = p.statement || p.Statement || []
+        if (typeof p.data === 'string' && !stmts.length) {
+          try { stmts = JSON.parse(p.data).Statement || [] } catch {}
+        }
+        return Array.isArray(stmts) && stmts.some((s: any) => {
+          const raw = s.resource || s.Resource || []
+          const list = Array.isArray(raw) ? raw : [raw]
+          return list.some((r: any) => r === '*' || r === resource)
+        })
+      })
+      if (match?.name) policyToDelete = match.name
+    }
+
     try {
       if (currentlyPublic) {
-        await authFetch(`${API_BASE}/admin/users/anonymous/policies/${pName}`, { method: 'DELETE' })
+        const res = await authFetch(`${API_BASE}/admin/users/anonymous/policies/${encodeURIComponent(policyToDelete)}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('Failed to remove public policy')
         toast.success(`Public access removed from "${bucket}".`)
       } else {
-        await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
+        const res = await authFetch(`${API_BASE}/admin/users/anonymous/policies`, {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            name: pName,
+            name: policyToDelete,
             version: '2012-10-17',
             statement: [{ effect: 'Allow', action: ['s3:GetObject', 's3:ListBucket'], resource: [resource] }],
+            policy: { Version: '2012-10-17', Statement: [{ Effect: 'Allow', Action: ['s3:GetObject', 's3:ListBucket'], Resource: [resource] }] },
           }),
         })
+        if (!res.ok) throw new Error('Failed to apply public policy')
         toast.success(`"${bucket}" is now publicly accessible.`)
       }
       await fetchUsers()
-    } catch {
-      toast.error('Policy update failed.')
+    } catch (err: any) {
+      toast.error(err?.message || 'Policy update failed.')
     }
   }
 

@@ -64,6 +64,41 @@ pub async fn list_users(State(storage): State<FileStorage>) -> Result<Response, 
         map.insert(u.username, val);
     }
 
+    if !map.contains_key("anonymous") {
+        let anon_policies = db::policies::list_user_policies(&conn, "anonymous")
+            .await
+            .unwrap_or_default();
+        let parsed_anon_policies: Vec<serde_json::Value> = anon_policies
+            .into_iter()
+            .map(|p| {
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&p.data).unwrap_or_else(|_| json!({}));
+                let statements = parsed
+                    .get("Statement")
+                    .or_else(|| parsed.get("statement"))
+                    .cloned()
+                    .unwrap_or(json!([]));
+                json!({
+                    "name": p.name,
+                    "data": p.data,
+                    "statement": statements.clone(),
+                    "Statement": statements,
+                })
+            })
+            .collect();
+        map.insert(
+            "anonymous".to_string(),
+            json!({
+                "username": "anonymous",
+                "created_at": 0,
+                "createdAt": 0,
+                "access_keys": [],
+                "accessKeys": [],
+                "policies": parsed_anon_policies,
+            }),
+        );
+    }
+
     Ok((StatusCode::OK, Json(serde_json::Value::Object(map))).into_response())
 }
 
@@ -148,7 +183,14 @@ pub async fn delete_key(
 #[derive(Deserialize)]
 pub struct AddPolicyPayload {
     pub name: String,
-    pub policy: serde_json::Value,
+    #[serde(default)]
+    pub policy: Option<serde_json::Value>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub statement: Option<serde_json::Value>,
+    #[serde(rename = "Statement", default)]
+    pub statement_upper: Option<serde_json::Value>,
 }
 
 pub async fn add_policy(
@@ -157,7 +199,20 @@ pub async fn add_policy(
     Json(payload): Json<AddPolicyPayload>,
 ) -> Result<Response, AppError> {
     let conn = storage.db.conn()?;
-    let policy_str = serde_json::to_string(&payload.policy).unwrap_or_default();
+    if username == "anonymous" {
+        let _ = db::users::upsert_user(&conn, "anonymous", "").await;
+    }
+    let policy_doc = if let Some(p) = payload.policy {
+        p
+    } else {
+        let stmts = payload.statement.or(payload.statement_upper).unwrap_or(json!([]));
+        let ver = payload.version.unwrap_or_else(|| "2012-10-17".to_string());
+        json!({
+            "Version": ver,
+            "Statement": stmts,
+        })
+    };
+    let policy_str = serde_json::to_string(&policy_doc).unwrap_or_default();
     db::policies::upsert_user_policy(&conn, &username, &payload.name, &policy_str).await?;
     Ok((StatusCode::CREATED, Json(json!({ "success": true }))).into_response())
 }
