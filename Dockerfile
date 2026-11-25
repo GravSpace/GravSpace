@@ -8,19 +8,20 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y curl xz-utils pkg-config libssl-dev && \
     curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tursodatabase/turso/releases/latest/download/turso_cli-installer.sh | sh
 
-# Copy Cargo manifests
+# Copy Cargo manifests and workspace members
 COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
 
 # Pre-build dependencies for Docker layer caching
 RUN mkdir -p src && echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
+    cargo build --release -p storage-server && \
     rm -rf src target/release/deps/storage_server* target/release/storage-server*
 
 # Copy real source code
 COPY src ./src
 
 # Build release binary
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release -p storage-server -p grav
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -37,12 +38,13 @@ WORKDIR /app
 
 # Copy binaries and entrypoint from builder
 COPY --from=builder /app/target/release/storage-server .
+COPY --from=builder /app/target/release/grav /usr/local/bin/grav
 COPY --from=builder /root/.turso/tursodb /usr/local/bin/tursodb
 COPY entrypoint.sh /app/entrypoint.sh
 
 # Create healthcheck script
 RUN echo '#!/bin/sh\ncurl -fsS http://localhost:8080/health/live >/dev/null 2>&1' > /usr/local/bin/healthcheck && \
-    chmod +x /usr/local/bin/healthcheck /usr/local/bin/tursodb /app/entrypoint.sh
+    chmod +x /usr/local/bin/healthcheck /usr/local/bin/tursodb /usr/local/bin/grav /app/entrypoint.sh
 
 # Create non-root user and home directory
 RUN groupadd -g 1000 appuser && \

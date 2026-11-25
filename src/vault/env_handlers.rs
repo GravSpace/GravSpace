@@ -47,7 +47,7 @@ pub async fn list_environments(
     Query(q): Query<ListEnvQuery>,
     State(storage): State<FileStorage>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let envs = db::vault_env::list_environments(&conn, q.project.as_deref()).await?;
     Ok((StatusCode::OK, Json(envs)).into_response())
 }
@@ -70,7 +70,7 @@ pub async fn create_environment(
         return Err(AppError::BadRequest("Invalid environment slug".to_string()));
     }
 
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     if let Ok(Some(_)) = db::vault_env::get_environment(&conn, &slug).await {
         return Err(AppError::BadRequest(format!(
             "Environment with slug '{slug}' already exists"
@@ -113,7 +113,7 @@ pub async fn update_environment(
         return Err(AppError::BadRequest("Environment name cannot be empty".to_string()));
     }
 
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let updated = db::vault_env::update_environment(
         &conn,
         &id,
@@ -135,7 +135,7 @@ pub async fn delete_environment(
     State(storage): State<FileStorage>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     
     // Prevent deletion of system default environments
     if id == "env_dev" || id == "env_staging" || id == "env_prod" || id == "development" || id == "production" {

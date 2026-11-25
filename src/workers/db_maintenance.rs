@@ -1,58 +1,56 @@
-use crate::db::Database;
+use crate::storage::FileStorage;
 use std::path::Path;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, info, warn};
 
-pub async fn start_db_maintenance_worker(db: Database, interval_secs: u64) {
-    info!("Database maintenance & WAL supervisor worker started (interval: {interval_secs}s)");
-    let mut interval = tokio::time::interval(Duration::from_secs(interval_secs));
-    let mut tick_count: u64 = 0;
-
-    let wal_paths = ["db/turso.db-wal", "db/metadata.db-wal"];
+pub async fn start_db_maintenance_worker(storage: FileStorage, interval_secs: u64) {
+    info!("Multi-Database maintenance & WAL supervisor worker started (interval: {interval_secs}s)");
+    let period = Duration::from_secs(interval_secs);
+    // Delay the first tick so startup workers (sync, analytics, trash) do not contend with WAL checkpoints.
+    let mut interval = tokio::time::interval_at(Instant::now() + period, period);
 
     loop {
         interval.tick().await;
-        tick_count = tick_count.wrapping_add(1);
 
-        // 1. Proactive WAL Checkpoint (TRUNCATE) to keep WAL files small (0-4MB)
-        match db.checkpoint().await {
-            Ok((busy, log, checkpointed)) => {
-                if log > 0 || checkpointed > 0 {
-                    info!(
-                        "WAL Supervisor: Checkpointed {}/{} pages into database (busy readers: {})",
-                        checkpointed, log, busy
-                    );
-                } else {
-                    debug!("WAL Supervisor: Database WAL is clean (0 pending pages)");
+        let targets = [
+            ("turso", &storage.db, "db/turso.db-wal"),
+            ("vault", &storage.vault_db, "db/vault.db-wal"),
+            ("federation", &storage.federation_db, "db/federation.db-wal"),
+        ];
+
+        for (name, db, wal_path_str) in targets {
+            // 1. Passive WAL checkpoint flushes committed frames without blocking writers.
+            match db.checkpoint_passive().await {
+                Ok((busy, log, checkpointed)) => {
+                    if log > 0 || checkpointed > 0 {
+                        info!(
+                            "WAL Supervisor [{name}]: Checkpointed {}/{} pages (busy readers: {})",
+                            checkpointed, log, busy
+                        );
+                    } else {
+                        debug!("WAL Supervisor [{name}]: Database WAL is clean (0 pending pages)");
+                    }
+
+                    if busy > 0 {
+                        warn!("WAL Supervisor [{name}]: Passive checkpoint encountered busy reader; retry on next tick");
+                    }
                 }
-
-                if busy > 0 {
-                    warn!("WAL Supervisor: Checkpoint encountered busy lock; retry on next tick");
+                Err(e) => {
+                    warn!("WAL Supervisor [{name}]: Passive checkpoint failed: {e}");
                 }
             }
-            Err(e) => {
-                warn!("WAL Supervisor: Checkpoint failed: {e}");
-            }
-        }
 
-        // 2. Threshold Check on WAL disk size (Urgent Truncation if WAL > 32 MB)
-        for wal_path_str in &wal_paths {
+            // 2. Threshold check on WAL disk size (urgent TRUNCATE only if WAL >= 32 MB).
             let path = Path::new(wal_path_str);
             if let Ok(meta) = std::fs::metadata(path) {
                 let size_mb = meta.len() / (1024 * 1024);
                 if size_mb >= 32 {
                     warn!(
-                        "WAL Supervisor: WAL file {wal_path_str} is {size_mb} MB (exceeds 32 MB threshold), triggering urgent truncate checkpoint"
+                        "WAL Supervisor [{name}]: WAL file {wal_path_str} is {size_mb} MB (exceeds 32 MB threshold), triggering truncate checkpoint"
                     );
                     let _ = db.checkpoint().await;
                 }
-            }
-        }
-
-        // 3. Periodic incremental vacuum every ~1 hour (12 ticks of 5 mins)
-        if tick_count % 12 == 0 {
-            if let Ok(conn) = db.conn() {
-                let _ = conn.execute("PRAGMA incremental_vacuum(500);", ()).await;
             }
         }
     }

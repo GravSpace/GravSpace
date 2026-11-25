@@ -2,13 +2,17 @@ use crate::audit::SharedAuditLogger;
 use crate::cache::{self, SharedCache};
 use crate::config::Config;
 use crate::db::Database;
+use crate::error::AppError;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use turso::Connection;
 
 #[derive(Clone)]
 pub struct FileStorage {
     pub root: PathBuf,
     pub db: Database,
+    pub vault_db: Database,
+    pub federation_db: Database,
     pub cache: SharedCache,
     pub config: Arc<Config>,
     pub audit: Option<SharedAuditLogger>,
@@ -19,6 +23,8 @@ impl FileStorage {
     pub fn new(
         root: impl AsRef<Path>,
         db: Database,
+        vault_db: Database,
+        federation_db: Database,
         cache: SharedCache,
         config: Arc<Config>,
         audit: Option<SharedAuditLogger>,
@@ -29,11 +35,25 @@ impl FileStorage {
         Self {
             root: root_buf,
             db,
+            vault_db,
+            federation_db,
             cache,
             config,
             audit,
             dispatcher: None,
         }
+    }
+
+    pub fn conn(&self) -> Result<Connection, AppError> {
+        self.db.conn()
+    }
+
+    pub fn vault_conn(&self) -> Result<Connection, AppError> {
+        self.vault_db.conn()
+    }
+
+    pub fn federation_conn(&self) -> Result<Connection, AppError> {
+        self.federation_db.conn()
     }
 
     pub fn with_dispatcher(mut self, dispatcher: Arc<crate::workers::notifications::Dispatcher>) -> Self {

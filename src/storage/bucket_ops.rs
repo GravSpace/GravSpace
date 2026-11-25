@@ -89,11 +89,12 @@ impl FileStorage {
 
     pub async fn get_bucket_stats(&self, name: &str) -> Result<(i64, i64), AppError> {
         let conn = self.db.conn()?;
+        let table = db::shards::object_table_for_bucket(name);
+        let sql = format!(
+            "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM {table} WHERE bucket = ?1 AND is_latest = TRUE AND deleted_at IS NULL"
+        );
         let mut rows = conn
-            .query(
-                "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM objects WHERE bucket = ?1 AND is_latest = TRUE AND deleted_at IS NULL",
-                params![name],
-            )
+            .query(&sql, params![name])
             .await
             .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
 

@@ -176,6 +176,23 @@ pub async fn hard_delete_object(
     version_id: &str,
 ) -> Result<(), AppError> {
     let table = crate::db::shards::object_table_for_bucket(bucket);
+    let tag_table = crate::db::shards::object_tags_table_for_bucket(bucket);
+
+    // Collect matching object IDs to clean up sharded tags before deleting object rows
+    let mut id_rows = if version_id.is_empty() {
+        let sql = format!("SELECT id FROM {table} WHERE bucket = ?1 AND key = ?2");
+        conn.query(&sql, params![bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?
+    } else {
+        let sql = format!("SELECT id FROM {table} WHERE bucket = ?1 AND key = ?2 AND version_id = ?3");
+        conn.query(&sql, params![bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?
+    };
+    while let Some(row) = id_rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+        if let Ok(obj_id) = row.get::<i64>(0) {
+            let del_tag = format!("DELETE FROM {tag_table} WHERE object_id = ?1");
+            conn.execute(&del_tag, params![obj_id]).await.map_err(|e| DbError::Query(e.to_string()))?;
+        }
+    }
+
     if version_id.is_empty() {
         let sql = format!("DELETE FROM {table} WHERE bucket = ?1 AND key = ?2");
         conn.execute(&sql, params![bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?;
@@ -208,36 +225,35 @@ pub async fn list_trash(
     bucket: &str,
     search: &str,
 ) -> Result<Vec<ObjectRow>, AppError> {
-    let table = if bucket.is_empty() {
-        "objects_all".to_string()
-    } else {
-        crate::db::shards::object_table_for_bucket(bucket)
-    };
-
-    let sql = if bucket.is_empty() {
-        if search.is_empty() {
-            format!("SELECT {OBJECT_COLS} FROM {table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")
-        } else {
-            format!("SELECT {OBJECT_COLS} FROM {table} WHERE deleted_at IS NOT NULL AND (key LIKE ?1 OR bucket LIKE ?1) ORDER BY deleted_at DESC")
+    if !bucket.is_empty() {
+        let table = crate::db::shards::object_table_for_bucket(bucket);
+        let sql = format!("SELECT {OBJECT_COLS} FROM {table} WHERE bucket = ?1 AND deleted_at IS NOT NULL AND key LIKE ?2 ORDER BY deleted_at DESC");
+        let mut rows = conn
+            .query(&sql, params![bucket, format!("%{search}%")]).await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+            results.push(row_to_object(&row)?);
         }
-    } else {
-        format!("SELECT {OBJECT_COLS} FROM {table} WHERE bucket = ?1 AND deleted_at IS NOT NULL AND key LIKE ?2 ORDER BY deleted_at DESC")
-    };
-
-    let mut rows = if bucket.is_empty() {
-        if search.is_empty() {
-            conn.query(&sql, params![]).await.map_err(|e| DbError::Query(e.to_string()))?
-        } else {
-            conn.query(&sql, params![format!("%{search}%")]).await.map_err(|e| DbError::Query(e.to_string()))?
-        }
-    } else {
-        conn.query(&sql, params![bucket, format!("%{search}%")]).await.map_err(|e| DbError::Query(e.to_string()))?
-    };
+        return Ok(results);
+    }
 
     let mut results = Vec::new();
-    while let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
-        results.push(row_to_object(&row)?);
+    for idx in 0..crate::db::shards::NUM_SHARDS {
+        let table = crate::db::shards::shard_table_name(idx);
+        let mut rows = if search.is_empty() {
+            let sql = format!("SELECT {OBJECT_COLS} FROM {table} WHERE deleted_at IS NOT NULL");
+            conn.query(&sql, params![]).await.map_err(|e| DbError::Query(e.to_string()))?
+        } else {
+            let sql = format!("SELECT {OBJECT_COLS} FROM {table} WHERE deleted_at IS NOT NULL AND (key LIKE ?1 OR bucket LIKE ?1)");
+            conn.query(&sql, params![format!("%{search}%")]).await.map_err(|e| DbError::Query(e.to_string()))?
+        };
+        while let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+            results.push(row_to_object(&row)?);
+        }
     }
+
+    results.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
     Ok(results)
 }
 
@@ -281,33 +297,36 @@ pub async fn set_object_legal_hold(
 
 pub async fn put_object_tagging(
     conn: &Connection,
+    bucket: &str,
     object_id: i64,
     tags: &HashMap<String, String>,
 ) -> Result<(), AppError> {
-    conn.execute("DELETE FROM object_tags WHERE object_id = ?1", params![object_id])
+    let tag_table = crate::db::shards::object_tags_table_for_bucket(bucket);
+    let del_sql = format!("DELETE FROM {tag_table} WHERE object_id = ?1");
+    conn.execute(&del_sql, params![object_id])
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
+    let ins_sql = format!(
+        "INSERT INTO {tag_table} (object_id, tag_key, tag_value) VALUES (?1, ?2, ?3)"
+    );
     for (k, v) in tags {
-        conn.execute(
-            "INSERT INTO object_tags (object_id, tag_key, tag_value) VALUES (?1, ?2, ?3)",
-            params![object_id, k.as_str(), v.as_str()],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        conn.execute(&ins_sql, params![object_id, k.as_str(), v.as_str()])
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
     }
     Ok(())
 }
 
 pub async fn get_object_tagging(
     conn: &Connection,
+    bucket: &str,
     object_id: i64,
 ) -> Result<HashMap<String, String>, AppError> {
+    let tag_table = crate::db::shards::object_tags_table_for_bucket(bucket);
+    let sql = format!("SELECT tag_key, tag_value FROM {tag_table} WHERE object_id = ?1");
     let mut rows = conn
-        .query(
-            "SELECT tag_key, tag_value FROM object_tags WHERE object_id = ?1",
-            params![object_id],
-        )
+        .query(&sql, params![object_id])
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -368,4 +387,66 @@ fn row_to_object(row: &libsql::Row) -> Result<ObjectRow, AppError> {
         original_size: row.get(17).ok(),
         is_deduplicated: is_deduplicated != 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{shards, Database};
+
+    #[tokio::test]
+    async fn object_tags_should_not_collide_across_shards_with_same_object_id() {
+        let tmp_dir =
+            std::env::temp_dir().join(format!("grav_tags_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let db = Database::open_turso(tmp_dir.join("turso.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let conn = db.conn().unwrap();
+
+        // Pick two bucket names guaranteed to land on distinct FNV-1a shards
+        let b1 = "alpha";
+        let b2 = (0..100)
+            .map(|i| format!("bkt-{i}"))
+            .find(|name| shards::get_shard_index(name) != shards::get_shard_index(b1))
+            .unwrap();
+
+        let t1 = shards::object_table_for_bucket(b1);
+        let t2 = shards::object_table_for_bucket(&b2);
+        conn.execute(
+            &format!("INSERT INTO {t1} (id, bucket, key, version_id, size) VALUES (1, ?1, 'k1', 'v1', 10)"),
+            params![b1],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            &format!("INSERT INTO {t2} (id, bucket, key, version_id, size) VALUES (1, ?1, 'k2', 'v1', 20)"),
+            params![b2.as_str()],
+        )
+        .await
+        .unwrap();
+
+        let mut tags1 = HashMap::new();
+        tags1.insert("team".to_string(), "alpha-team".to_string());
+        put_object_tagging(&conn, b1, 1, &tags1).await.unwrap();
+
+        let mut tags2 = HashMap::new();
+        tags2.insert("team".to_string(), "beta-team".to_string());
+        put_object_tagging(&conn, &b2, 1, &tags2).await.unwrap();
+
+        let got1 = get_object_tagging(&conn, b1, 1).await.unwrap();
+        let got2 = get_object_tagging(&conn, &b2, 1).await.unwrap();
+        assert_eq!(got1.get("team").map(String::as_str), Some("alpha-team"));
+        assert_eq!(got2.get("team").map(String::as_str), Some("beta-team"));
+
+        // Hard delete removes tags cleanly too
+        hard_delete_object(&conn, b1, "k1", "v1").await.unwrap();
+        assert!(get_object_tagging(&conn, b1, 1).await.unwrap().is_empty());
+        assert_eq!(
+            get_object_tagging(&conn, &b2, 1).await.unwrap().get("team").map(String::as_str),
+            Some("beta-team")
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
 }

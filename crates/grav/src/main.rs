@@ -109,6 +109,9 @@ async fn cmd_status() {
                             num_shards.saturating_sub(1)
                         );
                         println!("  DB Size:   {} (WAL: {})", db_size, wal_size);
+                        if let Some(_) = stats.get("databases") {
+                            println!("  Databases: 3 Physical Domains (turso.db, vault.db, federation.db)");
+                        }
                     }
                 }
             }

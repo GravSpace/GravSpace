@@ -31,7 +31,7 @@ pub async fn export_secrets(
     State(storage): State<FileStorage>,
     Query(q): Query<ExportSecretsQuery>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let project_filter = q.project.as_deref().filter(|p| *p != "all" && !p.is_empty());
     let env_filter = q.env.as_deref().filter(|e| *e != "all" && !e.is_empty());
     let format = q.format.unwrap_or_else(|| "dotenv".to_string()).to_lowercase();

@@ -55,17 +55,20 @@ async fn process_lifecycle_rules(storage: &FileStorage, bucket: &str, rules: Vec
             if let Some(days) = exp.days {
                 let prefix = rule.prefix.unwrap_or_default();
                 if let Ok(conn) = storage.db.conn() {
-                    let sql = r#"
+                    let table = crate::db::shards::object_table_for_bucket(bucket);
+                    let sql = format!(
+                        r#"
                         SELECT key, version_id
-                        FROM objects
+                        FROM {table}
                         WHERE bucket = ?1
                           AND is_latest = TRUE
                           AND deleted_at IS NULL
                           AND key LIKE ?2
                           AND datetime(modified_at, '+' || ?3 || ' days') < datetime('now')
-                    "#;
+                    "#
+                    );
                     let pattern = format!("{prefix}%");
-                    if let Ok(mut rows) = conn.query(sql, libsql::params![bucket, pattern, days]).await {
+                    if let Ok(mut rows) = conn.query(&sql, libsql::params![bucket, pattern, days]).await {
                         while let Ok(Some(row)) = rows.next().await {
                             if let (Ok(key), Ok(version_id)) = (row.get::<String>(0), row.get::<String>(1)) {
                                 info!("Lifecycle expiring object: {bucket}/{key}:{version_id}");

@@ -76,6 +76,28 @@ pub async fn list_buckets(conn: &Connection) -> Result<Vec<String>, AppError> {
 }
 
 pub async fn delete_bucket(conn: &Connection, name: &str) -> Result<(), AppError> {
+    let obj_table = crate::db::shards::object_table_for_bucket(name);
+    let tag_table = crate::db::shards::object_tags_table_for_bucket(name);
+
+    let id_sql = format!("SELECT id FROM {obj_table} WHERE bucket = ?1");
+    let mut id_rows = conn
+        .query(&id_sql, params![name])
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+    while let Some(row) = id_rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+        if let Ok(obj_id) = row.get::<i64>(0) {
+            let del_tag = format!("DELETE FROM {tag_table} WHERE object_id = ?1");
+            conn.execute(&del_tag, params![obj_id])
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
+        }
+    }
+
+    let del_obj = format!("DELETE FROM {obj_table} WHERE bucket = ?1");
+    conn.execute(&del_obj, params![name])
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
     conn.execute("DELETE FROM buckets WHERE name = ?1", params![name])
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
@@ -156,4 +178,54 @@ pub async fn set_bucket_soft_delete(
     .await
     .map_err(|e| DbError::Query(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{objects, shards, Database};
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn delete_bucket_should_clean_shard_objects_and_tags() {
+        let tmp_dir =
+            std::env::temp_dir().join(format!("grav_bkt_del_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp_dir).unwrap();
+        let db = Database::open_turso(tmp_dir.join("turso.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let conn = db.conn().unwrap();
+
+        create_bucket(&conn, "temp-bkt", "admin").await.unwrap();
+        let obj_table = shards::object_table_for_bucket("temp-bkt");
+        let tag_table = shards::object_tags_table_for_bucket("temp-bkt");
+
+        conn.execute(
+            &format!("INSERT INTO {obj_table} (id, bucket, key, version_id, size) VALUES (5, 'temp-bkt', 'doc.pdf', 'v1', 100)"),
+            (),
+        )
+        .await
+        .unwrap();
+        let mut tags = HashMap::new();
+        tags.insert("k".to_string(), "v".to_string());
+        objects::put_object_tagging(&conn, "temp-bkt", 5, &tags)
+            .await
+            .unwrap();
+
+        delete_bucket(&conn, "temp-bkt").await.unwrap();
+
+        let mut obj_rows = conn
+            .query(&format!("SELECT COUNT(*) FROM {obj_table} WHERE bucket = 'temp-bkt'"), ())
+            .await
+            .unwrap();
+        assert_eq!(obj_rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(), 0);
+
+        let mut tag_rows = conn
+            .query(&format!("SELECT COUNT(*) FROM {tag_table} WHERE object_id = 5"), ())
+            .await
+            .unwrap();
+        assert_eq!(tag_rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
 }

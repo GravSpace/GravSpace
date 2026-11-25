@@ -120,7 +120,7 @@ pub async fn get_object(
 "#,
         );
         if let Ok(Some(obj)) = row {
-            if let Ok(tags) = db::objects::get_object_tagging(&conn, obj.id).await {
+            if let Ok(tags) = db::objects::get_object_tagging(&conn, &bucket, obj.id).await {
                 for (k, v) in tags {
                     tags_xml.push_str(&format!(
                         "        <Tag><Key>{k}</Key><Value>{v}</Value></Tag>\n"
@@ -274,7 +274,7 @@ pub async fn put_object(
         }
         if let Ok(conn) = storage.db.conn() {
             if let Ok(Some(obj)) = db::objects::get_object(&conn, &bucket, &key, "").await {
-                let _ = db::objects::put_object_tagging(&conn, obj.id, &map).await;
+                let _ = db::objects::put_object_tagging(&conn, &bucket, obj.id, &map).await;
             }
         }
         return StatusCode::OK.into_response();

@@ -52,7 +52,7 @@ pub async fn start_federation_worker(storage: FileStorage) {
     info!("GravSpace Federation & Resilient Outbox worker started");
 
     // Clean up any historic directory marker entries in sync queue that caused read errors
-    if let Ok(conn) = storage.db.conn() {
+    if let Ok(conn) = storage.federation_conn() {
         let _ = conn
             .execute(
                 "UPDATE sync_queue SET status = 'completed', error_message = NULL WHERE (source_key LIKE '%/' OR target_key LIKE '%/') AND status != 'completed'",
@@ -83,7 +83,7 @@ pub async fn start_federation_worker(storage: FileStorage) {
             }
         }
 
-        let conn = match storage.db.conn() {
+        let conn = match storage.federation_conn() {
             Ok(c) => c,
             Err(_) => continue,
         };

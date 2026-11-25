@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+extern crate turso as libsql;
+
 mod admin;
 mod audit;
 mod auth;
@@ -50,7 +52,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(Config::load());
     let _ = metrics::init_metrics();
 
-    let db = Database::new(&config.database_url, &config.database_auth_token).await?;
+    let db = Database::open_turso(&config.database_url).await?;
+    let vault_db = Database::open_vault(&config.vault_database_url).await?;
+    let federation_db = Database::open_federation(&config.federation_database_url).await?;
+    db::migration::migrate_legacy_domains(&db, &vault_db, &federation_db).await?;
 
     // Seed initial admin user if not present (never overwrite existing admin password)
     if let Ok(conn) = db.conn() {
@@ -107,6 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let storage = FileStorage::new(
         "./data",
         db.clone(),
+        vault_db.clone(),
+        federation_db.clone(),
         cache,
         config.clone(),
         Some(audit_logger.clone()),

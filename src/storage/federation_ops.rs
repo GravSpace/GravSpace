@@ -17,7 +17,7 @@ impl FileStorage {
             return Ok(());
         }
 
-        let conn = match self.db.conn() {
+        let conn = match self.federation_conn() {
             Ok(c) => c,
             Err(_) => return Ok(()),
         };
@@ -78,14 +78,15 @@ impl FileStorage {
     }
 
     pub async fn reconcile_share(&self, share_id: i64) -> Result<i64, AppError> {
-        let conn = self.db.conn()?;
-        let shares = db::federation::list_shares(&conn).await?;
+        let fed_conn = self.federation_conn()?;
+        let meta_conn = self.conn()?;
+        let shares = db::federation::list_shares(&fed_conn).await?;
         let share = match shares.into_iter().find(|s| s.id == share_id) {
             Some(s) => s,
             None => return Err(AppError::Storage(crate::error::StorageError::BucketNotFound(format!("Share #{share_id} not found")))),
         };
 
-        let local_objects = db::objects::list_objects(&conn, &share.source_bucket, &share.source_prefix).await?;
+        let local_objects = db::objects::list_objects(&meta_conn, &share.source_bucket, &share.source_prefix).await?;
         let mut count = 0;
 
         for obj in local_objects {
@@ -113,7 +114,7 @@ impl FileStorage {
             };
 
             let _ = db::federation::enqueue_sync_item(
-                &conn,
+                &fed_conn,
                 share.id,
                 &share.source_bucket,
                 clean_key,
@@ -128,7 +129,7 @@ impl FileStorage {
             count += 1;
         }
 
-        let _ = db::federation::update_share_status(&conn, share_id, "syncing").await;
+        let _ = db::federation::update_share_status(&fed_conn, share_id, "syncing").await;
         Ok(count)
     }
 }
