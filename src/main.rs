@@ -12,6 +12,7 @@ mod health;
 mod metrics;
 mod s3;
 mod storage;
+mod vault;
 mod workers;
 
 use crate::audit::AuditLogger;

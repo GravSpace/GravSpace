@@ -23,7 +23,7 @@ export const Route = createFileRoute('/admin/explorer')({
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
-export function S3ExplorerPage() {
+function S3ExplorerPage() {
   const { authFetch } = useAuth()
   const [users, setUsers] = useState<Record<string, IAMUser>>({})
   const [loadingUsers, setLoadingUsers] = useState(false)

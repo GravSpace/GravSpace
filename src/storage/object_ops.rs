@@ -235,10 +235,12 @@ impl FileStorage {
             }
         }
 
-        // Enqueue Cross-Server Federation Sync
-        let _ = self
-            .notify_federation_change(bucket, key, "PUT", &version_id, None, physical_size)
-            .await;
+        // Enqueue Cross-Server Federation Sync (skip directory markers)
+        if !key.ends_with('/') {
+            let _ = self
+                .notify_federation_change(bucket, key, "PUT", &version_id, None, physical_size)
+                .await;
+        }
 
         Ok(version_id)
     }
@@ -360,10 +362,12 @@ impl FileStorage {
             }
         }
 
-        // Enqueue Cross-Server Federation Deletion
-        let _ = self
-            .notify_federation_change(bucket, key, "DELETE", vid, None, 0)
-            .await;
+        // Enqueue Cross-Server Federation Deletion (skip directory markers)
+        if !key.ends_with('/') {
+            let _ = self
+                .notify_federation_change(bucket, key, "DELETE", vid, None, 0)
+                .await;
+        }
 
         Ok(())
     }

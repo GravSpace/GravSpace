@@ -15,6 +15,12 @@ impl FileStorage {
         range_header: Option<&str>,
     ) -> Result<(Vec<u8>, ObjectMeta, Option<String>), AppError> {
         let meta = self.stat_object(bucket, key, version_id).await?;
+
+        // S3 standard: directory markers (virtual folders) return empty payload (0 bytes)
+        if key.ends_with('/') || meta.content_type == "application/x-directory" {
+            return Ok((Vec::new(), meta, None));
+        }
+
         let v_id_raw = if version_id.unwrap_or("").is_empty() {
             &meta.version_id
         } else {

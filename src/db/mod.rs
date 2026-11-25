@@ -10,6 +10,9 @@ pub mod schema;
 pub mod settings;
 pub mod turso_bridge;
 pub mod users;
+pub mod vault;
+pub mod vault_env;
+pub mod vault_project;
 pub mod webhooks;
 
 use crate::error::{AppError, DbError};
@@ -132,11 +135,28 @@ impl Database {
             .map_err(|e| DbError::Query(format!("Connection error: {e}")).into())
     }
 
+    /// Checkpoints transactions from the WAL file into the main database and truncates the WAL file
+    pub async fn checkpoint(&self) -> Result<(i64, i64, i64), AppError> {
+        let conn = self.conn()?;
+        if let Ok(mut rows) = conn.query("PRAGMA wal_checkpoint(TRUNCATE);", ()).await {
+            if let Ok(Some(row)) = rows.next().await {
+                let busy = row.get::<i64>(0).unwrap_or(0);
+                let log = row.get::<i64>(1).unwrap_or(0);
+                let checkpointed = row.get::<i64>(2).unwrap_or(0);
+                return Ok((busy, log, checkpointed));
+            }
+        }
+        Ok((0, 0, 0))
+    }
+
     async fn init_schema(&self) -> Result<(), AppError> {
         let conn = self.conn()?;
         let _ = conn.execute("PRAGMA journal_mode=WAL;", ()).await;
         let _ = conn.execute("PRAGMA synchronous=NORMAL;", ()).await;
         let _ = conn.execute("PRAGMA busy_timeout=5000;", ()).await;
+        let _ = conn.execute("PRAGMA wal_autocheckpoint=1000;", ()).await;
+        let _ = conn.execute("PRAGMA journal_size_limit=67108864;", ()).await; // 64 MB maximum WAL file size
+        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);", ()).await;
 
         // Execute schema statements
         for statement in schema::SCHEMA.split(';') {
@@ -150,6 +170,10 @@ impl Database {
 
         // Idempotent migrations for existing databases
         ensure_column_exists(&conn, "presigned_urls", "method", "TEXT DEFAULT 'GET'").await?;
+        ensure_column_exists(&conn, "vault_secrets", "project_id", "TEXT NOT NULL DEFAULT 'default'").await?;
+        ensure_column_exists(&conn, "vault_access_requests", "project_id", "TEXT NOT NULL DEFAULT 'default'").await?;
+        let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_secrets_project ON vault_secrets(project_id);", ()).await;
+        let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_secrets_proj_env ON vault_secrets(project_id, environment);", ()).await;
 
         Ok(())
     }

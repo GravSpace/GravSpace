@@ -50,12 +50,26 @@ fn sign_s3_request(
 
 pub async fn start_federation_worker(storage: FileStorage) {
     info!("GravSpace Federation & Resilient Outbox worker started");
+
+    // Clean up any historic directory marker entries in sync queue that caused read errors
+    if let Ok(conn) = storage.db.conn() {
+        let _ = conn
+            .execute(
+                "UPDATE sync_queue SET status = 'completed', error_message = NULL WHERE (source_key LIKE '%/' OR target_key LIKE '%/') AND status != 'completed'",
+                (),
+            )
+            .await;
+    }
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
     let mut interval = tokio::time::interval(Duration::from_secs(3));
+    let mut last_heartbeat_tick = std::time::Instant::now() - Duration::from_secs(60);
+    let mut peer_state_cache: std::collections::HashMap<i64, (String, std::time::Instant)> =
+        std::collections::HashMap::new();
 
     loop {
         interval.tick().await;
@@ -65,38 +79,56 @@ pub async fn start_federation_worker(storage: FileStorage) {
             Err(_) => continue,
         };
 
-        // 1. Heartbeat Phase: check health of remote peers
-        if let Ok(peers) = db::federation::list_remote_servers(&conn).await {
-            for peer in peers {
-                let health_url = format!("{}/health", peer.endpoint.trim_end_matches('/'));
-                let start = std::time::Instant::now();
-                match client.get(&health_url).send().await {
-                    Ok(resp) if resp.status().is_success() || resp.status() == 404 => {
-                        let latency = start.elapsed().as_millis() as i64;
-                        let _ = db::federation::update_server_status(&conn, peer.id, "healthy", latency).await;
-                        crate::admin::federation_handlers::broadcast_federation_event("peer_heartbeat", serde_json::json!({
-                            "id": peer.id,
-                            "status": "healthy",
-                            "latency_ms": latency
-                        }));
-                    }
-                    Ok(resp) => {
-                        let latency = start.elapsed().as_millis() as i64;
-                        let status_str = if resp.status().is_server_error() { "degraded" } else { "healthy" };
-                        let _ = db::federation::update_server_status(&conn, peer.id, status_str, latency).await;
-                        crate::admin::federation_handlers::broadcast_federation_event("peer_heartbeat", serde_json::json!({
+        // 1. Heartbeat Phase: check health of remote peers every 10 seconds
+        if last_heartbeat_tick.elapsed() >= Duration::from_secs(10) {
+            last_heartbeat_tick = std::time::Instant::now();
+            if let Ok(peers) = db::federation::list_remote_servers(&conn).await {
+                for peer in peers {
+                    let health_url = format!("{}/health", peer.endpoint.trim_end_matches('/'));
+                    let start = std::time::Instant::now();
+                    let (status_str, latency) = match client.get(&health_url).send().await {
+                        Ok(resp) if resp.status().is_success() || resp.status() == 404 => {
+                            ("healthy".to_string(), start.elapsed().as_millis() as i64)
+                        }
+                        Ok(resp) => {
+                            let s = if resp.status().is_server_error() {
+                                "degraded"
+                            } else {
+                                "healthy"
+                            };
+                            (s.to_string(), start.elapsed().as_millis() as i64)
+                        }
+                        Err(_) => ("unreachable".to_string(), 0),
+                    };
+
+                    // Broadcast live SSE event immediately on every probe
+                    crate::admin::federation_handlers::broadcast_federation_event(
+                        "peer_heartbeat",
+                        serde_json::json!({
                             "id": peer.id,
                             "status": status_str,
                             "latency_ms": latency
-                        }));
-                    }
-                    Err(_) => {
-                        let _ = db::federation::update_server_status(&conn, peer.id, "unreachable", 0).await;
-                        crate::admin::federation_handlers::broadcast_federation_event("peer_heartbeat", serde_json::json!({
-                            "id": peer.id,
-                            "status": "unreachable",
-                            "latency_ms": 0
-                        }));
+                        }),
+                    );
+
+                    // Throttling: Only write UPDATE to SQLite disk if status changed or 60s elapsed
+                    let should_persist = match peer_state_cache.get(&peer.id) {
+                        Some((last_status, last_persisted)) => {
+                            last_status != &status_str
+                                || last_persisted.elapsed() >= Duration::from_secs(60)
+                        }
+                        None => true,
+                    };
+
+                    if should_persist {
+                        let _ = db::federation::update_server_status(
+                            &conn,
+                            peer.id,
+                            &status_str,
+                            latency,
+                        )
+                        .await;
+                        peer_state_cache.insert(peer.id, (status_str, std::time::Instant::now()));
                     }
                 }
             }
@@ -137,6 +169,20 @@ pub async fn start_federation_worker(storage: FileStorage) {
                     continue;
                 }
             };
+
+            // Directory markers (keys ending with '/') do not hold physical file data.
+            // Target nodes create parent directories implicitly when files are written.
+            if item.source_key.ends_with('/') || item.target_key.ends_with('/') {
+                let _ = db::federation::mark_item_completed(&conn, item.id).await;
+                let _ = db::federation::update_share_status(&conn, share.id, "in_sync").await;
+                crate::admin::federation_handlers::broadcast_federation_event("queue_updated", serde_json::json!({
+                    "id": item.id,
+                    "share_id": share.id,
+                    "status": "completed"
+                }));
+                debug!("Skipped directory marker sync for {}", item.source_key);
+                continue;
+            }
 
             let is_s3_peer = peer.s3_endpoint.is_some()
                 || (!peer.access_key.is_empty() && !peer.secret_key.starts_with("eyJ"));
@@ -225,6 +271,10 @@ pub async fn start_federation_worker(storage: FileStorage) {
                         req.send().await
                     }
                     Err(e) => {
+                        if item.source_key.ends_with('/') {
+                            let _ = db::federation::mark_item_completed(&conn, item.id).await;
+                            continue;
+                        }
                         let _ = db::federation::mark_item_failed(
                             &conn,
                             item.id,

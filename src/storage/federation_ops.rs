@@ -12,6 +12,11 @@ impl FileStorage {
         content_hash: Option<&str>,
         size_bytes: i64,
     ) -> Result<(), AppError> {
+        // Do not enqueue directory markers (virtual folders) into replication queue
+        if key.ends_with('/') {
+            return Ok(());
+        }
+
         let conn = match self.db.conn() {
             Ok(c) => c,
             Err(_) => return Ok(()),
@@ -84,6 +89,11 @@ impl FileStorage {
         let mut count = 0;
 
         for obj in local_objects {
+            // Skip folder markers as directories are implicitly created upon syncing objects
+            if obj.key.ends_with('/') || obj.content_type.as_deref() == Some("application/x-directory") {
+                continue;
+            }
+
             let clean_key = obj.key.trim_start_matches('/');
             let pfx = share.source_prefix.trim_start_matches('/');
 

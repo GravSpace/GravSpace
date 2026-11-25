@@ -36,7 +36,7 @@ export const Route = createFileRoute('/admin/federation')({
   head: () => ({ meta: [{ title: 'Federation & Sync | GravSpace' }] }),
 })
 
-export default function FederationPage() {
+function FederationPage() {
   const { authFetch } = useAuth()
   const [activeTab, setActiveTab] = useState<'shares' | 'peers' | 'queue'>('shares')
   const [searchQuery, setSearchQuery] = useState('')

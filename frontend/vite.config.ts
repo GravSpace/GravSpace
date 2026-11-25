@@ -51,11 +51,36 @@ const config = defineConfig({
       '/api': {
         target: process.env.SERVER_URL || 'http://localhost:8080',
         changeOrigin: true,
+        ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, res) => {
+            if (res && 'writeHead' in res && typeof res.writeHead === 'function') {
+              if (!res.headersSent) {
+                res.writeHead(502, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'Backend gateway unavailable', details: err.message }))
+              }
+            } else if (res && 'destroy' in res && typeof res.destroy === 'function') {
+              res.destroy()
+            }
+          })
+        },
       },
       '/s3': {
         target: process.env.S3_URL || 'http://localhost:9001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/s3/, ''),
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, res) => {
+            if (res && 'writeHead' in res && typeof res.writeHead === 'function') {
+              if (!res.headersSent) {
+                res.writeHead(502, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'S3 gateway unavailable', details: err.message }))
+              }
+            } else if (res && 'destroy' in res && typeof res.destroy === 'function') {
+              res.destroy()
+            }
+          })
+        },
       },
     },
   },
