@@ -8,6 +8,7 @@ pub mod presign;
 pub mod replications;
 pub mod schema;
 pub mod settings;
+pub mod shards;
 pub mod turso_bridge;
 pub mod users;
 pub mod vault;
@@ -174,6 +175,9 @@ impl Database {
         ensure_column_exists(&conn, "vault_access_requests", "project_id", "TEXT NOT NULL DEFAULT 'default'").await?;
         let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_secrets_project ON vault_secrets(project_id);", ()).await;
         let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_secrets_proj_env ON vault_secrets(project_id, environment);", ()).await;
+
+        // Initialize 16 Table-Partition Shards & Unified View for Terabyte Scale
+        shards::init_partitioned_tables(&conn).await?;
 
         Ok(())
     }

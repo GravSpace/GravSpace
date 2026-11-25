@@ -1,7 +1,16 @@
 [package]
 name = "storage-server"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
+default-run = "storage-server"
+
+[[bin]]
+name = "storage-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "grav"
+path = "src/bin/grav.rs"
 
 [dependencies]
 tokio = { version = "1.43", features = ["full"] }

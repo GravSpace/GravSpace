@@ -3,6 +3,10 @@ use libsql::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+const OBJECT_COLS: &str = "id, bucket, key, version_id, size, etag, content_type, modified_at, \
+is_latest, encryption_type, retain_until_date, legal_hold, lock_mode, deleted_at, \
+legal_hold_reason, content_hash, compression_type, original_size, is_deduplicated";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ObjectRow {
     pub id: i64,
@@ -27,49 +31,36 @@ pub struct ObjectRow {
 }
 
 pub async fn upsert_object(conn: &Connection, obj: &ObjectRow) -> Result<(), AppError> {
+    let table = crate::db::shards::object_table_for_bucket(&obj.bucket);
     if obj.is_latest {
-        conn.execute(
-            "UPDATE objects SET is_latest = FALSE WHERE bucket = ?1 AND key = ?2",
-            params![obj.bucket.as_str(), obj.key.as_str()],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let update_sql = format!("UPDATE {table} SET is_latest = FALSE WHERE bucket = ?1 AND key = ?2");
+        conn.execute(&update_sql, params![obj.bucket.as_str(), obj.key.as_str()])
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
     }
 
-    conn.execute(
-        r#"INSERT INTO objects (
+    let insert_sql = format!(
+        r#"INSERT INTO {table} (
             bucket, key, version_id, size, etag, content_type, is_latest,
             encryption_type, retain_until_date, legal_hold, lock_mode,
             content_hash, compression_type, original_size, is_deduplicated
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
         ON CONFLICT(bucket, key, version_id) DO UPDATE SET
-            size = excluded.size,
-            etag = excluded.etag,
-            content_type = excluded.content_type,
-            modified_at = CURRENT_TIMESTAMP,
-            is_latest = excluded.is_latest,
-            encryption_type = excluded.encryption_type,
-            retain_until_date = excluded.retain_until_date,
-            legal_hold = excluded.legal_hold,
-            lock_mode = excluded.lock_mode,
-            content_hash = excluded.content_hash,
-            deleted_at = NULL"#,
+            size = excluded.size, etag = excluded.etag, content_type = excluded.content_type,
+            modified_at = CURRENT_TIMESTAMP, is_latest = excluded.is_latest,
+            encryption_type = excluded.encryption_type, retain_until_date = excluded.retain_until_date,
+            legal_hold = excluded.legal_hold, lock_mode = excluded.lock_mode,
+            content_hash = excluded.content_hash, deleted_at = NULL"#
+    );
+
+    conn.execute(
+        &insert_sql,
         params![
-            obj.bucket.as_str(),
-            obj.key.as_str(),
-            obj.version_id.as_str(),
-            obj.size,
-            obj.etag.clone(),
-            obj.content_type.clone(),
-            obj.is_latest as i64,
-            obj.encryption_type.clone(),
-            obj.retain_until_date.clone(),
-            obj.legal_hold as i64,
-            obj.lock_mode.clone(),
-            obj.content_hash.clone(),
-            obj.compression_type.clone(),
-            obj.original_size,
-            obj.is_deduplicated as i64
+            obj.bucket.as_str(), obj.key.as_str(), obj.version_id.as_str(), obj.size,
+            obj.etag.clone(), obj.content_type.clone(), obj.is_latest as i64,
+            obj.encryption_type.clone(), obj.retain_until_date.clone(), obj.legal_hold as i64,
+            obj.lock_mode.clone(), obj.content_hash.clone(), obj.compression_type.clone(),
+            obj.original_size, obj.is_deduplicated as i64
         ],
     )
     .await
@@ -84,28 +75,13 @@ pub async fn get_object(
     key: &str,
     version_id: &str,
 ) -> Result<Option<ObjectRow>, AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     let mut rows = if version_id.is_empty() {
-        conn.query(
-            "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                    is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                    deleted_at, legal_hold_reason, content_hash, compression_type,
-                    original_size, is_deduplicated
-             FROM objects WHERE bucket = ?1 AND key = ?2 AND is_latest = TRUE AND deleted_at IS NULL",
-            params![bucket, key],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?
+        let sql = format!("SELECT {OBJECT_COLS} FROM {table} WHERE bucket = ?1 AND key = ?2 AND is_latest = TRUE AND deleted_at IS NULL");
+        conn.query(&sql, params![bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?
     } else {
-        conn.query(
-            "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                    is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                    deleted_at, legal_hold_reason, content_hash, compression_type,
-                    original_size, is_deduplicated
-             FROM objects WHERE bucket = ?1 AND key = ?2 AND version_id = ?3 AND deleted_at IS NULL",
-            params![bucket, key, version_id],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?
+        let sql = format!("SELECT {OBJECT_COLS} FROM {table} WHERE bucket = ?1 AND key = ?2 AND version_id = ?3 AND deleted_at IS NULL");
+        conn.query(&sql, params![bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?
     };
 
     if let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
@@ -120,17 +96,30 @@ pub async fn list_objects(
     bucket: &str,
     prefix: &str,
 ) -> Result<Vec<ObjectRow>, AppError> {
+    list_objects_paged(conn, bucket, prefix, None, None).await
+}
+
+/// Keyset / Seek cursor-based pagination for listing millions of objects with O(1) seek complexity
+pub async fn list_objects_paged(
+    conn: &Connection,
+    bucket: &str,
+    prefix: &str,
+    start_after: Option<&str>,
+    limit: Option<usize>,
+) -> Result<Vec<ObjectRow>, AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
+    let start_key = start_after.unwrap_or("");
+    let max_rows = limit.unwrap_or(10_000) as i64;
+
+    let sql = format!(
+        "SELECT {OBJECT_COLS} FROM {table} \
+         WHERE bucket = ?1 AND is_latest = TRUE AND deleted_at IS NULL AND key LIKE ?2 \
+           AND (?3 = '' OR key > ?3) \
+         ORDER BY key ASC LIMIT ?4"
+    );
+
     let mut rows = conn
-        .query(
-            "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                    is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                    deleted_at, legal_hold_reason, content_hash, compression_type,
-                    original_size, is_deduplicated
-             FROM objects
-             WHERE bucket = ?1 AND is_latest = TRUE AND deleted_at IS NULL AND key LIKE ?2
-             ORDER BY key ASC",
-            params![bucket, format!("{prefix}%")],
-        )
+        .query(&sql, params![bucket, format!("{prefix}%"), start_key, max_rows])
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -146,17 +135,13 @@ pub async fn list_object_versions(
     bucket: &str,
     prefix: &str,
 ) -> Result<Vec<ObjectRow>, AppError> {
-    let mut rows = conn
-        .query(
-            "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                    is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                    deleted_at, legal_hold_reason, content_hash, compression_type,
-                    original_size, is_deduplicated
-             FROM objects
-             WHERE bucket = ?1 AND deleted_at IS NULL AND key LIKE ?2
-             ORDER BY key ASC, modified_at DESC",
-            params![bucket, format!("{prefix}%")],
-        )
+    let table = crate::db::shards::object_table_for_bucket(bucket);
+    let sql = format!(
+        "SELECT {OBJECT_COLS} FROM {table} \
+         WHERE bucket = ?1 AND deleted_at IS NULL AND key LIKE ?2 \
+         ORDER BY key ASC, modified_at DESC"
+    );
+    let mut rows = conn.query(&sql, params![bucket, format!("{prefix}%")])
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -173,20 +158,13 @@ pub async fn soft_delete_object(
     key: &str,
     version_id: &str,
 ) -> Result<(), AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     if version_id.is_empty() {
-        conn.execute(
-            "UPDATE objects SET deleted_at = CURRENT_TIMESTAMP WHERE bucket = ?1 AND key = ?2",
-            params![bucket, key],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET deleted_at = CURRENT_TIMESTAMP WHERE bucket = ?1 AND key = ?2");
+        conn.execute(&sql, params![bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?;
     } else {
-        conn.execute(
-            "UPDATE objects SET deleted_at = CURRENT_TIMESTAMP WHERE bucket = ?1 AND key = ?2 AND version_id = ?3",
-            params![bucket, key, version_id],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET deleted_at = CURRENT_TIMESTAMP WHERE bucket = ?1 AND key = ?2 AND version_id = ?3");
+        conn.execute(&sql, params![bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?;
     }
     Ok(())
 }
@@ -197,20 +175,13 @@ pub async fn hard_delete_object(
     key: &str,
     version_id: &str,
 ) -> Result<(), AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     if version_id.is_empty() {
-        conn.execute(
-            "DELETE FROM objects WHERE bucket = ?1 AND key = ?2",
-            params![bucket, key],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("DELETE FROM {table} WHERE bucket = ?1 AND key = ?2");
+        conn.execute(&sql, params![bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?;
     } else {
-        conn.execute(
-            "DELETE FROM objects WHERE bucket = ?1 AND key = ?2 AND version_id = ?3",
-            params![bucket, key, version_id],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("DELETE FROM {table} WHERE bucket = ?1 AND key = ?2 AND version_id = ?3");
+        conn.execute(&sql, params![bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?;
     }
     Ok(())
 }
@@ -221,20 +192,13 @@ pub async fn restore_object(
     key: &str,
     version_id: &str,
 ) -> Result<(), AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     if version_id.is_empty() {
-        conn.execute(
-            "UPDATE objects SET deleted_at = NULL WHERE bucket = ?1 AND key = ?2",
-            params![bucket, key],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET deleted_at = NULL WHERE bucket = ?1 AND key = ?2");
+        conn.execute(&sql, params![bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?;
     } else {
-        conn.execute(
-            "UPDATE objects SET deleted_at = NULL WHERE bucket = ?1 AND key = ?2 AND version_id = ?3",
-            params![bucket, key, version_id],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET deleted_at = NULL WHERE bucket = ?1 AND key = ?2 AND version_id = ?3");
+        conn.execute(&sql, params![bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?;
     }
     Ok(())
 }
@@ -244,47 +208,30 @@ pub async fn list_trash(
     bucket: &str,
     search: &str,
 ) -> Result<Vec<ObjectRow>, AppError> {
-    let mut rows = if bucket.is_empty() {
+    let table = if bucket.is_empty() {
+        "objects_all".to_string()
+    } else {
+        crate::db::shards::object_table_for_bucket(bucket)
+    };
+
+    let sql = if bucket.is_empty() {
         if search.is_empty() {
-            conn.query(
-                "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                        is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                        deleted_at, legal_hold_reason, content_hash, compression_type,
-                        original_size, is_deduplicated
-                 FROM objects
-                 WHERE deleted_at IS NOT NULL
-                 ORDER BY deleted_at DESC",
-                params![],
-            )
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?
+            format!("SELECT {OBJECT_COLS} FROM {table} WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")
         } else {
-            conn.query(
-                "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                        is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                        deleted_at, legal_hold_reason, content_hash, compression_type,
-                        original_size, is_deduplicated
-                 FROM objects
-                 WHERE deleted_at IS NOT NULL AND (key LIKE ?1 OR bucket LIKE ?1)
-                 ORDER BY deleted_at DESC",
-                params![format!("%{search}%")],
-            )
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?
+            format!("SELECT {OBJECT_COLS} FROM {table} WHERE deleted_at IS NOT NULL AND (key LIKE ?1 OR bucket LIKE ?1) ORDER BY deleted_at DESC")
         }
     } else {
-        conn.query(
-            "SELECT id, bucket, key, version_id, size, etag, content_type, modified_at,
-                    is_latest, encryption_type, retain_until_date, legal_hold, lock_mode,
-                    deleted_at, legal_hold_reason, content_hash, compression_type,
-                    original_size, is_deduplicated
-             FROM objects
-             WHERE bucket = ?1 AND deleted_at IS NOT NULL AND key LIKE ?2
-             ORDER BY deleted_at DESC",
-            params![bucket, format!("%{search}%")],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?
+        format!("SELECT {OBJECT_COLS} FROM {table} WHERE bucket = ?1 AND deleted_at IS NOT NULL AND key LIKE ?2 ORDER BY deleted_at DESC")
+    };
+
+    let mut rows = if bucket.is_empty() {
+        if search.is_empty() {
+            conn.query(&sql, params![]).await.map_err(|e| DbError::Query(e.to_string()))?
+        } else {
+            conn.query(&sql, params![format!("%{search}%")]).await.map_err(|e| DbError::Query(e.to_string()))?
+        }
+    } else {
+        conn.query(&sql, params![bucket, format!("%{search}%")]).await.map_err(|e| DbError::Query(e.to_string()))?
     };
 
     let mut results = Vec::new();
@@ -302,20 +249,13 @@ pub async fn set_object_retention(
     retain_until: Option<&str>,
     mode: Option<&str>,
 ) -> Result<(), AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     if version_id.is_empty() {
-        conn.execute(
-            "UPDATE objects SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND (is_latest = 1 OR version_id = '' OR version_id IS NULL)",
-            params![retain_until, mode, bucket, key],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND (is_latest = 1 OR version_id = '' OR version_id IS NULL)");
+        conn.execute(&sql, params![retain_until, mode, bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?;
     } else {
-        conn.execute(
-            "UPDATE objects SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5",
-            params![retain_until, mode, bucket, key, version_id],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET retain_until_date = ?1, lock_mode = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5");
+        conn.execute(&sql, params![retain_until, mode, bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?;
     }
     Ok(())
 }
@@ -328,20 +268,13 @@ pub async fn set_object_legal_hold(
     hold: bool,
     reason: &str,
 ) -> Result<(), AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     if version_id.is_empty() {
-        conn.execute(
-            "UPDATE objects SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND (is_latest = 1 OR version_id = '' OR version_id IS NULL)",
-            params![hold as i64, reason, bucket, key],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND (is_latest = 1 OR version_id = '' OR version_id IS NULL)");
+        conn.execute(&sql, params![hold as i64, reason, bucket, key]).await.map_err(|e| DbError::Query(e.to_string()))?;
     } else {
-        conn.execute(
-            "UPDATE objects SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5",
-            params![hold as i64, reason, bucket, key, version_id],
-        )
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+        let sql = format!("UPDATE {table} SET legal_hold = ?1, legal_hold_reason = ?2 WHERE bucket = ?3 AND key = ?4 AND version_id = ?5");
+        conn.execute(&sql, params![hold as i64, reason, bucket, key, version_id]).await.map_err(|e| DbError::Query(e.to_string()))?;
     }
     Ok(())
 }
@@ -392,12 +325,11 @@ pub async fn get_keys_by_prefix(
     bucket: &str,
     prefix: &str,
 ) -> Result<Vec<String>, AppError> {
+    let table = crate::db::shards::object_table_for_bucket(bucket);
     let pattern = format!("{}%", prefix);
+    let sql = format!("SELECT DISTINCT key FROM {table} WHERE bucket = ?1 AND key LIKE ?2 AND deleted_at IS NULL");
     let mut rows = conn
-        .query(
-            "SELECT DISTINCT key FROM objects WHERE bucket = ?1 AND key LIKE ?2 AND deleted_at IS NULL",
-            params![bucket, pattern.as_str()],
-        )
+        .query(&sql, params![bucket, pattern.as_str()])
         .await
         .map_err(|e| DbError::Query(e.to_string()))?;
 

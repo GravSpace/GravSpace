@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Clock,
   History,
+  Code,
 } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
@@ -50,6 +51,7 @@ interface Props {
   activeTransfersCount: number
   showVersions?: boolean
   onToggleShowVersions?: () => void
+  onOpenConnectSDK?: () => void
 }
 
 function formatSize(bytes: number): string {
@@ -79,6 +81,7 @@ export function BucketHeader({
   activeTransfersCount,
   showVersions = false,
   onToggleShowVersions,
+  onOpenConnectSDK,
 }: Props) {
   const usagePercentage = bucketInfo?.QuotaBytes
     ? Math.min(100, Math.round(((bucketInfo.CurrentSize || 0) / bucketInfo.QuotaBytes) * 100))
@@ -180,6 +183,19 @@ export function BucketHeader({
           >
             <History className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Versions</span>
+          </Button>
+        )}
+
+        {onOpenConnectSDK && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onOpenConnectSDK}
+            className="h-9 border-slate-200 dark:border-slate-800 text-xs gap-1.5"
+            title="Connect SDK code snippets (Node.js, Python, Go, CLI)"
+          >
+            <Code className="w-3.5 h-3.5 text-primary" />
+            <span className="hidden sm:inline">Connect SDK</span>
           </Button>
         )}
 

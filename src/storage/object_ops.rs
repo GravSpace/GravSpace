@@ -61,7 +61,7 @@ impl FileStorage {
         let target_path = if !is_versioning_enabled && raw_target.is_dir() {
             raw_target.join("latest")
         } else {
-            raw_target
+            raw_target.clone()
         };
 
         let is_encrypted = encryption == Some("AES256");
@@ -175,6 +175,97 @@ impl FileStorage {
 
         db::objects::upsert_object(&conn, &row).await?;
         self.invalidate_object_list_cache(bucket, key).await;
+
+        Ok(version_id)
+    }
+
+    pub async fn put_object_stream<S, E>(
+        &self,
+        bucket: &str,
+        key: &str,
+        stream: S,
+        encryption: Option<&str>,
+    ) -> Result<String, AppError>
+    where
+        S: futures_util::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
+        E: std::fmt::Display,
+    {
+        let conn = self.db.conn()?;
+        let is_versioning_enabled = db::buckets::get_bucket_versioning(&conn, bucket)
+            .await
+            .unwrap_or(false);
+
+        let version_id = if is_versioning_enabled {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            String::new()
+        };
+
+        let is_folder = key.ends_with('/');
+        let raw_target = self.object_path(bucket, key, &version_id);
+        let target_path = if !is_versioning_enabled && raw_target.is_dir() {
+            raw_target.join("latest")
+        } else {
+            raw_target.clone()
+        };
+
+        let mime = if is_folder {
+            "application/x-directory"
+        } else {
+            mime_guess::from_path(key)
+                .first_raw()
+                .unwrap_or("application/octet-stream")
+        };
+
+        if is_folder {
+            fs::create_dir_all(&target_path).map_err(|e| StorageError::Io(e.to_string()))?;
+            let etag = "\"d41d8cd98f00b204e9800998ecf8427e\"".to_string();
+            let row = ObjectRow {
+                id: 0, bucket: bucket.to_string(), key: key.to_string(), version_id: version_id.clone(),
+                size: 0, etag: Some(etag), content_type: Some(mime.to_string()),
+                modified_at: chrono::Utc::now().to_rfc3339(), is_latest: true, encryption_type: None,
+                retain_until_date: None, legal_hold: false, lock_mode: None, deleted_at: None,
+                legal_hold_reason: None,
+                content_hash: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
+                compression_type: None, original_size: None, is_deduplicated: false,
+            };
+            db::objects::upsert_object(&conn, &row).await?;
+            self.invalidate_object_list_cache(bucket, key).await;
+            return Ok(version_id);
+        }
+
+        let write_res = super::streaming::write_stream_to_file(stream, &target_path).await?;
+        let etag = format!("\"{}\"", write_res.content_hash);
+
+        let row = ObjectRow {
+            id: 0, bucket: bucket.to_string(), key: key.to_string(), version_id: version_id.clone(),
+            size: write_res.total_bytes, etag: Some(etag), content_type: Some(mime.to_string()),
+            modified_at: chrono::Utc::now().to_rfc3339(), is_latest: true,
+            encryption_type: encryption.map(|s| s.to_string()), retain_until_date: None, legal_hold: false,
+            lock_mode: None, deleted_at: None, legal_hold_reason: None,
+            content_hash: Some(write_res.content_hash), compression_type: None, original_size: None,
+            is_deduplicated: false,
+        };
+
+        db::objects::upsert_object(&conn, &row).await?;
+        self.invalidate_object_list_cache(bucket, key).await;
+
+        if !is_versioning_enabled && raw_target.is_dir() {
+            let _ = fs::write(raw_target.join("latest"), "latest");
+        }
+
+        if let Some(ref d) = self.dispatcher {
+            d.dispatch(crate::workers::notifications::S3Event {
+                event_name: "s3:ObjectCreated:Put".to_string(),
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+                size: write_res.total_bytes,
+                etag: row.etag.clone().unwrap_or_default(),
+                version_id: version_id.clone(),
+                timestamp: chrono::Utc::now().to_rfc3339(),
+            })
+            .await;
+        }
 
         Ok(version_id)
     }

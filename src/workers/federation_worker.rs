@@ -70,9 +70,18 @@ pub async fn start_federation_worker(storage: FileStorage) {
     let mut last_heartbeat_tick = std::time::Instant::now() - Duration::from_secs(60);
     let mut peer_state_cache: std::collections::HashMap<i64, (String, std::time::Instant)> =
         std::collections::HashMap::new();
+    let mut event_rx = crate::admin::federation_handlers::get_federation_tx().subscribe();
 
     loop {
-        interval.tick().await;
+        // Event-driven reactive wakeup: wakes immediately on new queue items (<1ms) or every 3s for maintenance
+        tokio::select! {
+            _ = interval.tick() => {},
+            Ok(msg) = event_rx.recv() => {
+                if !msg.contains("queue_enqueued") && !msg.contains("reconciled") {
+                    continue;
+                }
+            }
+        }
 
         let conn = match storage.db.conn() {
             Ok(c) => c,

@@ -17,6 +17,7 @@ import {
 } from '../../components/dashboard/DashboardStatCards'
 import { DashboardCharts } from '../../components/dashboard/DashboardCharts'
 import { LiveActivityFeed } from '../../components/dashboard/LiveActivityFeed'
+import { Archive } from '#/lib/iconsax-adapter'
 
 export const Route = createFileRoute('/admin/dashboard')({
   component: DashboardPage,
@@ -95,7 +96,7 @@ function DashboardPage() {
             }))
           }
         }
-      } catch {}
+      } catch { }
     }
     ws.onclose = () => setWsStatus('disconnected')
     ws.onerror = () => setWsStatus('disconnected')
@@ -136,7 +137,7 @@ function DashboardPage() {
       label: 'Total Buckets',
       value: (stats.total_buckets || 0).toLocaleString(),
       sub: 'Namespace containers',
-      icon: Database,
+      icon: Archive,
       accent: 'violet',
     },
   ]
@@ -208,22 +209,20 @@ function DashboardPage() {
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-200 dark:border-slate-800 bg-background text-[11px] font-mono">
             <span
-              className={`h-2 w-2 rounded-full ${
-                wsStatus === 'connected'
+              className={`h-2 w-2 rounded-full ${wsStatus === 'connected'
                   ? 'bg-emerald-500 animate-pulse'
                   : wsStatus === 'connecting'
                     ? 'bg-amber-500 animate-ping'
                     : 'bg-rose-500'
-              }`}
+                }`}
             />
             <span
-              className={`capitalize font-bold ${
-                wsStatus === 'connected'
+              className={`capitalize font-bold ${wsStatus === 'connected'
                   ? 'text-emerald-500'
                   : wsStatus === 'connecting'
                     ? 'text-amber-500'
                     : 'text-rose-500'
-              }`}
+                }`}
             >
               {wsStatus}
             </span>

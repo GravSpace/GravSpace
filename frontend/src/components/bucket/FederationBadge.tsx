@@ -1,4 +1,4 @@
-import { FolderSync, ArrowRight, ArrowLeftRight, ArrowUpRight } from 'lucide-react'
+import { ArrowSwapHorizontal, Transmit, ArrowRight2, Driver2, FolderConnection } from '#/lib/iconsax-adapter'
 import { Badge } from '../ui/badge'
 import {
   Tooltip,
@@ -17,12 +17,10 @@ export function BucketFederationBadge({
 }) {
   const enabledShares = shares.filter((s) => s.enabled)
 
-  // 1. Two-Way Continuous Sync (originating from this cluster)
   const twoWay = enabledShares.filter(
     (s) => s.source_bucket === bucket && s.sync_mode === 'two_way',
   )
 
-  // 2. One-Way Outbound (sending source from this cluster)
   const outboundOneWay = enabledShares.filter(
     (s) => s.source_bucket === bucket && s.sync_mode !== 'two_way',
   )
@@ -40,32 +38,39 @@ export function BucketFederationBadge({
             <Badge
               variant="outline"
               onClick={(e) => e.stopPropagation()}
-              className="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest font-extrabold border-indigo-500/30 text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 shrink-0 gap-1 flex items-center cursor-default outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 select-none"
+              className="text-[9px] h-4.5 py-0 px-2 rounded-full font-medium border-indigo-500/30 text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 shrink-0 gap-1.5 flex items-center cursor-default outline-none select-none shadow-2xs hover:bg-indigo-500/15 transition-all"
             >
-              <ArrowLeftRight className="w-2.5 h-2.5" /> 2-Way Sync
+              <ArrowSwapHorizontal size={12} variant="Linear" color="currentColor" className="shrink-0" />
+              <span>2-Way Sync</span>
             </Badge>
           </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs p-3 space-y-1.5 max-w-xs bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-            <div className="font-semibold text-[11px] text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
-              <ArrowLeftRight className="w-3 h-3" /> Two-Way Continuous Sync
+          <TooltipContent side="top" sideOffset={6} className="p-3 bg-zinc-950/95 border border-border/80 shadow-2xl rounded-xl min-w-[270px] max-w-sm space-y-2 select-none">
+            <div className="flex items-center justify-between border-b border-border/40 pb-2">
+              <div className="flex items-center gap-1.5 font-semibold text-[11px] text-foreground">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                <span>Bidirectional Cluster Sync</span>
+              </div>
+              <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded border border-indigo-500/30 bg-indigo-500/10 text-indigo-400">
+                Continuous
+              </span>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5">
               {twoWay.map((s) => {
                 const partnerBucket = s.source_bucket === bucket ? s.target_bucket : s.source_bucket
                 return (
-                  <div key={s.id} className="text-[11px] flex items-center gap-1.5 text-slate-300 font-mono">
-                    <span className="text-indigo-300 font-semibold truncate max-w-[110px]">
+                  <div key={s.id} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-muted/40 border border-border/50 text-[10.5px] font-mono">
+                    <span className="text-foreground font-semibold truncate max-w-[120px]">
                       {s.remote_server_name || 'Remote Peer'}
                     </span>
-                    <span className="text-slate-400 text-[10px] shrink-0">
+                    <span className="text-muted-foreground text-[10px]">
                       ({partnerBucket})
                     </span>
                   </div>
                 )
               })}
             </div>
-            <p className="text-[10px] text-slate-400 pt-0.5 border-t border-slate-800">
-              Bidirectional sync active between local and remote clusters.
+            <p className="text-[10px] text-muted-foreground pt-0.5">
+              Real-time two-way synchronization active with connected clusters.
             </p>
           </TooltipContent>
         </Tooltip>
@@ -84,38 +89,41 @@ export function BucketFederationBadge({
             <Badge
               variant="outline"
               onClick={(e) => e.stopPropagation()}
-              className="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest font-extrabold border-sky-500/30 text-sky-600 dark:text-sky-400 bg-sky-500/10 shrink-0 gap-1 flex items-center cursor-default outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 select-none"
+              className="text-[9px] h-4.5 py-0 px-2 rounded-full font-medium border-sky-500/30 text-sky-600 dark:text-sky-400 bg-sky-500/10 shrink-0 gap-1.5 flex items-center cursor-default outline-none select-none shadow-2xs hover:bg-sky-500/15 transition-all"
             >
-              <ArrowUpRight className="w-2.5 h-2.5" /> 1-Way Outbound
+              <Transmit size={12} variant="Linear" color="currentColor" className="shrink-0" />
+              <span>1-Way Outbound</span>
             </Badge>
           ) : (
             <Badge
               variant="outline"
               onClick={(e) => e.stopPropagation()}
-              className="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest font-extrabold border-cyan-500/30 text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 shrink-0 gap-1 flex items-center cursor-default outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 select-none"
+              className="text-[9px] h-4.5 py-0 px-2 rounded-full font-medium border-cyan-500/30 text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 shrink-0 gap-1.5 flex items-center cursor-default outline-none select-none shadow-2xs hover:bg-cyan-500/15 transition-all"
             >
-              <FolderSync className="w-2.5 h-2.5" />
-              {outboundOneWay.length} {outboundOneWay.length === 1 ? 'Prefix' : 'Prefixes'}
+              <FolderConnection size={12} variant="Linear" color="currentColor" className="shrink-0" />
+              <span>{outboundOneWay.length} {outboundOneWay.length === 1 ? 'Prefix' : 'Prefixes'}</span>
             </Badge>
           )}
         </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs p-3 space-y-1.5 max-w-xs bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-          <div className="font-semibold text-[11px] text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
-            <ArrowUpRight className="w-3 h-3" />
-            {isFullBucket ? 'One-Way Outbound Mirror' : 'Folder Replication Rules'}
+        <TooltipContent side="top" sideOffset={6} className="p-3 bg-zinc-950/95 border border-border/80 shadow-2xl rounded-xl min-w-[280px] max-w-sm space-y-2 select-none">
+          <div className="flex items-center justify-between border-b border-border/40 pb-2">
+            <div className="flex items-center gap-1.5 font-semibold text-[11px] text-foreground">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+              <span>{isFullBucket ? 'Outbound Mirror Rule' : 'Replication Prefix Rules'}</span>
+            </div>
+            <span className="text-[9.5px] font-medium px-1.5 py-0.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-400">
+              1-Way Push
+            </span>
           </div>
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {outboundOneWay.map((s) => (
-              <div key={s.id} className="text-[11px] flex items-center gap-1.5 text-slate-300 font-mono">
-                <span className="text-slate-400 truncate max-w-[90px]">
+              <div key={s.id} className="flex items-center justify-between gap-2 p-1.5 rounded-lg bg-muted/40 border border-border/50 text-[10.5px] font-mono">
+                <span className="text-foreground font-semibold truncate max-w-[100px]">
                   {s.source_prefix || '/'}
                 </span>
-                <ArrowRight className="w-3 h-3 text-slate-500 shrink-0" />
-                <span className="text-slate-200 font-semibold truncate max-w-[100px]">
-                  {s.remote_server_name || 'Remote'}
-                </span>
-                <span className="text-slate-500 text-[10px] shrink-0">
-                  ({s.target_bucket})
+                <ArrowRight2 size={12} variant="Linear" className="text-sky-400 shrink-0" />
+                <span className="text-muted-foreground truncate max-w-[130px] text-right">
+                  {s.remote_server_name || 'Remote'}: <span className="text-sky-400">{s.target_bucket}</span>
                 </span>
               </div>
             ))}
@@ -145,16 +153,16 @@ export function BucketHeaderFederationBadge({
           <TooltipTrigger asChild>
             <Badge
               variant="outline"
-              className="text-[10px] h-5 py-0 px-2 uppercase tracking-wider font-bold border-indigo-500/30 text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 gap-1.5 flex items-center cursor-default shrink-0 outline-none select-none"
+              className="text-[10px] h-5 py-0 px-2.5 rounded-full font-medium border-indigo-500/30 text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 gap-1.5 flex items-center cursor-default shrink-0 outline-none select-none shadow-2xs hover:bg-indigo-500/15 transition-all"
             >
-              <ArrowLeftRight className="w-3 h-3" />
-              2-Way Sync
+              <ArrowSwapHorizontal size={12} variant="Linear" color="currentColor" className="shrink-0" />
+              <span>2-Way Sync</span>
             </Badge>
           </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-xs p-3 space-y-1 max-w-sm bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-            <div className="font-semibold text-indigo-400">Two-Way Continuous Sync</div>
-            <p className="text-[11px] text-slate-400 leading-normal">
-              Bidirectional real-time replication with {twoWay.remote_server_name || 'remote cluster'}.
+          <TooltipContent side="bottom" sideOffset={6} className="p-3 bg-zinc-950/95 border border-border/80 shadow-2xl rounded-xl min-w-[270px] max-w-sm space-y-1.5 select-none">
+            <div className="font-semibold text-indigo-400 text-xs">Two-Way Continuous Sync</div>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Bidirectional real-time replication with <span className="text-foreground font-semibold">{twoWay.remote_server_name || 'remote cluster'}</span>.
             </p>
           </TooltipContent>
         </Tooltip>
@@ -175,16 +183,16 @@ export function BucketHeaderFederationBadge({
         <TooltipTrigger asChild>
           <Badge
             variant="outline"
-            className="text-[10px] h-5 py-0 px-2 uppercase tracking-wider font-bold border-sky-500/30 text-sky-600 dark:text-sky-400 bg-sky-500/10 gap-1.5 flex items-center cursor-default shrink-0 outline-none select-none"
+            className="text-[10px] h-5 py-0 px-2.5 rounded-full font-medium border-sky-500/30 text-sky-600 dark:text-sky-400 bg-sky-500/10 gap-1.5 flex items-center cursor-default shrink-0 outline-none select-none shadow-2xs hover:bg-sky-500/15 transition-all"
           >
-            <ArrowUpRight className="w-3 h-3" />
-            {isFull ? '1-Way Outbound' : `${matchingOutbound.length} Shared`}
+            <Transmit size={12} variant="Linear" color="currentColor" className="shrink-0" />
+            <span>{isFull ? '1-Way Outbound' : `${matchingOutbound.length} Shared`}</span>
           </Badge>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs p-3 space-y-1 max-w-sm bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-          <div className="font-semibold text-sky-400">Cross-Server Share Active</div>
-          <p className="text-[11px] text-slate-400 leading-normal">
-            This bucket replicates data to remote GravSpace clusters in real-time.
+        <TooltipContent side="bottom" sideOffset={6} className="p-3 bg-zinc-950/95 border border-border/80 shadow-2xl rounded-xl min-w-[270px] max-w-sm space-y-1.5 select-none">
+          <div className="font-semibold text-sky-400 text-xs">Cross-Server Share Active</div>
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            This bucket continuously pushes data to remote GravSpace clusters in real-time.
           </p>
         </TooltipContent>
       </Tooltip>
@@ -219,23 +227,72 @@ export function FolderFederationBadge({
         <TooltipTrigger asChild>
           <Badge
             variant="outline"
-            className={`text-[9px] h-4.5 px-1.5 py-0 gap-1 font-medium cursor-default shrink-0 outline-none select-none ${
-              isTwoWay
-                ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/15'
-                : 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30 hover:bg-sky-500/15'
-            }`}
+            className={`text-[9.5px] h-5 px-2 py-0 gap-1.5 font-medium cursor-default shrink-0 outline-none select-none rounded-full transition-all shadow-2xs ${isTwoWay
+              ? 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/15'
+              : 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30 hover:bg-sky-500/15'
+              }`}
             onClick={(e) => e.stopPropagation()}
           >
-            {isTwoWay ? <ArrowLeftRight className="w-2.5 h-2.5" /> : <Network className="w-2.5 h-2.5" />}
-            {isTwoWay ? `2-Way: ${matching.remote_server_name || 'Peer'}` : `Sync: ${matching.remote_server_name || 'Peer'}`}
+            {isTwoWay ? (
+              <ArrowSwapHorizontal size={12} variant="Linear" color="currentColor" className="shrink-0" />
+            ) : (
+              <FolderConnection size={12} variant="Linear" color="currentColor" className="shrink-0" />
+            )}
+            <span>{isTwoWay ? `2-Way: ${matching.remote_server_name || 'Peer'}` : `Sync: ${matching.remote_server_name || 'Peer'}`}</span>
           </Badge>
         </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs p-2.5 bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-          <div className="font-semibold text-sky-400 text-[11px]">
-            {isTwoWay ? 'Two-Way Synchronized Folder' : 'Replicated Folder'}
+        <TooltipContent
+          side="top"
+          sideOffset={6}
+          className="p-3 bg-zinc-950/95 border border-border/80 text-foreground shadow-2xl rounded-xl min-w-[270px] max-w-sm space-y-2.5 pointer-events-none select-none"
+        >
+          {/* Header Row */}
+          <div className="flex items-center justify-between gap-3 border-b border-border/40 pb-2">
+            <div className="flex items-center gap-1.5 font-semibold text-[11px] text-foreground">
+              <span className={`w-1.5 h-1.5 rounded-full ${isTwoWay ? 'bg-indigo-400 animate-pulse' : 'bg-sky-400'}`} />
+              <span>{isTwoWay ? 'Bidirectional Sync' : 'Replication Pipeline'}</span>
+            </div>
+            <span
+              className={`text-[9.5px] font-medium px-1.5 py-0.5 rounded-md border ${isTwoWay
+                ? 'border-indigo-500/30 bg-indigo-500/10 text-indigo-400'
+                : 'border-sky-500/30 bg-sky-500/10 text-sky-400'
+                }`}
+            >
+              {isTwoWay ? 'Continuous 2-Way' : '1-Way Outbound'}
+            </span>
           </div>
-          <div className="text-[11px] text-slate-300 mt-1 font-mono">
-            {folderPrefix} {isTwoWay ? '⇄' : '→'} {matching.remote_server_name || 'Remote'}: {matching.target_bucket}/{matching.target_prefix || ''}
+
+          {/* Pipeline Routing Track */}
+          <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-muted/40 border border-border/50 text-[10.5px] font-mono">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <FolderConnection size={12} variant="Linear" color="currentColor" className="text-sky-400 shrink-0" />
+              <span className="text-foreground font-semibold truncate max-w-[90px]" title={folderPrefix}>
+                {folderPrefix}
+              </span>
+            </div>
+
+            <div className="shrink-0 text-muted-foreground/60 px-1">
+              {isTwoWay ? (
+                <ArrowSwapHorizontal size={12} variant="Linear" className="text-indigo-400" />
+              ) : (
+                <ArrowRight2 size={12} variant="Linear" className="text-sky-400" />
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 min-w-0 justify-end text-right">
+              <Driver2 size={12} variant="Linear" className="text-sky-400 shrink-0" />
+              <span className="text-muted-foreground truncate max-w-[120px]" title={`${matching.remote_server_name || 'Remote'}: ${matching.target_bucket}/${matching.target_prefix || ''}`}>
+                <span className="text-foreground font-medium">{matching.remote_server_name || 'Remote'}</span>
+                <span className="opacity-60">:</span>
+                <span className="text-sky-400/90">{matching.target_bucket}/{matching.target_prefix || ''}</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Quick status caption */}
+          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Target Cluster</span>
+            <span className="font-mono text-foreground/80">{matching.remote_server_name || 'Remote'} ({matching.target_bucket})</span>
           </div>
         </TooltipContent>
       </Tooltip>
