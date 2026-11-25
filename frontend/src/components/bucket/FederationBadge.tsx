@@ -1,4 +1,4 @@
-import { Network, FolderSync, ArrowRight, ArrowLeftRight, ArrowDownLeft, ArrowUpRight } from 'lucide-react'
+import { FolderSync, ArrowRight, ArrowLeftRight, ArrowUpRight } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import {
   Tooltip,
@@ -17,22 +17,17 @@ export function BucketFederationBadge({
 }) {
   const enabledShares = shares.filter((s) => s.enabled)
 
-  // 1. Two-Way Continuous Sync
+  // 1. Two-Way Continuous Sync (originating from this cluster)
   const twoWay = enabledShares.filter(
-    (s) => (s.source_bucket === bucket || s.target_bucket === bucket) && s.sync_mode === 'two_way',
+    (s) => s.source_bucket === bucket && s.sync_mode === 'two_way',
   )
 
-  // 2. One-Way Inbound (receiving target)
-  const inboundOneWay = enabledShares.filter(
-    (s) => s.target_bucket === bucket && s.source_bucket !== bucket && s.sync_mode !== 'two_way',
-  )
-
-  // 3. One-Way Outbound (sending source)
+  // 2. One-Way Outbound (sending source from this cluster)
   const outboundOneWay = enabledShares.filter(
     (s) => s.source_bucket === bucket && s.sync_mode !== 'two_way',
   )
 
-  if (twoWay.length === 0 && inboundOneWay.length === 0 && outboundOneWay.length === 0) {
+  if (twoWay.length === 0 && outboundOneWay.length === 0) {
     return null
   }
 
@@ -78,47 +73,7 @@ export function BucketFederationBadge({
     )
   }
 
-  // Priority 2: One-Way Inbound Target
-  if (inboundOneWay.length > 0) {
-    return (
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge
-              variant="outline"
-              onClick={(e) => e.stopPropagation()}
-              className="text-[8px] h-4 py-0 px-1.5 uppercase tracking-widest font-extrabold border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 shrink-0 gap-1 flex items-center cursor-default outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 select-none"
-            >
-              <ArrowDownLeft className="w-2.5 h-2.5" /> 1-Way Inbound
-            </Badge>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs p-3 space-y-1.5 max-w-xs bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-            <div className="font-semibold text-[11px] text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-              <ArrowDownLeft className="w-3 h-3" /> One-Way Inbound Target
-            </div>
-            <div className="space-y-1">
-              {inboundOneWay.map((s) => (
-                <div key={s.id} className="text-[11px] flex items-center gap-1.5 text-slate-300 font-mono">
-                  <span className="text-slate-400 text-[10px]">from</span>
-                  <span className="text-emerald-300 font-semibold truncate max-w-[110px]">
-                    {s.remote_server_name || 'Remote Peer'}
-                  </span>
-                  <span className="text-slate-500 text-[10px] shrink-0">
-                    ({s.source_bucket})
-                  </span>
-                </div>
-              ))}
-            </div>
-            <p className="text-[10px] text-slate-400 pt-0.5 border-t border-slate-800">
-              Receives replicated data from remote cluster.
-            </p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    )
-  }
-
-  // Priority 3: One-Way Outbound Source
+  // Priority 2: One-Way Outbound Source
   const isFullBucket = outboundOneWay.some((s) => !s.source_prefix || s.source_prefix === '/')
 
   return (
@@ -181,7 +136,7 @@ export function BucketHeaderFederationBadge({
   const enabledShares = shares.filter((s) => s.enabled)
 
   const twoWay = enabledShares.find(
-    (s) => (s.source_bucket === bucketName || s.target_bucket === bucketName) && s.sync_mode === 'two_way',
+    (s) => s.source_bucket === bucketName && s.sync_mode === 'two_way',
   )
   if (twoWay) {
     return (
@@ -200,33 +155,6 @@ export function BucketHeaderFederationBadge({
             <div className="font-semibold text-indigo-400">Two-Way Continuous Sync</div>
             <p className="text-[11px] text-slate-400 leading-normal">
               Bidirectional real-time replication with {twoWay.remote_server_name || 'remote cluster'}.
-            </p>
-          </TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
-    )
-  }
-
-  const inbound = enabledShares.find(
-    (s) => s.target_bucket === bucketName && s.source_bucket !== bucketName && s.sync_mode !== 'two_way',
-  )
-  if (inbound) {
-    return (
-      <TooltipProvider delayDuration={150}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge
-              variant="outline"
-              className="text-[10px] h-5 py-0 px-2 uppercase tracking-wider font-bold border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 gap-1.5 flex items-center cursor-default shrink-0 outline-none select-none"
-            >
-              <ArrowDownLeft className="w-3 h-3" />
-              1-Way Inbound
-            </Badge>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-xs p-3 space-y-1 max-w-sm bg-slate-900 border border-slate-800 text-slate-100 shadow-xl">
-            <div className="font-semibold text-emerald-400">Inbound Target Replica</div>
-            <p className="text-[11px] text-slate-400 leading-normal">
-              Receives replicated data from {inbound.remote_server_name || 'remote cluster'}.
             </p>
           </TooltipContent>
         </Tooltip>

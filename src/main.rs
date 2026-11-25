@@ -12,6 +12,7 @@ mod health;
 mod metrics;
 mod s3;
 mod storage;
+mod vault;
 mod workers;
 
 use crate::audit::AuditLogger;
@@ -40,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=debug".into()),
+                .unwrap_or_else(|_| "info,tower_http=info".into()),
         )
         .init();
 
@@ -120,6 +121,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .allow_headers(Any)
         .expose_headers(Any);
 
+    // Build filtered trace layer to suppress repetitive health check spam
+    let trace_layer = tower_http::trace::TraceLayer::new_for_http().make_span_with(
+        |request: &axum::http::Request<_>| {
+            let path = request.uri().path();
+            if path.starts_with("/health") || path == "/metrics" {
+                tracing::trace_span!("health_check")
+            } else {
+                tracing::debug_span!(
+                    "request",
+                    method = %request.method(),
+                    uri = %request.uri(),
+                )
+            }
+        },
+    );
+
     // Build Admin API router
     let admin_app = Router::new()
         .nest("/health", health::health_router())
@@ -130,13 +147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             audit_logger.clone(),
         ))
         .layer(axum::extract::DefaultBodyLimit::disable())
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(trace_layer.clone())
         .layer(cors.clone());
 
     // Build S3 API router
     let s3_app = s3::routes::s3_router(storage.clone())
         .layer(axum::extract::DefaultBodyLimit::disable())
-        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(trace_layer)
         .layer(cors);
 
     let admin_port: u16 = config.admin_port.parse().unwrap_or(8080);

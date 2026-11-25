@@ -3,6 +3,10 @@ use super::{
     policy_handlers, presign_handlers, s3_explorer_handlers, settings_handlers, trash_handlers, user_handlers,
     webhook_handlers,
 };
+use crate::vault::{
+    env_handlers as vault_env_handlers, export_handlers as vault_export_handlers,
+    handlers as vault_handlers, project_handlers as vault_project_handlers,
+};
 use crate::audit::SharedAuditLogger;
 use crate::auth::middleware::{admin_jwt_middleware, admin_only_middleware};
 use crate::config::Config;
@@ -154,6 +158,7 @@ pub fn admin_router(
 
     let iam_routes = Router::new()
         .route("/system/network", get(network_handlers::get_network_info))
+        .route("/system/db-checkpoint", post(settings_handlers::trigger_db_checkpoint))
         .route("/s3-explorer/execute", post(s3_explorer_handlers::execute_s3_command))
         .route("/stats", get(analytics_handlers::get_system_stats))
         .route("/audit-logs", get(analytics_handlers::get_audit_logs))
@@ -193,6 +198,20 @@ pub fn admin_router(
             get(policy_handlers::list_policies).post(policy_handlers::create_policy),
         )
         .route("/policies/{name}", delete(policy_handlers::delete_policy))
+        .route("/vault/secrets", get(vault_handlers::list_secrets).post(vault_handlers::create_secret))
+        .route("/vault/secrets/{id}", put(vault_handlers::update_secret).delete(vault_handlers::delete_secret))
+        .route("/vault/secrets/{id}/reveal", get(vault_handlers::reveal_secret))
+        .route("/vault/secrets/{id}/versions", get(vault_handlers::list_versions))
+        .route("/vault/secrets/{id}/rollback", post(vault_handlers::rollback_version))
+        .route("/vault/access-requests", get(vault_handlers::list_access_requests).post(vault_handlers::create_access_request))
+        .route("/vault/access-requests/{id}/approve", post(vault_handlers::approve_access_request))
+        .route("/vault/access-requests/{id}/reject", post(vault_handlers::reject_access_request))
+        .route("/vault/environments", get(vault_env_handlers::list_environments).post(vault_env_handlers::create_environment))
+        .route("/vault/environments/{id}", put(vault_env_handlers::update_environment).delete(vault_env_handlers::delete_environment))
+        .route("/vault/projects", get(vault_project_handlers::list_projects).post(vault_project_handlers::create_project))
+        .route("/vault/projects/{id}", put(vault_project_handlers::update_project).delete(vault_project_handlers::delete_project))
+        .route("/vault/import", post(vault_handlers::import_secrets))
+        .route("/vault/export", get(vault_export_handlers::export_secrets))
         .layer(middleware::from_fn(admin_only_middleware));
 
     let protected = bucket_and_object_routes

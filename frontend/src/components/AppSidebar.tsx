@@ -15,6 +15,7 @@ import {
   FileText,
   Terminal,
   Network,
+  KeyRound,
 } from 'lucide-react'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { Dialog, DialogContent } from './ui/dialog'
@@ -40,6 +41,7 @@ const navItems = [
   { path: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/admin/buckets', label: 'Buckets', icon: Database },
   { path: '/admin/federation', label: 'Federation & Sync', icon: Network },
+  { path: '/admin/vault', label: 'Vault & Secrets', icon: KeyRound },
   { path: '/admin/presigns', label: 'Presigned Links', icon: LinkIcon },
   { path: '/admin/explorer', label: 'S3 API Explorer', icon: Terminal },
   { path: '/admin/users', label: 'IAM Engine', icon: UserIcon },

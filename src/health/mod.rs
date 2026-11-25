@@ -2,19 +2,20 @@ use axum::{response::IntoResponse, routing::get, Router};
 
 pub fn health_router() -> Router {
     Router::new()
+        .route("/", get(liveness))
         .route("/live", get(liveness))
         .route("/ready", get(readiness))
         .route("/startup", get(startup))
 }
 
-async fn liveness() -> impl IntoResponse {
+pub async fn liveness() -> impl IntoResponse {
     "OK"
 }
 
-async fn readiness() -> impl IntoResponse {
+pub async fn readiness() -> impl IntoResponse {
     "OK"
 }
 
-async fn startup() -> impl IntoResponse {
+pub async fn startup() -> impl IntoResponse {
     "OK"
 }
