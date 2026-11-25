@@ -45,7 +45,12 @@ const config = defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    tsconfigPaths: true,
+    alias: {
+      'lucide-react': path.resolve(__dirname, 'src/lib/iconsax-adapter.tsx'),
+    },
+  },
   server: {
     proxy: {
       '/api': {

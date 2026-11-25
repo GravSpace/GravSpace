@@ -120,7 +120,7 @@ pub async fn get_object(
 "#,
         );
         if let Ok(Some(obj)) = row {
-            if let Ok(tags) = db::objects::get_object_tagging(&conn, obj.id).await {
+            if let Ok(tags) = db::objects::get_object_tagging(&conn, &bucket, obj.id).await {
                 for (k, v) in tags {
                     tags_xml.push_str(&format!(
                         "        <Tag><Key>{k}</Key><Value>{v}</Value></Tag>\n"
@@ -274,7 +274,7 @@ pub async fn put_object(
         }
         if let Ok(conn) = storage.db.conn() {
             if let Ok(Some(obj)) = db::objects::get_object(&conn, &bucket, &key, "").await {
-                let _ = db::objects::put_object_tagging(&conn, obj.id, &map).await;
+                let _ = db::objects::put_object_tagging(&conn, &bucket, obj.id, &map).await;
             }
         }
         return StatusCode::OK.into_response();
@@ -299,12 +299,9 @@ pub async fn put_object(
         .get("x-amz-server-side-encryption")
         .and_then(|h| h.to_str().ok());
 
-    let bytes = match axum::body::to_bytes(request.into_body(), 5 * 1024 * 1024 * 1024).await {
-        Ok(b) => b.to_vec(),
-        Err(e) => return s3_error(StatusCode::BAD_REQUEST, "IncompleteBody", &e.to_string(), &key),
-    };
+    let body_stream = request.into_body().into_data_stream();
 
-    match storage.put_object(&bucket, &key, bytes, encryption).await {
+    match storage.put_object_stream(&bucket, &key, body_stream, encryption).await {
         Ok(version_id) => {
             if let Some(ref audit) = storage.audit {
                 let audit_c = audit.clone();

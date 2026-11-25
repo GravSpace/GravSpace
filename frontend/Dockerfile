@@ -8,8 +8,9 @@ WORKDIR /app
 ARG APP_VERSION
 ENV APP_VERSION=${APP_VERSION}
 
-# Copy package files
+# Copy package files and scripts
 COPY package.json bun.lock ./
+COPY scripts/ ./scripts/
 
 # Install dependencies using Bun
 RUN bun install --no-audit

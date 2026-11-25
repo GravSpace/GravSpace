@@ -28,6 +28,7 @@ import {
   type SecretType,
   getEnvTheme,
 } from './vaultTypes'
+import { Folder } from '#/lib/iconsax-adapter'
 
 interface Props {
   open: boolean
@@ -206,15 +207,16 @@ export function CreateSecretDialog({
                 </DialogTitle>
                 {projects && projects.length > 0 && (
                   <div className="relative inline-flex items-center">
+                    <Folder size={11} variant="Linear" className="w-3 h-3 absolute left-2 pointer-events-none text-muted-foreground shrink-0" />
                     <select
                       value={targetProject}
                       onChange={(e) => setTargetProject(e.target.value)}
-                      className="h-5 pl-2 pr-5 rounded-full text-[10px] font-semibold border border-border/80 bg-muted/60 text-foreground appearance-none cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-primary"
+                      className="h-5 pl-6 pr-5 rounded-full text-[10px] font-semibold border border-border/80 bg-muted/60 text-foreground appearance-none cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-primary"
                       title="Target Project"
                     >
                       {projects.map((p) => (
                         <option key={p.slug} value={p.slug} className="bg-popover text-popover-foreground">
-                          📁 {p.name}
+                          {p.name}
                         </option>
                       ))}
                     </select>
@@ -260,11 +262,10 @@ export function CreateSecretDialog({
                     key={type}
                     type="button"
                     onClick={() => setActiveType(type)}
-                    className={`py-2 px-1.5 rounded-lg text-center transition-all flex flex-col items-center gap-1 cursor-pointer select-none ${
-                      isSelected
+                    className={`py-2 px-1.5 rounded-lg text-center transition-all flex flex-col items-center gap-1 cursor-pointer select-none ${isSelected
                         ? 'bg-card text-foreground border border-border shadow-2xs font-semibold'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/50 border border-transparent'
-                    }`}
+                      }`}
                   >
                     <Icon className={`w-3.5 h-3.5 ${isSelected ? 'text-primary' : conf.color}`} />
                     <span className="text-[11px] leading-tight truncate w-full">{conf.label}</span>
@@ -287,10 +288,10 @@ export function CreateSecretDialog({
                   activeType === 'kv'
                     ? 'e.g. DATABASE_URL'
                     : activeType === 'agent_token'
-                    ? 'e.g. AGENT_PAYMENT_BOT'
-                    : activeType === 'keystore'
-                    ? 'e.g. release-keystore.jks'
-                    : 'e.g. wildcard.domain.crt'
+                      ? 'e.g. AGENT_PAYMENT_BOT'
+                      : activeType === 'keystore'
+                        ? 'e.g. release-keystore.jks'
+                        : 'e.g. wildcard.domain.crt'
                 }
                 className="h-8 font-mono text-xs"
                 required
@@ -324,7 +325,7 @@ export function CreateSecretDialog({
                         setValue(text)
                         toast.success('Pasted from clipboard')
                       }
-                    } catch {}
+                    } catch { }
                   }}
                   className="text-[10px] text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors cursor-pointer"
                 >

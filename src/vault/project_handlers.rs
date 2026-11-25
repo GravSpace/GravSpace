@@ -41,7 +41,7 @@ fn slugify(text: &str) -> String {
 pub async fn list_projects(
     State(storage): State<FileStorage>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let projs = db::vault_project::list_projects(&conn).await?;
     Ok((StatusCode::OK, Json(projs)).into_response())
 }
@@ -64,7 +64,7 @@ pub async fn create_project(
         return Err(AppError::BadRequest("Invalid project slug".to_string()));
     }
 
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     if let Ok(Some(_)) = db::vault_project::get_project(&conn, &slug).await {
         return Err(AppError::BadRequest(format!(
             "Project with identifier '{slug}' already exists"
@@ -108,7 +108,7 @@ pub async fn update_project(
         return Err(AppError::BadRequest("Project name cannot be empty".to_string()));
     }
 
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     db::vault_project::update_project(
         &conn,
         &id,
@@ -126,7 +126,7 @@ pub async fn delete_project(
     State(storage): State<FileStorage>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     db::vault_project::delete_project(&conn, &id).await?;
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
 }

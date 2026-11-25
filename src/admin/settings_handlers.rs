@@ -55,3 +55,63 @@ pub async fn trigger_db_checkpoint(
     )
         .into_response())
 }
+
+pub async fn get_database_stats(State(storage): State<FileStorage>) -> Result<Response, AppError> {
+    let wal_size_bytes = std::fs::metadata("./db/turso.db-wal")
+        .or_else(|_| std::fs::metadata("./db/metadata.db-wal"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    let db_size_bytes = std::fs::metadata("./db/turso.db")
+        .or_else(|_| std::fs::metadata("./db/metadata.db"))
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    let vault_size = std::fs::metadata("./db/vault.db").map(|m| m.len()).unwrap_or(0);
+    let vault_wal_size = std::fs::metadata("./db/vault.db-wal").map(|m| m.len()).unwrap_or(0);
+    let fed_size = std::fs::metadata("./db/federation.db").map(|m| m.len()).unwrap_or(0);
+    let fed_wal_size = std::fs::metadata("./db/federation.db-wal").map(|m| m.len()).unwrap_or(0);
+
+    let conn = storage.db.conn()?;
+    let mut shards_info = Vec::new();
+    for idx in 0..crate::db::shards::NUM_SHARDS {
+        let table = format!("objects_{idx:02}");
+        let count_sql = format!("SELECT COUNT(*) FROM {table} WHERE deleted_at IS NULL");
+        let count: i64 = if let Ok(mut rows) = conn.query(&count_sql, ()).await {
+            if let Ok(Some(row)) = rows.next().await {
+                row.get(0).unwrap_or(0)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        shards_info.push(serde_json::json!({
+            "shard_id": idx,
+            "table_name": table,
+            "active_objects": count,
+        }));
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "sharding_enabled": true,
+            "sharding_architecture": "Table-Partition Sharding (Turso/libSQL)",
+            "num_shards": crate::db::shards::NUM_SHARDS,
+            "database_url": storage.config.database_url,
+            "db_size_bytes": db_size_bytes,
+            "db_size_human": format!("{:.2} MB", db_size_bytes as f64 / 1_048_576.0),
+            "wal_size_bytes": wal_size_bytes,
+            "wal_size_human": format!("{:.2} MB", wal_size_bytes as f64 / 1_048_576.0),
+            "databases": {
+                "turso": { "size_bytes": db_size_bytes, "wal_bytes": wal_size_bytes },
+                "vault": { "size_bytes": vault_size, "wal_bytes": vault_wal_size },
+                "federation": { "size_bytes": fed_size, "wal_bytes": fed_wal_size },
+            },
+            "shards": shards_info,
+        })),
+    )
+        .into_response())
+}

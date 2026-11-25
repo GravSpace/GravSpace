@@ -14,8 +14,11 @@ pub async fn start_analytics_worker(storage: FileStorage, db: Database) {
         if let Ok(buckets) = storage.list_buckets().await {
             for b in buckets {
                 if let Ok(conn) = db.conn() {
-                    let sql = "SELECT COALESCE(SUM(size), 0) FROM objects WHERE bucket = ?1 AND deleted_at IS NULL";
-                    if let Ok(mut rows) = conn.query(sql, params![b.as_str()]).await {
+                    let table = crate::db::shards::object_table_for_bucket(&b);
+                    let sql = format!(
+                        "SELECT COALESCE(SUM(size), 0) FROM {table} WHERE bucket = ?1 AND deleted_at IS NULL"
+                    );
+                    if let Ok(mut rows) = conn.query(&sql, params![b.as_str()]).await {
                         if let Ok(Some(row)) = rows.next().await {
                             let total_size: i64 = row.get(0).unwrap_or(0);
                             let _ = conn.execute(

@@ -28,6 +28,12 @@ pub fn admin_router(
         .route("/api/login", post(auth_handlers::login_handler))
         .with_state(storage.clone());
 
+    let public_system_routes = Router::new()
+        .route("/system/database-stats", get(settings_handlers::get_database_stats))
+        .route("/api/admin/system/database-stats", get(settings_handlers::get_database_stats))
+        .route("/admin/system/database-stats", get(settings_handlers::get_database_stats))
+        .with_state(storage.clone());
+
     let bucket_and_object_routes = Router::new()
         .route("/auth/verify", post(auth_handlers::verify_admin_password))
         .route("/buckets", get(bucket_handlers::list_buckets))
@@ -246,6 +252,7 @@ pub fn admin_router(
 
     Router::new()
         .merge(auth_routes)
+        .merge(public_system_routes)
         .merge(admin_prefixed)
         .merge(ws_routes)
 }

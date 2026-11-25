@@ -73,13 +73,10 @@ pub async fn upload_part(
         return e.into_response();
     }
 
-    let bytes = match axum::body::to_bytes(request.into_body(), 5 * 1024 * 1024 * 1024).await {
-        Ok(b) => b.to_vec(),
-        Err(e) => return s3_error(StatusCode::BAD_REQUEST, "IncompleteBody", &e.to_string(), &key),
-    };
+    let body_stream = request.into_body().into_data_stream();
 
     match storage
-        .upload_part(&bucket, &key, &upload_id, part_number, bytes)
+        .upload_part_stream(&bucket, &key, &upload_id, part_number, body_stream)
         .await
     {
         Ok(etag) => {

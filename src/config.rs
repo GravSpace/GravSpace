@@ -8,6 +8,8 @@ pub struct Config {
     pub cors_origins: Vec<String>,
     pub database_url: String,
     pub database_auth_token: String,
+    pub vault_database_url: String,
+    pub federation_database_url: String,
     pub server_host: String,
     pub cdn_hosts: Vec<String>,
     pub initial_admin_password: Option<String>,
@@ -38,14 +40,22 @@ impl Config {
         if database_url.is_empty() {
             database_url = env::var("TURSO_DATABASE_URL").unwrap_or_default();
         }
-        if database_url.is_empty() {
-            database_url = "http://127.0.0.1:8085".to_string();
+        if database_url.is_empty()
+            || database_url == "http://127.0.0.1:8085"
+            || database_url == "http://localhost:8085"
+        {
+            database_url = "./db/turso.db".to_string();
         }
 
         let mut database_auth_token = env::var("DATABASE_AUTH_TOKEN").unwrap_or_default();
         if database_auth_token.is_empty() {
             database_auth_token = env::var("TURSO_AUTH_TOKEN").unwrap_or_default();
         }
+
+        let vault_database_url = env::var("VAULT_DATABASE_URL")
+            .unwrap_or_else(|_| "./db/vault.db".to_string());
+        let federation_database_url = env::var("FEDERATION_DATABASE_URL")
+            .unwrap_or_else(|_| "./db/federation.db".to_string());
 
         let server_host = env::var("SERVER_HOST").unwrap_or_default();
         let cdn_hosts = env::var("CDN_HOSTS")
@@ -88,6 +98,8 @@ impl Config {
             cors_origins,
             database_url,
             database_auth_token,
+            vault_database_url,
+            federation_database_url,
             server_host,
             cdn_hosts,
             initial_admin_password,

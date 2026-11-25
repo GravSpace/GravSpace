@@ -52,7 +52,7 @@ pub async fn start_federation_worker(storage: FileStorage) {
     info!("GravSpace Federation & Resilient Outbox worker started");
 
     // Clean up any historic directory marker entries in sync queue that caused read errors
-    if let Ok(conn) = storage.db.conn() {
+    if let Ok(conn) = storage.federation_conn() {
         let _ = conn
             .execute(
                 "UPDATE sync_queue SET status = 'completed', error_message = NULL WHERE (source_key LIKE '%/' OR target_key LIKE '%/') AND status != 'completed'",
@@ -70,11 +70,20 @@ pub async fn start_federation_worker(storage: FileStorage) {
     let mut last_heartbeat_tick = std::time::Instant::now() - Duration::from_secs(60);
     let mut peer_state_cache: std::collections::HashMap<i64, (String, std::time::Instant)> =
         std::collections::HashMap::new();
+    let mut event_rx = crate::admin::federation_handlers::get_federation_tx().subscribe();
 
     loop {
-        interval.tick().await;
+        // Event-driven reactive wakeup: wakes immediately on new queue items (<1ms) or every 3s for maintenance
+        tokio::select! {
+            _ = interval.tick() => {},
+            Ok(msg) = event_rx.recv() => {
+                if !msg.contains("queue_enqueued") && !msg.contains("reconciled") {
+                    continue;
+                }
+            }
+        }
 
-        let conn = match storage.db.conn() {
+        let conn = match storage.federation_conn() {
             Ok(c) => c,
             Err(_) => continue,
         };

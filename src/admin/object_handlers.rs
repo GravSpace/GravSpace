@@ -387,7 +387,7 @@ pub async fn get_object_tagging(
     let version_id = query.version_id.as_deref().unwrap_or("");
     let obj = db::objects::get_object(&conn, &bucket, key, version_id).await?;
     if let Some(obj) = obj {
-        let tags = db::objects::get_object_tagging(&conn, obj.id).await?;
+        let tags = db::objects::get_object_tagging(&conn, &bucket, obj.id).await?;
         Ok((StatusCode::OK, Json(tags)).into_response())
     } else {
         Ok((StatusCode::OK, Json(HashMap::<String, String>::new())).into_response())
@@ -405,7 +405,7 @@ pub async fn put_object_tagging(
     let version_id = query.version_id.as_deref().unwrap_or("");
     let obj = db::objects::get_object(&conn, &bucket, key, version_id).await?;
     if let Some(obj) = obj {
-        db::objects::put_object_tagging(&conn, obj.id, &tags).await?;
+        db::objects::put_object_tagging(&conn, &bucket, obj.id, &tags).await?;
         Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
     } else {
         Err(AppError::NotFound("Object not found".to_string()))

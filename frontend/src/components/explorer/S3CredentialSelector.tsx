@@ -5,6 +5,7 @@ import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Badge } from '../ui/badge'
 import type { S3Credentials } from '../../lib/s3Client'
+import { FlashCircle, Global } from '#/lib/iconsax-adapter'
 
 export interface IAMUser {
   username: string
@@ -101,24 +102,26 @@ export function S3CredentialSelector({
             <button
               type="button"
               onClick={() => onChangeExecutionMode?.('relay')}
-              className={`px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${executionMode === 'relay'
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${executionMode === 'relay'
                 ? 'bg-primary text-primary-foreground shadow-xs'
                 : 'text-muted-foreground hover:text-foreground'
                 }`}
               title="Execute via backend server (No CORS / Works for internal rack IPs)"
             >
-              ⚡ Relay
+              <FlashCircle size={11} className="shrink-0" variant="Linear" color="currentColor" />
+              <span>Relay</span>
             </button>
             <button
               type="button"
               onClick={() => onChangeExecutionMode?.('browser')}
-              className={`px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${executionMode === 'browser'
+              className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md font-medium transition-colors cursor-pointer ${executionMode === 'browser'
                 ? 'bg-primary text-primary-foreground shadow-xs'
                 : 'text-muted-foreground hover:text-foreground'
                 }`}
               title="Execute directly from client browser"
             >
-              🌐 Browser
+              <Global size={11} className="shrink-0" variant="Linear" color="currentColor" />
+              <span>Browser</span>
             </button>
           </div>
           <Button

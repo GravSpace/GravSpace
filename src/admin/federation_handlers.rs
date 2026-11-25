@@ -106,7 +106,7 @@ async fn handle_federation_ws(mut socket: WebSocket) {
 // ================= PEER HANDLERS =================
 
 pub async fn list_peers(State(storage): State<FileStorage>) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     let peers = db::federation::list_remote_servers(&conn).await?;
     Ok((StatusCode::OK, Json(peers)).into_response())
 }
@@ -124,7 +124,7 @@ pub async fn create_peer(
     State(storage): State<FileStorage>,
     Json(payload): Json<CreatePeerPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     let id = db::federation::create_remote_server(
         &conn,
         &payload.name,
@@ -143,7 +143,7 @@ pub async fn delete_peer(
     State(storage): State<FileStorage>,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     db::federation::delete_remote_server(&conn, id).await?;
     broadcast_federation_event("peers_changed", json!({ "action": "deleted", "id": id }));
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
@@ -153,7 +153,7 @@ pub async fn ping_peer(
     State(storage): State<FileStorage>,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     let peer = match db::federation::get_remote_server(&conn, id).await? {
         Some(p) => p,
         None => return Err(AppError::Storage(crate::error::StorageError::BucketNotFound(format!("Peer #{id} not found")))),
@@ -239,7 +239,7 @@ pub async fn ping_peer(
 // ================= SHARE HANDLERS =================
 
 pub async fn list_shares(State(storage): State<FileStorage>) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     let shares = db::federation::list_shares(&conn).await?;
     Ok((StatusCode::OK, Json(shares)).into_response())
 }
@@ -266,7 +266,7 @@ pub async fn create_share(
     State(storage): State<FileStorage>,
     Json(payload): Json<CreateSharePayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     let id = db::federation::create_share(
         &conn,
         &payload.name,
@@ -287,7 +287,7 @@ pub async fn delete_share(
     State(storage): State<FileStorage>,
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     db::federation::delete_share(&conn, id).await?;
     broadcast_federation_event("shares_changed", json!({ "action": "deleted", "id": id }));
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
@@ -318,14 +318,14 @@ pub async fn list_queue(
     State(storage): State<FileStorage>,
     Query(query): Query<QueueFilterQuery>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     let limit = query.limit.unwrap_or(50);
     let items = db::federation::list_sync_queue(&conn, query.status.as_deref(), limit).await?;
     Ok((StatusCode::OK, Json(items)).into_response())
 }
 
 pub async fn retry_failed_queue(State(storage): State<FileStorage>) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     db::federation::retry_all_failed(&conn).await?;
     broadcast_federation_event("queue_changed", json!({ "action": "retry" }));
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
@@ -334,7 +334,7 @@ pub async fn retry_failed_queue(State(storage): State<FileStorage>) -> Result<Re
 pub async fn clear_completed_queue(
     State(storage): State<FileStorage>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.federation_conn()?;
     db::federation::clear_completed_queue(&conn).await?;
     broadcast_federation_event("queue_changed", json!({ "action": "cleared" }));
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())

@@ -25,7 +25,7 @@ pub async fn list_secrets(
     State(storage): State<FileStorage>,
     Query(q): Query<ListSecretsQuery>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let secrets = db::vault::list_secrets(
         &conn,
         q.project.as_deref(),
@@ -95,7 +95,7 @@ pub async fn create_secret(
     State(storage): State<FileStorage>,
     Json(payload): Json<CreateSecretPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let id = uuid::Uuid::new_v4().to_string();
     let project_id = payload.project_id.unwrap_or_else(|| "default".to_string());
     let env = payload.environment.unwrap_or_else(|| "development".to_string());
@@ -138,7 +138,7 @@ pub async fn reveal_secret(
     State(storage): State<FileStorage>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let secret = db::vault::get_secret(&conn, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Secret {id} not found")))?;
@@ -186,7 +186,7 @@ pub async fn update_secret(
     Path(id): Path<String>,
     Json(payload): Json<UpdateSecretPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let secret = db::vault::get_secret(&conn, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Secret {id} not found")))?;
@@ -230,7 +230,7 @@ pub async fn delete_secret(
     State(storage): State<FileStorage>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     db::vault::delete_secret(&conn, &id).await?;
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
 }
@@ -239,7 +239,7 @@ pub async fn list_versions(
     State(storage): State<FileStorage>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let versions = db::vault::list_secret_versions(&conn, &id).await?;
     let list: Vec<serde_json::Value> = versions
         .into_iter()
@@ -265,7 +265,7 @@ pub async fn rollback_version(
     Path(id): Path<String>,
     Json(payload): Json<RollbackPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let next_v = db::vault::rollback_secret_version(&conn, &id, payload.target_version).await?;
     Ok((StatusCode::OK, Json(json!({ "success": true, "current_version": next_v }))).into_response())
 }
@@ -283,7 +283,7 @@ pub async fn create_access_request(
     State(storage): State<FileStorage>,
     Json(payload): Json<CreateAccessRequestPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let id = uuid::Uuid::new_v4().to_string();
     let row = db::vault::VaultAccessRequestRow {
         id: id.clone(),
@@ -313,7 +313,7 @@ pub async fn list_access_requests(
     State(storage): State<FileStorage>,
     Query(q): Query<ListAccessRequestsQuery>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let requests = db::vault::list_access_requests(&conn, q.status.as_deref(), q.requester.as_deref()).await?;
     
     // Enrich with secret name if available
@@ -354,7 +354,7 @@ pub async fn approve_access_request(
     Path(id): Path<String>,
     Json(payload): Json<ReviewAccessRequestPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let req = db::vault::get_access_request(&conn, &id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Request {id} not found")))?;
@@ -381,7 +381,7 @@ pub async fn reject_access_request(
     Path(id): Path<String>,
     Json(payload): Json<ReviewAccessRequestPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     db::vault::review_access_request(
         &conn,
         &id,
@@ -407,7 +407,7 @@ pub async fn import_secrets(
     State(storage): State<FileStorage>,
     Json(payload): Json<ImportSecretsPayload>,
 ) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
+    let conn = storage.vault_conn()?;
     let mut imported = 0;
     let project_id = payload.project_id.unwrap_or_else(|| "default".to_string());
 

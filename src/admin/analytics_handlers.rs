@@ -34,44 +34,51 @@ pub struct AuditLogQuery {
 pub async fn get_system_stats(State(storage): State<FileStorage>) -> Result<Response, AppError> {
     let conn = storage.db.conn()?;
 
-    let mut rows = conn
-        .query(
-            "SELECT COUNT(*), COALESCE(SUM(COALESCE(original_size, size)), 0), COALESCE(SUM(size), 0) FROM objects WHERE is_latest = TRUE AND deleted_at IS NULL",
-            (),
-        )
-        .await
-        .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
+    let mut objects_count: i64 = 0;
+    let mut total_size: i64 = 0;
+    let mut physical_size: i64 = 0;
+    let mut bucket_totals: HashMap<String, i64> = HashMap::new();
 
-    let (objects_count, total_size, physical_size) =
+    for idx in 0..crate::db::shards::NUM_SHARDS {
+        let table = crate::db::shards::shard_table_name(idx);
+        let summary_sql = format!(
+            "SELECT COUNT(*), COALESCE(SUM(COALESCE(original_size, size)), 0), COALESCE(SUM(size), 0) FROM {table} WHERE is_latest = TRUE AND deleted_at IS NULL"
+        );
+        let mut rows = conn
+            .query(&summary_sql, ())
+            .await
+            .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
         if let Some(row) = rows.next().await.unwrap_or(None) {
-            (
-                row.get(0).unwrap_or(0),
-                row.get(1).unwrap_or(0),
-                row.get(2).unwrap_or(0),
-            )
-        } else {
-            (0, 0, 0)
-        };
+            objects_count += row.get::<i64>(0).unwrap_or(0);
+            total_size += row.get::<i64>(1).unwrap_or(0);
+            physical_size += row.get::<i64>(2).unwrap_or(0);
+        }
 
-    let mut bucket_stats = Vec::new();
-    let mut b_rows = conn
-        .query(
-            "SELECT bucket, COALESCE(SUM(size), 0) FROM objects WHERE is_latest = TRUE AND deleted_at IS NULL GROUP BY bucket",
-            (),
-        )
-        .await
-        .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
-
-    while let Ok(Some(row)) = b_rows.next().await {
-        let name = row.get::<String>(0).unwrap_or_default();
-        let size = row.get::<i64>(1).unwrap_or(0);
-        bucket_stats.push(json!({
-            "name": name,
-            "Name": name,
-            "size": size,
-            "Size": size,
-        }));
+        let bucket_sql = format!(
+            "SELECT bucket, COALESCE(SUM(size), 0) FROM {table} WHERE is_latest = TRUE AND deleted_at IS NULL GROUP BY bucket"
+        );
+        let mut b_rows = conn
+            .query(&bucket_sql, ())
+            .await
+            .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
+        while let Ok(Some(row)) = b_rows.next().await {
+            let name = row.get::<String>(0).unwrap_or_default();
+            let size = row.get::<i64>(1).unwrap_or(0);
+            *bucket_totals.entry(name).or_insert(0) += size;
+        }
     }
+
+    let bucket_stats: Vec<serde_json::Value> = bucket_totals
+        .into_iter()
+        .map(|(name, size)| {
+            json!({
+                "name": name,
+                "Name": name,
+                "size": size,
+                "Size": size,
+            })
+        })
+        .collect();
 
     let buckets_count = if bucket_stats.is_empty() {
         storage.list_buckets().await?.len()
@@ -258,30 +265,48 @@ pub async fn get_content_type_breakdown(
     State(storage): State<FileStorage>,
 ) -> Result<Response, AppError> {
     let conn = storage.db.conn()?;
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(content_type, 'unknown'), COUNT(*), SUM(size)
-             FROM objects WHERE is_latest = TRUE AND deleted_at IS NULL
-             GROUP BY content_type ORDER BY COUNT(*) DESC",
-            (),
-        )
-        .await
-        .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
+    let mut totals: HashMap<String, (i64, i64)> = HashMap::new();
 
-    let mut breakdown = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        let ct = row.get::<String>(0).unwrap_or_default();
-        let count = row.get::<i64>(1).unwrap_or(0);
-        let size = row.get::<i64>(2).unwrap_or(0);
-        breakdown.push(json!({
-            "content_type": ct,
-            "ContentType": ct,
-            "count": count,
-            "Count": count,
-            "size": size,
-            "TotalSize": size,
-        }));
+    for idx in 0..crate::db::shards::NUM_SHARDS {
+        let table = crate::db::shards::shard_table_name(idx);
+        let sql = format!(
+            "SELECT COALESCE(content_type, 'unknown'), COUNT(*), COALESCE(SUM(size), 0)
+             FROM {table} WHERE is_latest = TRUE AND deleted_at IS NULL
+             GROUP BY content_type"
+        );
+        let mut rows = conn
+            .query(&sql, ())
+            .await
+            .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
+        while let Ok(Some(row)) = rows.next().await {
+            let ct = row.get::<String>(0).unwrap_or_default();
+            let count = row.get::<i64>(1).unwrap_or(0);
+            let size = row.get::<i64>(2).unwrap_or(0);
+            let entry = totals.entry(ct).or_insert((0, 0));
+            entry.0 += count;
+            entry.1 += size;
+        }
     }
+
+    let mut entries: Vec<(String, i64, i64)> = totals
+        .into_iter()
+        .map(|(ct, (count, size))| (ct, count, size))
+        .collect();
+    entries.sort_by_key(|a| std::cmp::Reverse(a.1));
+
+    let breakdown: Vec<serde_json::Value> = entries
+        .into_iter()
+        .map(|(ct, count, size)| {
+            json!({
+                "content_type": ct,
+                "ContentType": ct,
+                "count": count,
+                "Count": count,
+                "size": size,
+                "TotalSize": size,
+            })
+        })
+        .collect();
     Ok((StatusCode::OK, Json(breakdown)).into_response())
 }
 
@@ -341,31 +366,42 @@ pub async fn global_search(
 
     let conn = storage.db.conn()?;
     let pattern = format!("%{}%", q.trim());
-    let mut rows = conn
-        .query(
-            "SELECT bucket, key, size, modified_at, content_type
-             FROM objects
-             WHERE is_latest = TRUE AND deleted_at IS NULL AND key LIKE ?1
-             ORDER BY modified_at DESC LIMIT 100",
-            params![pattern],
-        )
-        .await
-        .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
+    let mut matches: Vec<(String, serde_json::Value)> = Vec::new();
 
-    let mut results = Vec::new();
-    while let Ok(Some(row)) = rows.next().await {
-        let content_type = row.get::<String>(4).ok();
-        if content_type.as_deref() == Some("application/x-directory") {
-            continue;
+    for idx in 0..crate::db::shards::NUM_SHARDS {
+        let table = crate::db::shards::shard_table_name(idx);
+        let sql = format!(
+            "SELECT bucket, key, size, modified_at, content_type
+             FROM {table}
+             WHERE is_latest = TRUE AND deleted_at IS NULL AND key LIKE ?1
+             ORDER BY modified_at DESC LIMIT 100"
+        );
+        let mut rows = conn
+            .query(&sql, params![pattern.as_str()])
+            .await
+            .map_err(|e| crate::error::DbError::Query(e.to_string()))?;
+
+        while let Ok(Some(row)) = rows.next().await {
+            let content_type = row.get::<String>(4).ok();
+            if content_type.as_deref() == Some("application/x-directory") {
+                continue;
+            }
+            let modified_at = row.get::<String>(3).unwrap_or_default();
+            matches.push((
+                modified_at.clone(),
+                json!({
+                    "Bucket": row.get::<String>(0).unwrap_or_default(),
+                    "Key": row.get::<String>(1).unwrap_or_default(),
+                    "Size": row.get::<i64>(2).unwrap_or(0),
+                    "ModTime": modified_at,
+                    "ContentType": content_type.unwrap_or_default(),
+                }),
+            ));
         }
-        results.push(json!({
-            "Bucket": row.get::<String>(0).unwrap_or_default(),
-            "Key": row.get::<String>(1).unwrap_or_default(),
-            "Size": row.get::<i64>(2).unwrap_or(0),
-            "ModTime": row.get::<String>(3).unwrap_or_default(),
-            "ContentType": content_type.unwrap_or_default(),
-        }));
     }
+
+    matches.sort_by(|a, b| b.0.cmp(&a.0));
+    let results: Vec<serde_json::Value> = matches.into_iter().take(100).map(|(_, v)| v).collect();
 
     Ok((StatusCode::OK, Json(results)).into_response())
 }

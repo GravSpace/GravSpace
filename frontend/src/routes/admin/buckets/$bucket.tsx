@@ -12,6 +12,7 @@ import { TagEditorDialog } from '../../../components/bucket/TagEditorDialog'
 import { ObjectLockDialog } from '../../../components/bucket/ObjectLockDialog'
 import { VersionExplorerDialog } from '../../../components/bucket/VersionExplorerDialog'
 import { BucketSettingsDialog } from '../../../components/bucket/BucketSettingsDialog'
+import { ConnectCodeDrawer } from '../../../components/bucket/ConnectCodeDrawer'
 import { BucketHeader } from '../../../components/bucket/BucketHeader'
 import { encKey } from '../../../components/bucket/bucketUploadHelpers'
 import { useBucketUploads } from '../../../components/bucket/useBucketUploads'
@@ -81,6 +82,7 @@ function BucketDetailPage() {
   const [lockObject, setLockObject] = useState<S3Object | null>(null)
   const [explorerObject, setExplorerObject] = useState<S3Object | null>(null)
   const [showBucketSettings, setShowBucketSettings] = useState(false)
+  const [showConnectDrawer, setShowConnectDrawer] = useState(false)
 
   const fetchObjects = useCallback(
     async (prefix = currentPrefix, versions = showVersions) => {
@@ -380,6 +382,7 @@ function BucketDetailPage() {
         onUploadFolderClick={() => folderInputRef.current?.click()}
         onSync={handleSyncBucket}
         onOpenSettings={() => setShowBucketSettings(true)}
+        onOpenConnectSDK={() => setShowConnectDrawer(true)}
         loading={loading}
         syncing={syncing}
         activeTransfersCount={activeTransfersCount}
@@ -484,6 +487,12 @@ function BucketDetailPage() {
         bucketName={bucketName} bucketInfo={bucketInfo}
         onInfoUpdated={() => { fetchBucketInfo(); fetchObjects() }}
         authFetch={authFetch} apiBase={API_BASE}
+      />
+
+      <ConnectCodeDrawer
+        open={showConnectDrawer}
+        onClose={() => setShowConnectDrawer(false)}
+        bucketName={bucketName}
       />
     </div>
   )
