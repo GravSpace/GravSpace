@@ -79,15 +79,15 @@ pub async fn start_federation_worker(storage: FileStorage) {
             Err(_) => continue,
         };
 
-        // 1. Heartbeat Phase: check health of remote peers every 10 seconds
-        if last_heartbeat_tick.elapsed() >= Duration::from_secs(10) {
+        // 1. Heartbeat Phase: check health of remote peers every 30 seconds
+        if last_heartbeat_tick.elapsed() >= Duration::from_secs(30) {
             last_heartbeat_tick = std::time::Instant::now();
             if let Ok(peers) = db::federation::list_remote_servers(&conn).await {
                 for peer in peers {
                     let health_url = format!("{}/health", peer.endpoint.trim_end_matches('/'));
                     let start = std::time::Instant::now();
                     let (status_str, latency) = match client.get(&health_url).send().await {
-                        Ok(resp) if resp.status().is_success() || resp.status() == 404 => {
+                        Ok(resp) if resp.status().is_success() => {
                             ("healthy".to_string(), start.elapsed().as_millis() as i64)
                         }
                         Ok(resp) => {
