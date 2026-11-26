@@ -22,6 +22,7 @@ pub mod webhooks;
 use crate::error::{AppError, DbError};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 pub use turso::{Builder, Connection, Database as TursoDb};
 
 #[derive(Clone)]
@@ -30,16 +31,13 @@ pub struct Database {
 }
 
 impl Database {
-    /// Open or create an embedded Turso database at `path_str`
+    /// Open or create an embedded Turso database at `path_str` with retry backoff on transient file locks
     pub async fn open_local(path_str: &str) -> Result<Self, AppError> {
         let path = Path::new(path_str);
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let db = Builder::new_local(path_str)
-            .build()
-            .await
-            .map_err(|e| DbError::Query(format!("Failed to open local db {path_str}: {e}")))?;
+        let db = open_with_retry(path_str).await?;
 
         let database = Self { db: Arc::new(db) };
         database.apply_pragmas().await?;
@@ -165,6 +163,33 @@ impl Database {
     }
 }
 
+async fn open_with_retry(path_str: &str) -> Result<TursoDb, AppError> {
+    const MAX_ATTEMPTS: usize = 10;
+    for attempt in 1..=MAX_ATTEMPTS {
+        match Builder::new_local(path_str).build().await {
+            Ok(db) => return Ok(db),
+            Err(e) => {
+                let msg = e.to_string();
+                if attempt < MAX_ATTEMPTS && is_transient_lock_error(&msg) {
+                    let delay_ms = (200 * attempt as u64).min(1000);
+                    tracing::warn!(
+                        "Database '{path_str}' temporarily locked on startup (attempt {attempt}/{MAX_ATTEMPTS}): {msg}. Retrying in {delay_ms}ms..."
+                    );
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                } else {
+                    return Err(DbError::Query(format!("Failed to open local db {path_str}: {msg}")).into());
+                }
+            }
+        }
+    }
+    Err(DbError::Query(format!("Exhausted retries opening local db {path_str}")).into())
+}
+
+fn is_transient_lock_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("busy") || lower.contains("locked")
+}
+
 async fn ensure_column_exists(
     conn: &Connection,
     table: &str,
@@ -192,7 +217,14 @@ async fn ensure_column_exists(
 
 #[cfg(test)]
 mod tests {
-    use super::Database;
+    use super::{is_transient_lock_error, Database};
+
+    #[test]
+    fn is_transient_lock_error_should_match_busy_and_locked() {
+        assert!(is_transient_lock_error("Database is busy"));
+        assert!(is_transient_lock_error("SQLITE_BUSY: database is locked"));
+        assert!(!is_transient_lock_error("no such table: foo"));
+    }
 
     #[tokio::test]
     async fn test_open_three_databases_and_checkpoint() {

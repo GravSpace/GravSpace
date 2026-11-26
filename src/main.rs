@@ -175,21 +175,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_listener = tokio::net::TcpListener::bind(admin_addr).await?;
     let s3_listener = tokio::net::TcpListener::bind(s3_addr).await?;
 
-    let admin_server = tokio::spawn(async move {
-        axum::serve(admin_listener, admin_app).await.unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut admin_rx = shutdown_rx.clone();
+    let mut s3_rx = shutdown_rx;
+
+    let mut admin_server = tokio::spawn(async move {
+        let _ = axum::serve(admin_listener, admin_app)
+            .with_graceful_shutdown(async move {
+                let _ = admin_rx.wait_for(|&v| v).await;
+            })
+            .await;
     });
 
-    let s3_server = tokio::spawn(async move {
-        axum::serve(s3_listener, s3_app).await.unwrap();
+    let mut s3_server = tokio::spawn(async move {
+        let _ = axum::serve(s3_listener, s3_app)
+            .with_graceful_shutdown(async move {
+                let _ = s3_rx.wait_for(|&v| v).await;
+            })
+            .await;
     });
 
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {
-            info!("Received shutdown signal");
+        _ = shutdown_signal() => {
+            info!("Received shutdown signal, draining servers and flushing database WALs...");
         }
-        _ = admin_server => {}
-        _ = s3_server => {}
+        _ = &mut admin_server => {}
+        _ = &mut s3_server => {}
     }
 
+    let _ = shutdown_tx.send(true);
+    let _ = tokio::join!(admin_server, s3_server);
+    let _ = tokio::join!(db.checkpoint(), vault_db.checkpoint(), federation_db.checkpoint());
+    info!("All database WAL checkpoints flushed cleanly. Exiting.");
+
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut sig) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            sig.recv().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }

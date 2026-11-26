@@ -15,8 +15,10 @@ services:
       # Required
       - JWT_SECRET=${JWT_SECRET}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
-      # Database (Optional - defaults to local SQLite)
-      - DATABASE_URL=${DATABASE_URL:-}
+      # Database (Embedded Turso Engine)
+      - DATABASE_URL=${DATABASE_URL:-./db/turso.db}
+      - VAULT_DATABASE_URL=${VAULT_DATABASE_URL:-./db/vault.db}
+      - FEDERATION_DATABASE_URL=${FEDERATION_DATABASE_URL:-./db/federation.db}
       - TURSO_DATABASE_URL=${TURSO_DATABASE_URL:-}
       - DATABASE_AUTH_TOKEN=${DATABASE_AUTH_TOKEN:-}
       - TURSO_AUTH_TOKEN=${TURSO_AUTH_TOKEN:-}
@@ -39,6 +41,7 @@ services:
       - gravspace-network
     depends_on:
       - redis
+    stop_grace_period: 30s
     healthcheck:
       test: ["CMD", "healthcheck"]
       interval: 30s

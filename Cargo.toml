@@ -6,7 +6,7 @@ members = [
 
 [package]
 name = "storage-server"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 default-run = "storage-server"
 
