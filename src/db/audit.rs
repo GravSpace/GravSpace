@@ -15,6 +15,7 @@ pub struct AuditLogRow {
     pub details: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_audit_log(
     conn: &Connection,
     username: Option<&str>,

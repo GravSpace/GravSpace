@@ -184,7 +184,18 @@ pub async fn ping_peer(
             let mut req = client.get(clean_s3);
             if !peer.access_key.is_empty() && !peer.secret_key.is_empty() {
                 req = crate::admin::s3_explorer_handlers::sign_s3_explorer_request(
-                    req, "GET", clean_s3, "/", "", &[], &peer.access_key, &peer.secret_key, "us-east-1", &[],
+                    req,
+                    &crate::admin::s3_explorer_handlers::S3ExplorerSignParams {
+                        method: "GET",
+                        endpoint: clean_s3,
+                        canonical_uri: "/",
+                        canonical_query: "",
+                        payload: &[],
+                        access_key: &peer.access_key,
+                        secret_key: &peer.secret_key,
+                        region: "us-east-1",
+                        extra_headers: &[],
+                    },
                 );
             }
             let s3_send = req.send().await;
@@ -314,5 +325,24 @@ mod router_tests {
             .unwrap();
         let tog_resp = app.clone().oneshot(tog_req).await.unwrap();
         assert_eq!(tog_resp.status(), StatusCode::OK);
+
+        // Security check: database-stats must require admin authentication
+        let unauth_stats = Request::builder()
+            .method("GET")
+            .uri("/api/admin/system/database-stats")
+            .body(Body::empty())
+            .unwrap();
+        let unauth_resp = app.clone().oneshot(unauth_stats).await.unwrap();
+        assert_eq!(unauth_resp.status(), StatusCode::UNAUTHORIZED);
+
+        // HttpOnly cookie session auth check
+        let cookie_stats = Request::builder()
+            .method("GET")
+            .uri("/api/admin/auth/session")
+            .header(header::COOKIE, format!("gravspace_session={jwt}"))
+            .body(Body::empty())
+            .unwrap();
+        let cookie_resp = app.oneshot(cookie_stats).await.unwrap();
+        assert_eq!(cookie_resp.status(), StatusCode::OK);
     }
 }

@@ -6,7 +6,7 @@ use bytes::Bytes;
 use futures_util::Stream;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 const STREAM_CHUNK_BYTES: usize = 65_536;
 
@@ -59,6 +59,7 @@ impl FileStorage {
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::fmt::Display,
     {
+        super::object_ops::validate_storage_path(bucket, key)?;
         let conn = self.db.conn()?;
         let is_versioning_enabled = db::buckets::get_bucket_versioning(&conn, bucket)
             .await
@@ -186,6 +187,7 @@ impl FileStorage {
         key: &str,
         version_id: Option<&str>,
     ) -> Result<Option<(PathBuf, i64, ObjectMeta)>, AppError> {
+        super::object_ops::validate_storage_path(bucket, key)?;
         let meta = self.stat_object(bucket, key, version_id).await?;
         if key.ends_with('/')
             || meta.content_type == "application/x-directory"
@@ -225,6 +227,48 @@ impl FileStorage {
     }
 }
 
+/// Parses an HTTP `Range: bytes=...` header against `total_len` and returns `(start, end_inclusive)`.
+pub fn parse_byte_range(range_header: &str, total_len: i64) -> Result<(u64, u64), AppError> {
+    if total_len <= 0 {
+        return Err(StorageError::InvalidRange.into());
+    }
+    let spec = range_header
+        .trim()
+        .strip_prefix("bytes=")
+        .ok_or(StorageError::InvalidRange)?;
+    if spec.contains(',') {
+        return Err(StorageError::InvalidRange.into());
+    }
+    let (start_s, end_s) = spec.split_once('-').ok_or(StorageError::InvalidRange)?;
+    let total_u64 = total_len as u64;
+
+    if start_s.is_empty() {
+        let suffix_len: u64 = end_s.trim().parse().map_err(|_| StorageError::InvalidRange)?;
+        if suffix_len == 0 {
+            return Err(StorageError::InvalidRange.into());
+        }
+        let start = total_u64.saturating_sub(suffix_len);
+        return Ok((start, total_u64 - 1));
+    }
+
+    let start: u64 = start_s.trim().parse().map_err(|_| StorageError::InvalidRange)?;
+    if start >= total_u64 {
+        return Err(StorageError::InvalidRange.into());
+    }
+
+    let end = if end_s.trim().is_empty() {
+        total_u64 - 1
+    } else {
+        let requested_end: u64 = end_s.trim().parse().map_err(|_| StorageError::InvalidRange)?;
+        requested_end.min(total_u64 - 1)
+    };
+
+    if start > end {
+        return Err(StorageError::InvalidRange.into());
+    }
+    Ok((start, end))
+}
+
 /// Streams a local file in 64 KiB chunks with constant memory usage.
 pub fn open_object_byte_stream(
     path: PathBuf,
@@ -239,5 +283,43 @@ pub fn open_object_byte_stream(
             }
             yield Bytes::copy_from_slice(&buf[..n]);
         }
+    }
+}
+
+/// Streams a specific byte slice `[start, start + length)` from disk in 64 KiB chunks.
+pub fn open_object_range_stream(
+    path: PathBuf,
+    start: u64,
+    length: u64,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
+    async_stream::try_stream! {
+        let mut file = tokio::fs::File::open(path).await?;
+        file.seek(std::io::SeekFrom::Start(start)).await?;
+        let mut remaining = length;
+        let mut buf = vec![0u8; STREAM_CHUNK_BYTES];
+        while remaining > 0 {
+            let to_read = (remaining as usize).min(buf.len());
+            let n = file.read(&mut buf[..to_read]).await?;
+            if n == 0 {
+                break;
+            }
+            remaining -= n as u64;
+            yield Bytes::copy_from_slice(&buf[..n]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_byte_range;
+
+    #[test]
+    fn parses_standard_open_and_suffix_byte_ranges() {
+        assert_eq!(parse_byte_range("bytes=0-9", 100).unwrap(), (0, 9));
+        assert_eq!(parse_byte_range("bytes=90-", 100).unwrap(), (90, 99));
+        assert_eq!(parse_byte_range("bytes=-10", 100).unwrap(), (90, 99));
+        assert_eq!(parse_byte_range("bytes=50-500", 100).unwrap(), (50, 99));
+        assert!(parse_byte_range("bytes=100-110", 100).is_err());
+        assert!(parse_byte_range("bytes=20-10", 100).is_err());
     }
 }

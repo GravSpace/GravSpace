@@ -1,9 +1,13 @@
 use super::multipart_handlers;
-use super::xml::s3_error;
-use crate::auth::middleware::verify_s3_request;
+use super::xml::{escape_xml, s3_error};
+use crate::auth::middleware::verify_s3_http;
 use crate::db;
-use crate::storage::FileStorage;
+use crate::storage::{
+    object_stream_ops::{open_object_byte_stream, open_object_range_stream, parse_byte_range},
+    FileStorage,
+};
 use axum::{
+    body::Body,
     extract::{Path, Request, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
@@ -14,16 +18,10 @@ pub async fn head_object(
     Path((bucket, key)): Path<(String, String)>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    let query_str = request.uri().query();
-
-    if let Err(e) = verify_s3_request(
+    if let Err(e) = verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        query_str,
-        headers,
+        &request,
         "s3:GetObject",
         &bucket,
         &key,
@@ -83,13 +81,10 @@ pub async fn get_object(
         "s3:GetObject"
     };
 
-    let username = match verify_s3_request(
+    let username = match verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
+        &request,
         action,
         &bucket,
         &key,
@@ -123,7 +118,9 @@ pub async fn get_object(
             if let Ok(tags) = db::objects::get_object_tagging(&conn, &bucket, obj.id).await {
                 for (k, v) in tags {
                     tags_xml.push_str(&format!(
-                        "        <Tag><Key>{k}</Key><Value>{v}</Value></Tag>\n"
+                        "        <Tag><Key>{}</Key><Value>{}</Value></Tag>\n",
+                        escape_xml(&k),
+                        escape_xml(&v),
                     ));
                 }
             }
@@ -132,11 +129,93 @@ pub async fn get_object(
         return (StatusCode::OK, [("content-type", "application/xml")], tags_xml).into_response();
     }
 
-    let range_header = headers.get(header::RANGE).and_then(|h| h.to_str().ok());
+    let range_header = headers
+        .get(header::RANGE)
+        .and_then(|h| h.to_str().ok())
+        .map(str::to_string);
     let version_id = get_query_param(query_str, "versionId");
 
+    if let Ok(Some((file_path, total_len, meta))) = storage
+        .resolve_raw_object_path(&bucket, &key, version_id.as_deref())
+        .await
+    {
+        let (status, content_range, content_len, body) = if let Some(ref rh) = range_header {
+            match parse_byte_range(rh, total_len) {
+                Ok((start, end)) => {
+                    let len = end - start + 1;
+                    (
+                        StatusCode::PARTIAL_CONTENT,
+                        Some(format!("bytes {start}-{end}/{total_len}")),
+                        len,
+                        Body::from_stream(open_object_range_stream(file_path, start, len)),
+                    )
+                }
+                Err(e) => return e.into_response(),
+            }
+        } else {
+            (
+                StatusCode::OK,
+                None,
+                total_len.max(0) as u64,
+                Body::from_stream(open_object_byte_stream(file_path)),
+            )
+        };
+
+        if let Some(ref audit) = storage.audit {
+            let audit_c = audit.clone();
+            let u = username.clone();
+            let b = bucket.clone();
+            let k = key.clone();
+            tokio::spawn(async move {
+                audit_c
+                    .log(Some(&u), "s3:GetObject", &format!("{b}/{k}"), "success", None, None, None)
+                    .await;
+            });
+        }
+
+        let mut res = Response::builder()
+            .status(status)
+            .body(body)
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        let res_headers = res.headers_mut();
+        res_headers.insert(header::ACCEPT_RANGES, header::HeaderValue::from_static("bytes"));
+        res_headers.insert(header::CONTENT_LENGTH, content_len.into());
+        if let Ok(v) = meta.content_type.parse() {
+            res_headers.insert(header::CONTENT_TYPE, v);
+        }
+        if let Ok(v) = meta.etag.parse() {
+            res_headers.insert(header::ETAG, v);
+        }
+        let http_date = crate::auth::signature::format_http_date(&meta.mod_time);
+        if let Ok(v) = http_date.parse() {
+            res_headers.insert(header::LAST_MODIFIED, v);
+        }
+        if !meta.version_id.is_empty() {
+            if let Ok(v) = meta.version_id.parse() {
+                res_headers.insert("x-amz-version-id", v);
+            }
+        }
+        if let Some(cr) = content_range {
+            if let Ok(v) = cr.parse() {
+                res_headers.insert(header::CONTENT_RANGE, v);
+            }
+        }
+        if let Some(disp) = get_query_param(query_str, "response-content-disposition") {
+            if let Ok(v) = disp.parse() {
+                res_headers.insert(header::CONTENT_DISPOSITION, v);
+            }
+        } else if get_query_param(query_str, "download").as_deref() == Some("true") {
+            let filename = key.split('/').next_back().unwrap_or(&key);
+            let disp = format!("attachment; filename=\"{filename}\"");
+            if let Ok(v) = disp.parse() {
+                res_headers.insert(header::CONTENT_DISPOSITION, v);
+            }
+        }
+        return res;
+    }
+
     match storage
-        .get_object(&bucket, &key, version_id.as_deref(), range_header)
+        .get_object(&bucket, &key, version_id.as_deref(), range_header.as_deref())
         .await
     {
         Ok((data, meta, content_range)) => {
@@ -191,7 +270,7 @@ pub async fn get_object(
                     res_headers.insert(header::CONTENT_DISPOSITION, v);
                 }
             } else if get_query_param(query_str, "download").as_deref() == Some("true") {
-                let filename = key.split('/').last().unwrap_or(&key);
+                let filename = key.split('/').next_back().unwrap_or(&key);
                 let disp = format!("attachment; filename=\"{filename}\"");
                 if let Ok(v) = disp.parse() {
                     res_headers.insert(header::CONTENT_DISPOSITION, v);
@@ -234,13 +313,10 @@ pub async fn put_object(
         "s3:PutObject"
     };
 
-    let username = match verify_s3_request(
+    let username = match verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(&query_str),
-        &headers,
+        &request,
         action,
         &bucket,
         &key,
@@ -349,13 +425,10 @@ pub async fn delete_object(
         .await;
     }
 
-    let username = match verify_s3_request(
+    let username = match verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
+        &request,
         "s3:DeleteObject",
         &bucket,
         &key,

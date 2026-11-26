@@ -242,6 +242,7 @@ pub async fn list_shares_for_source_bucket(
     Ok(list)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_share(
     conn: &Connection,
     name: &str,
@@ -290,6 +291,7 @@ pub async fn update_share_status(conn: &Connection, id: i64, status: &str) -> Re
 
 // ================= SYNC QUEUE OPERATIONS =================
 
+#[allow(clippy::too_many_arguments)]
 pub async fn enqueue_sync_item(
     conn: &Connection,
     share_id: i64,

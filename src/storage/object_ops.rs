@@ -27,6 +27,35 @@ fn is_compressible(mime: &str) -> bool {
         || mime == "image/svg+xml"
 }
 
+pub(crate) fn validate_bucket_name(bucket: &str) -> Result<(), AppError> {
+    if bucket.is_empty()
+        || bucket.len() > 63
+        || bucket.starts_with('.')
+        || bucket.contains('/')
+        || bucket.contains('\\')
+        || bucket.contains("..")
+        || bucket.contains('\0')
+    {
+        return Err(AppError::BadRequest("Invalid bucket name".to_string()));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_storage_path(bucket: &str, key: &str) -> Result<(), AppError> {
+    validate_bucket_name(bucket)?;
+    if key.contains('\\') || key.contains('\0') {
+        return Err(AppError::BadRequest("Invalid object key".to_string()));
+    }
+    for segment in key.trim_start_matches('/').split('/') {
+        if segment == ".." {
+            return Err(AppError::BadRequest(
+                "Invalid object key: path traversal is not allowed".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl FileStorage {
     pub fn object_path(&self, bucket: &str, key: &str, version_id: &str) -> PathBuf {
         let base = self.root.join(bucket).join(key.trim_start_matches('/'));
@@ -45,6 +74,7 @@ impl FileStorage {
         data: Vec<u8>,
         encryption: Option<&str>,
     ) -> Result<String, AppError> {
+        validate_storage_path(bucket, key)?;
         let conn = self.db.conn()?;
         let is_versioning_enabled = db::buckets::get_bucket_versioning(&conn, bucket)
             .await
@@ -244,6 +274,7 @@ impl FileStorage {
         version_id: Option<&str>,
         bypass_governance: bool,
     ) -> Result<(), AppError> {
+        validate_storage_path(bucket, key)?;
         let conn = self.db.conn()?;
         let vid = version_id.unwrap_or("");
 
@@ -390,5 +421,20 @@ impl FileStorage {
         let (data, meta, _) = self.get_object(src_bucket, src_key, None, None).await?;
         self.put_object(dst_bucket, dst_key, data, meta.encryption_type.as_deref())
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_bucket_name, validate_storage_path};
+
+    #[test]
+    fn rejects_path_traversal_and_invalid_bucket_or_key() {
+        assert!(validate_bucket_name("../etc").is_err());
+        assert!(validate_bucket_name(".hidden").is_err());
+        assert!(validate_storage_path("my-bucket", "../secret.txt").is_err());
+        assert!(validate_storage_path("my-bucket", "a/../../secret.txt").is_err());
+        assert!(validate_storage_path("my-bucket", "bad\\key").is_err());
+        assert!(validate_storage_path("my-bucket", "folder/file.txt").is_ok());
     }
 }

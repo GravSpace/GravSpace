@@ -6,9 +6,22 @@ use sha2::{Digest, Sha256};
 use crate::error::AppError;
 
 pub fn get_master_key() -> [u8; 32] {
-    let key_src = std::env::var("VAULT_MASTER_KEY")
-        .or_else(|_| std::env::var("JWT_SECRET"))
-        .unwrap_or_else(|_| "gravspace-default-vault-master-key-seed-32bytes".to_string());
+    let key_src = match std::env::var("VAULT_MASTER_KEY") {
+        Ok(val) if !val.trim().is_empty() => val,
+        _ => match std::env::var("JWT_SECRET") {
+            Ok(jwt) if !jwt.trim().is_empty() && jwt != "secret" => jwt,
+            _ => {
+                if matches!(
+                    std::env::var("GRAVSPACE_STRICT_SECRETS").as_deref(),
+                    Ok("1") | Ok("true") | Ok("yes")
+                ) {
+                    panic!("GRAVSPACE_STRICT_SECRETS=true requires VAULT_MASTER_KEY");
+                }
+                tracing::warn!("Security warning: VAULT_MASTER_KEY not set; falling back to default seed");
+                "gravspace-default-vault-master-key-seed-32bytes".to_string()
+            }
+        },
+    };
 
     let mut hasher = Sha256::new();
     hasher.update(key_src.as_bytes());

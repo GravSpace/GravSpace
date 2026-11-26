@@ -157,7 +157,7 @@ pub async fn stream_audit_logs(
         return Err(crate::error::AuthError::TokenInvalid.into());
     }
 
-    // Fallback: check ?token=... or Authorization header
+    // Fallback: check ?token=..., Authorization header, or HttpOnly session cookie
     let token = if let Some(t) = params.get("token") {
         t.clone()
     } else if let Some(auth) = headers
@@ -166,7 +166,7 @@ pub async fn stream_audit_logs(
     {
         auth.strip_prefix("Bearer ").unwrap_or(auth).to_string()
     } else {
-        String::new()
+        crate::auth::middleware::extract_cookie(&headers, "gravspace_session").unwrap_or_default()
     };
 
     if token.is_empty() {

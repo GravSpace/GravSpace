@@ -13,6 +13,7 @@ pub enum TransferOutcome {
 }
 
 /// Signs an S3 HTTP request using AWS SigV4, supporting optional canonical query string parameters.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sign_s3_request(
     builder: reqwest::RequestBuilder,
     method: &str,

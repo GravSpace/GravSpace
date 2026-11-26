@@ -1,10 +1,10 @@
-use crate::auth::signature::{calculate_signature, uri_encode};
+use crate::auth::signature::{calculate_signature, sha256_hex, uri_encode};
 use crate::db;
 use crate::error::AppError;
 use crate::storage::FileStorage;
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -54,43 +54,69 @@ pub struct GeneratePresignQuery {
     pub key: String,
     pub expires: Option<i64>,
     pub method: Option<String>,
+    pub allowed_ip: Option<String>,
+    pub one_time_use: Option<bool>,
 }
 
-pub async fn generate_presign_url(
-    State(storage): State<FileStorage>,
-    Query(query): Query<GeneratePresignQuery>,
-) -> Result<Response, AppError> {
-    let expires_in = query.expires.unwrap_or(3600);
-    let method = query
-        .method
-        .map(|m| m.to_uppercase())
-        .unwrap_or_else(|| "GET".to_string());
+pub(crate) struct PresignRequestSpec<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub method: &'a str,
+    pub expires_secs: i64,
+    pub allowed_ip: Option<&'a str>,
+    pub one_time_use: bool,
+}
+
+fn resolve_presign_scheme_and_host(storage: &FileStorage, headers: &HeaderMap) -> (&'static str, String) {
+    let raw_host = storage.config.server_host.trim();
+    if let Some(rest) = raw_host.strip_prefix("https://") {
+        return ("https", rest.trim_end_matches('/').to_string());
+    }
+    if let Some(rest) = raw_host.strip_prefix("http://") {
+        return ("http", rest.trim_end_matches('/').to_string());
+    }
+    let host = if raw_host.is_empty() {
+        format!("localhost:{}", storage.config.s3_port)
+    } else {
+        raw_host.trim_end_matches('/').to_string()
+    };
+    let is_https = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|p| p.eq_ignore_ascii_case("https"));
+    (if is_https { "https" } else { "http" }, host)
+}
+
+pub(crate) async fn build_and_store_presigned_url(
+    storage: &FileStorage,
+    headers: &HeaderMap,
+    spec: PresignRequestSpec<'_>,
+) -> Result<String, AppError> {
+    let expires_in = spec.expires_secs.clamp(1, 604_800);
+    let method = spec.method.trim().to_uppercase();
+    let method = if method.is_empty() { "GET" } else { method.as_str() };
+
     let now = Utc::now();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let date_stamp = now.format("%Y%m%d").to_string();
-
-    let host = if storage.config.server_host.is_empty() {
-        format!("localhost:{}", storage.config.s3_port)
-    } else {
-        storage.config.server_host.clone()
-    };
+    let (scheme, host) = resolve_presign_scheme_and_host(storage, headers);
 
     let conn = storage.db.conn()?;
     let admin_key = db::users::list_access_keys(&conn, "admin")
         .await?
         .into_iter()
         .next()
-        .unwrap_or(db::users::AccessKeyRecord {
-            access_key_id: "admin".to_string(),
-            secret_access_key: "admin".to_string(),
-            username: "admin".to_string(),
-            created_at: String::new(),
-        });
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "No active S3 access key found for user 'admin'; generate an access key first."
+                    .to_string(),
+            )
+        })?;
 
     let credential = format!("{}/{date_stamp}/us-east-1/s3/aws4_request", admin_key.access_key_id);
-    let path = format!("/{}/{}", query.bucket, query.key.trim_start_matches('/'));
+    let path = format!("/{}/{}", spec.bucket, spec.key.trim_start_matches('/'));
 
-    let mut query_params = vec![
+    let mut query_params = [
         ("X-Amz-Algorithm", "AWS4-HMAC-SHA256".to_string()),
         ("X-Amz-Credential", credential),
         ("X-Amz-Date", amz_date.clone()),
@@ -99,11 +125,11 @@ pub async fn generate_presign_url(
     ];
     query_params.sort_by(|a, b| a.0.cmp(b.0));
 
-    let canonical_query: Vec<String> = query_params
+    let canonical_query_str: String = query_params
         .iter()
         .map(|(k, v)| format!("{}={}", uri_encode(k, true), uri_encode(v, true)))
-        .collect();
-    let canonical_query_str = canonical_query.join("&");
+        .collect::<Vec<_>>()
+        .join("&");
 
     let canonical_headers = format!("host:{host}\n");
     let canonical_request = format!(
@@ -112,7 +138,7 @@ pub async fn generate_presign_url(
 
     let string_to_sign = format!(
         "AWS4-HMAC-SHA256\n{amz_date}\n{date_stamp}/us-east-1/s3/aws4_request\n{}",
-        crate::auth::signature::sha256_hex(canonical_request.as_bytes())
+        sha256_hex(canonical_request.as_bytes())
     );
 
     let signature = calculate_signature(
@@ -123,21 +149,44 @@ pub async fn generate_presign_url(
         &string_to_sign,
     );
 
-    let presigned_url = format!("http://{host}{path}?{canonical_query_str}&X-Amz-Signature={signature}");
+    let presigned_url =
+        format!("{scheme}://{host}{path}?{canonical_query_str}&X-Amz-Signature={signature}");
 
     let expires_at = (now + chrono::Duration::seconds(expires_in)).to_rfc3339();
-    let _ = db::presign::create_presigned_url(
+    db::presign::create_presigned_url(
         &conn,
-        &query.bucket,
-        &query.key,
+        spec.bucket,
+        spec.key,
         &presigned_url,
         &signature,
-        &method,
+        method,
         &expires_at,
-        None,
-        false,
+        spec.allowed_ip.filter(|ip| !ip.trim().is_empty()),
+        spec.one_time_use,
     )
-    .await;
+    .await?;
+
+    Ok(presigned_url)
+}
+
+pub async fn generate_presign_url(
+    State(storage): State<FileStorage>,
+    headers: HeaderMap,
+    Query(query): Query<GeneratePresignQuery>,
+) -> Result<Response, AppError> {
+    let presigned_url = build_and_store_presigned_url(
+        &storage,
+        &headers,
+        PresignRequestSpec {
+            bucket: &query.bucket,
+            key: &query.key,
+            method: query.method.as_deref().unwrap_or("GET"),
+            expires_secs: query.expires.unwrap_or(3600),
+            allowed_ip: query.allowed_ip.as_deref(),
+            one_time_use: query.one_time_use.unwrap_or(false),
+        },
+    )
+    .await?;
 
     Ok((StatusCode::OK, Json(json!({ "url": presigned_url }))).into_response())
 }

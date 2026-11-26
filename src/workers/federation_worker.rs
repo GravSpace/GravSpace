@@ -106,15 +106,12 @@ async fn run_heartbeat_phase(
                 .reconcile_all_enabled_shares(Some(peer.id))
                 .await
                 .unwrap_or(0);
-            if expedited > 0 || reconciled > 0 {
+            let pulled = run_two_way_pull_sync(storage, conn, transfer_client, Some(peer.id)).await;
+            if expedited > 0 || reconciled > 0 || pulled > 0 {
                 info!(
-                    "Peer '{}' recovered from '{prev_status}' -> expedited {expedited} queued + reconciled {reconciled} drifted items",
+                    "Peer '{}' recovered from '{prev_status}' -> expedited {expedited} queued + reconciled {reconciled} + pulled {pulled} remote items",
                     peer.name
                 );
-            }
-            let pulled = run_two_way_pull_sync(storage, conn, transfer_client, Some(peer.id)).await;
-            if pulled > 0 {
-                info!("Peer '{}' recovery two-way pull fetched {pulled} remote objects", peer.name);
             }
         }
     }
@@ -189,7 +186,10 @@ async fn drain_queue_phase(
                     "queue_updated",
                     serde_json::json!({ "id": item.id, "share_id": share.id, "status": "completed" }),
                 );
-                debug!("Sync completed for {} -> {}", item.source_key, item.target_key);
+                debug!(
+                    "Sync completed for {} -> {}",
+                    item.source_key, item.target_key
+                );
             }
             outcome => {
                 let (err_msg, is_permanent, is_unreachable) = match outcome {
@@ -200,7 +200,10 @@ async fn drain_queue_phase(
                 };
                 let attempts = item.attempts + 1;
                 let exp_delay = (2_i64.pow(attempts.min(7) as u32) * 2).min(300);
-                warn!("Sync failed for item #{}: {err_msg}, next_delay={exp_delay}s", item.id);
+                warn!(
+                    "Sync failed for item #{}: {err_msg}, next_delay={exp_delay}s",
+                    item.id
+                );
                 let final_status = db::federation_recovery::mark_item_retry_or_failed(
                     conn,
                     item.id,
@@ -214,8 +217,8 @@ async fn drain_queue_phase(
                 .unwrap_or("pending");
                 let _ = db::federation::update_share_status(conn, share.id, "pending_retry").await;
                 if is_unreachable {
-                    let _ = db::federation::update_server_status(conn, peer.id, "unreachable", 0)
-                        .await;
+                    let _ =
+                        db::federation::update_server_status(conn, peer.id, "unreachable", 0).await;
                     peer_state_cache.insert(peer.id, ("unreachable".to_string(), Instant::now()));
                 }
                 broadcast_federation_event(
@@ -255,17 +258,19 @@ pub async fn start_federation_worker(storage: FileStorage) {
     let mut event_rx = get_federation_tx().subscribe();
 
     loop {
-        let mut pull_on_event = false;
+        let mut trigger_two_way_pull = false;
         tokio::select! {
             _ = interval.tick() => {},
             res = event_rx.recv() => {
                 match res {
                     Ok(msg) => {
                         if msg.contains("shares_changed")
-                            && (msg.contains("created") || msg.contains("updated") || msg.contains("reconciled"))
+                            && (msg.contains("created") || msg.contains("updated"))
                         {
                             let _ = storage.reconcile_all_enabled_shares(None).await;
-                            pull_on_event = true;
+                            trigger_two_way_pull = true;
+                        } else if msg.contains("shares_changed") && msg.contains("reconciled") {
+                            trigger_two_way_pull = true;
                         } else if !msg.contains("queue_enqueued")
                             && !msg.contains("reconciled")
                             && !msg.contains("retry")
@@ -287,10 +292,17 @@ pub async fn start_federation_worker(storage: FileStorage) {
 
         if last_heartbeat_tick.elapsed() >= HEARTBEAT_INTERVAL {
             last_heartbeat_tick = Instant::now();
-            run_heartbeat_phase(&storage, &conn, &probe_client, &transfer_client, &mut peer_state_cache).await;
+            run_heartbeat_phase(
+                &storage,
+                &conn,
+                &probe_client,
+                &transfer_client,
+                &mut peer_state_cache,
+            )
+            .await;
         }
 
-        if pull_on_event || last_reconcile_tick.elapsed() >= SAFETY_RECONCILE_INTERVAL {
+        if trigger_two_way_pull || last_reconcile_tick.elapsed() >= SAFETY_RECONCILE_INTERVAL {
             if last_reconcile_tick.elapsed() >= SAFETY_RECONCILE_INTERVAL {
                 last_reconcile_tick = Instant::now();
                 if let Err(e) = storage.reconcile_all_enabled_shares(None).await {

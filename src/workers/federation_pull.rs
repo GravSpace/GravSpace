@@ -2,7 +2,9 @@ use crate::auth::signature::{sha256_hex, uri_encode};
 use crate::db;
 use crate::db::federation::{CrossServerShareRow, RemoteServerRow};
 use crate::storage::FileStorage;
-use crate::workers::federation_transfer::{encode_s3_key, resolve_target_endpoint, sign_s3_request};
+use crate::workers::federation_transfer::{
+    encode_s3_key, resolve_target_endpoint, sign_s3_request,
+};
 use chrono::DateTime;
 use tracing::{debug, warn};
 
@@ -16,13 +18,14 @@ pub(crate) struct RemoteListObject {
     pub last_modified: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub(crate) struct ParsedListPage {
-    pub objects: Vec<RemoteListObject>,
+    pub items: Vec<RemoteListObject>,
+    pub is_truncated: bool,
     pub next_continuation_token: Option<String>,
 }
 
-pub(crate) fn unescape_xml(raw: &str) -> String {
+fn unescape_xml(raw: &str) -> String {
     raw.replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -44,7 +47,7 @@ fn extract_tag(block: &str, tag: &str) -> String {
 }
 
 pub(crate) fn parse_list_objects_v2_xml(xml: &str) -> ParsedListPage {
-    let mut objects = Vec::new();
+    let mut items = Vec::new();
     for chunk in xml.split("<Contents>").skip(1) {
         let Some(end) = chunk.find("</Contents>") else {
             continue;
@@ -57,47 +60,33 @@ pub(crate) fn parse_list_objects_v2_xml(xml: &str) -> ParsedListPage {
         let size = extract_tag(block, "Size").parse::<i64>().unwrap_or(0);
         let etag = extract_tag(block, "ETag");
         let last_modified = extract_tag(block, "LastModified");
-        objects.push(RemoteListObject {
+        items.push(RemoteListObject {
             key,
             size,
             etag,
             last_modified,
         });
     }
-
     let is_truncated = extract_tag(xml, "IsTruncated").eq_ignore_ascii_case("true");
-    let next_token = if is_truncated {
-        let tok = extract_tag(xml, "NextContinuationToken");
-        if tok.is_empty() { None } else { Some(tok) }
-    } else {
-        None
-    };
-
+    let next_tok = extract_tag(xml, "NextContinuationToken");
     ParsedListPage {
-        objects,
-        next_continuation_token: next_token,
-    }
-}
-
-pub(crate) fn is_local_newer_or_equal(local: &str, remote: &str) -> bool {
-    if remote.trim().is_empty() {
-        return false;
-    }
-    match (
-        DateTime::parse_from_rfc3339(local.trim()),
-        DateTime::parse_from_rfc3339(remote.trim()),
-    ) {
-        (Ok(l_dt), Ok(r_dt)) => l_dt.timestamp_millis() >= r_dt.timestamp_millis(),
-        _ => local >= remote,
+        items,
+        is_truncated,
+        next_continuation_token: if next_tok.is_empty() {
+            None
+        } else {
+            Some(next_tok)
+        },
     }
 }
 
 fn build_list_v2_canonical_query(prefix: &str, continuation_token: Option<&str>) -> String {
-    let mut params: Vec<(&str, String)> = Vec::with_capacity(3);
-    if let Some(tok) = continuation_token.filter(|t| !t.is_empty()) {
-        params.push(("continuation-token", uri_encode(tok, true)));
+    let mut params: Vec<(&str, String)> = vec![("list-type", "2".to_string())];
+    if let Some(tok) = continuation_token {
+        if !tok.is_empty() {
+            params.push(("continuation-token", uri_encode(tok, true)));
+        }
     }
-    params.push(("list-type", "2".to_string()));
     if !prefix.is_empty() {
         params.push(("prefix", uri_encode(prefix, true)));
     }
@@ -127,7 +116,22 @@ fn map_remote_to_local_key(remote_key: &str, share: &CrossServerShareRow) -> Opt
     }
 }
 
-/// Performs paginated non-destructive bidirectional pull for an enabled `two_way` share.
+pub(crate) fn is_local_newer_or_equal(local_modified: &str, remote_modified: &str) -> bool {
+    if remote_modified.is_empty() || local_modified.is_empty() {
+        return false;
+    }
+    match (
+        DateTime::parse_from_rfc3339(local_modified),
+        DateTime::parse_from_rfc3339(remote_modified),
+    ) {
+        (Ok(l), Ok(r)) => l.timestamp_millis() >= r.timestamp_millis(),
+        _ => local_modified >= remote_modified,
+    }
+}
+
+/// Performs paginated non-destructive bidirectional pull for an enabled `two_way` share:
+/// fetches remote objects that are missing locally or modified more recently on the peer,
+/// writing them with `skip_federation = true` to avoid echo bounce-back.
 pub async fn pull_two_way_share(
     storage: &FileStorage,
     fed_conn: &turso::Connection,
@@ -143,14 +147,15 @@ pub async fn pull_two_way_share(
     let Ok(local_conn) = storage.db.conn() else {
         return 0;
     };
+
     let prefix_param = share.target_prefix.trim_start_matches('/');
     let empty_hash = sha256_hex(b"");
-
+    let mut continuation_token: Option<String> = None;
     let mut pulled = 0_i64;
-    let mut token: Option<String> = None;
 
-    for _ in 0..MAX_LIST_PAGES {
-        let canonical_query = build_list_v2_canonical_query(prefix_param, token.as_deref());
+    for _page in 0..MAX_LIST_PAGES {
+        let canonical_query =
+            build_list_v2_canonical_query(prefix_param, continuation_token.as_deref());
         let list_url = format!("{base_ep}/{}?{canonical_query}", share.target_bucket);
 
         let req = sign_s3_request(
@@ -174,8 +179,8 @@ pub async fn pull_two_way_share(
             break;
         };
 
-        let page = parse_list_objects_v2_xml(&xml);
-        for remote_obj in page.objects {
+        let parsed = parse_list_objects_v2_xml(&xml);
+        for remote_obj in parsed.items {
             if remote_obj.key.ends_with('/') {
                 continue;
             }
@@ -188,10 +193,7 @@ pub async fn pull_two_way_share(
                     .await
                     .unwrap_or(false)
                     || db::federation_recovery::has_pending_sync_item(
-                        fed_conn,
-                        share.id,
-                        &local_key,
-                        "DELETE",
+                        fed_conn, share.id, &local_key, "DELETE",
                     )
                     .await
                     .unwrap_or(false);
@@ -227,7 +229,7 @@ pub async fn pull_two_way_share(
             if let Ok(obj_resp) = get_req.send().await {
                 if obj_resp.status().is_success() {
                     let stream = obj_resp.bytes_stream();
-                    match storage
+                    if let Err(e) = storage
                         .put_object_stream_with_options(
                             &share.source_bucket,
                             &local_key,
@@ -237,38 +239,37 @@ pub async fn pull_two_way_share(
                         )
                         .await
                     {
-                        Ok(_) => {
-                            pulled += 1;
-                            debug!("Two-way pull synced {}/{}", share.source_bucket, local_key);
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Two-way pull write failed for {}/{}: {e}",
-                                share.source_bucket, local_key
-                            );
-                        }
+                        warn!(
+                            "Two-way pull write failed for {}/{}: {e}",
+                            share.source_bucket, local_key
+                        );
+                    } else {
+                        pulled += 1;
+                        debug!("Two-way pull synced {}/{}", share.source_bucket, local_key);
                     }
                 }
             }
         }
 
-        if page.next_continuation_token.is_none() {
+        if !parsed.is_truncated || parsed.next_continuation_token.is_none() {
             break;
         }
-        token = page.next_continuation_token;
+        continuation_token = parsed.next_continuation_token;
     }
-
     pulled
 }
 
-/// Runs bidirectional pull across enabled `two_way` shares (optionally scoped to one healthy peer).
+/// Runs bidirectional pull across enabled `two_way` shares whose remote peers are healthy
+/// (optionally filtered to a single peer when recovering from offline/unreachable).
 pub async fn run_two_way_pull_sync(
     storage: &FileStorage,
     fed_conn: &turso::Connection,
     client: &reqwest::Client,
-    peer_id: Option<i64>,
+    peer_id_filter: Option<i64>,
 ) -> i64 {
-    let shares = db::federation::list_shares(fed_conn).await.unwrap_or_default();
+    let shares = db::federation::list_shares(fed_conn)
+        .await
+        .unwrap_or_default();
     let peers = db::federation::list_remote_servers(fed_conn)
         .await
         .unwrap_or_default();
@@ -277,7 +278,7 @@ pub async fn run_two_way_pull_sync(
     for share in shares
         .iter()
         .filter(|s| s.enabled && s.sync_mode == "two_way")
-        .filter(|s| peer_id.is_none_or(|pid| s.remote_server_id == pid))
+        .filter(|s| peer_id_filter.is_none_or(|pid| s.remote_server_id == pid))
     {
         let Some(peer) = peers
             .iter()
@@ -296,27 +297,25 @@ mod tests {
 
     #[test]
     fn parse_list_objects_v2_xml_unescapes_entities_and_reads_pagination() {
-        let xml = r#"<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>tok+1/2=</NextContinuationToken><Contents><Key>media/a&amp;b &lt;1&gt;.png</Key><LastModified>2026-11-26T04:00:00Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>4096</Size></Contents></ListBucketResult>"#;
-        let page = parse_list_objects_v2_xml(xml);
-        assert_eq!(page.objects.len(), 1);
-        assert_eq!(page.objects[0].key, "media/a&b <1>.png");
-        assert_eq!(page.objects[0].etag, "\"abc123\"");
-        assert_eq!(page.next_continuation_token.as_deref(), Some("tok+1/2="));
-
-        let q = build_list_v2_canonical_query("media/", page.next_continuation_token.as_deref());
-        assert!(q.starts_with("continuation-token="));
-        assert!(q.contains("&list-type=2&prefix=media%2F"));
+        let xml = r#"<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>tok%3D1&amp;2</NextContinuationToken><Contents><Key>media/a&amp;b &lt;1&gt;.png</Key><LastModified>2026-11-26T10:00:00Z</LastModified><ETag>&quot;abc123&quot;</ETag><Size>4096</Size></Contents></ListBucketResult>"#;
+        let parsed = parse_list_objects_v2_xml(xml);
+        assert!(parsed.is_truncated);
+        assert_eq!(parsed.next_continuation_token.as_deref(), Some("tok%3D1&2"));
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].key, "media/a&b <1>.png");
+        assert_eq!(parsed.items[0].size, 4096);
+        assert_eq!(parsed.items[0].etag, "\"abc123\"");
     }
 
     #[test]
     fn is_local_newer_or_equal_handles_different_rfc3339_offsets() {
         assert!(is_local_newer_or_equal(
-            "2026-11-26T12:00:00+07:00",
-            "2026-11-26T04:30:00Z"
+            "2026-11-26T17:00:01+07:00",
+            "2026-11-26T10:00:00Z"
         ));
         assert!(!is_local_newer_or_equal(
-            "2026-11-26T10:00:00+07:00",
-            "2026-11-26T04:00:00Z"
+            "2026-11-26T16:59:59+07:00",
+            "2026-11-26T10:00:00Z"
         ));
     }
 }

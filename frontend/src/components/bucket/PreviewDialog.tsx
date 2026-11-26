@@ -3,7 +3,6 @@ import { Download, Loader2, Copy, Check, FileText, Edit3, Save, X, ExternalLink,
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
-import { useAuth } from '../../hooks/useAuth'
 import type { S3Object } from '../../routes/admin/buckets/$bucket'
 import { toast } from 'sonner'
 import {
@@ -25,7 +24,6 @@ interface Props {
 }
 
 export function PreviewDialog({ object, bucketName, onClose, onDownload, authFetch, apiBase }: Props) {
-  const { authState } = useAuth()
   const [blobUrl, setBlobUrl] = useState<string | null>(null)
   const [textContent, setTextContent] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -39,10 +37,7 @@ export function PreviewDialog({ object, bucketName, onClose, onDownload, authFet
   const lineNumbersRef = useRef<HTMLDivElement>(null)
   const previewScrollRef = useRef<HTMLDivElement>(null)
 
-  const token = authState?.token || ''
-  const directUrl = `${apiBase}/admin/buckets/${bucketName}/objects/${encKey(object.Key)}${
-    token ? `?token=${encodeURIComponent(token)}` : ''
-  }`
+  const directUrl = `${apiBase}/admin/buckets/${bucketName}/objects/${encKey(object.Key)}`
 
   useEffect(() => {
     const load = async () => {

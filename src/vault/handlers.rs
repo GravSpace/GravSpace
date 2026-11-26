@@ -1,9 +1,10 @@
+use crate::auth::middleware::AuthContext;
 use crate::db;
 use crate::error::AppError;
 use crate::storage::FileStorage;
 use crate::vault::{crypto, pam};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
@@ -11,7 +12,6 @@ use axum::{
 use chrono::Duration;
 use serde::Deserialize;
 use serde_json::json;
-use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub struct ListSecretsQuery {
@@ -23,6 +23,7 @@ pub struct ListSecretsQuery {
 
 pub async fn list_secrets(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Query(q): Query<ListSecretsQuery>,
 ) -> Result<Response, AppError> {
     let conn = storage.vault_conn()?;
@@ -37,9 +38,10 @@ pub async fn list_secrets(
 
     let mut result = Vec::new();
     for s in secrets {
-        let has_grant = db::vault::check_active_pam_grant(&conn, "admin", Some(&s.id), &s.environment)
-            .await
-            .unwrap_or(false);
+        let has_grant =
+            db::vault::check_active_pam_grant(&conn, &ctx.username, Some(&s.id), &s.environment)
+                .await
+                .unwrap_or(false);
 
         let tags_vec: Vec<String> = s
             .tags
@@ -93,6 +95,7 @@ pub struct CreateSecretPayload {
 
 pub async fn create_secret(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Json(payload): Json<CreateSecretPayload>,
 ) -> Result<Response, AppError> {
     let conn = storage.vault_conn()?;
@@ -125,7 +128,7 @@ pub async fn create_secret(
         encrypted_value: encrypted,
         metadata_json: meta_str,
         requires_approval: payload.requires_approval.unwrap_or(false),
-        created_by: Some("admin".to_string()),
+        created_by: Some(ctx.username.clone()),
         created_at: String::new(),
         updated_at: String::new(),
     };
@@ -136,6 +139,7 @@ pub async fn create_secret(
 
 pub async fn reveal_secret(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
     let conn = storage.vault_conn()?;
@@ -144,12 +148,26 @@ pub async fn reveal_secret(
         .ok_or_else(|| AppError::NotFound(format!("Secret {id} not found")))?;
 
     // PAM & Access Control Check
-    let decision = pam::evaluate_reveal_access(&conn, "admin", &secret).await?;
+    let decision = pam::evaluate_reveal_access(&conn, &ctx.username, &secret).await?;
     match decision {
         pam::AccessDecision::Allowed => {
             let plaintext_bytes = crypto::decrypt_secret(&secret.encrypted_value)?;
             let plaintext = String::from_utf8(plaintext_bytes)
                 .map_err(|_| AppError::Internal("Decrypted data is not valid UTF-8".to_string()))?;
+
+            if let Some(ref audit) = storage.audit {
+                audit
+                    .log(
+                        Some(&ctx.username),
+                        "vault:RevealSecret",
+                        &format!("{}/{}", secret.environment, secret.name),
+                        "success",
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
+            }
 
             Ok((
                 StatusCode::OK,
@@ -183,6 +201,7 @@ pub struct UpdateSecretPayload {
 
 pub async fn update_secret(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Path(id): Path<String>,
     Json(payload): Json<UpdateSecretPayload>,
 ) -> Result<Response, AppError> {
@@ -218,9 +237,22 @@ pub async fn update_secret(
             &encrypted,
             meta_str.as_deref(),
             payload.comment.as_deref(),
-            Some("admin"),
+            Some(&ctx.username),
         )
         .await?;
+        if let Some(ref audit) = storage.audit {
+            audit
+                .log(
+                    Some(&ctx.username),
+                    "vault:RotateSecret",
+                    &format!("{}/{}", secret.environment, secret.name),
+                    "success",
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        }
     }
 
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
@@ -281,6 +313,7 @@ pub struct CreateAccessRequestPayload {
 
 pub async fn create_access_request(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Json(payload): Json<CreateAccessRequestPayload>,
 ) -> Result<Response, AppError> {
     let conn = storage.vault_conn()?;
@@ -289,7 +322,7 @@ pub async fn create_access_request(
         id: id.clone(),
         secret_id: payload.secret_id,
         environment: payload.environment,
-        requester: "admin".to_string(),
+        requester: ctx.username,
         justification: payload.justification,
         requested_duration_minutes: payload.requested_duration_minutes.unwrap_or(60),
         status: "pending".to_string(),
@@ -351,6 +384,7 @@ pub struct ReviewAccessRequestPayload {
 
 pub async fn approve_access_request(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Path(id): Path<String>,
     Json(payload): Json<ReviewAccessRequestPayload>,
 ) -> Result<Response, AppError> {
@@ -367,17 +401,32 @@ pub async fn approve_access_request(
         &conn,
         &id,
         "approved",
-        "admin",
+        &ctx.username,
         payload.comment.as_deref(),
         Some(&granted_str),
     )
     .await?;
+
+    if let Some(ref audit) = storage.audit {
+        audit
+            .log(
+                Some(&ctx.username),
+                "vault:ApproveAccess",
+                &id,
+                "success",
+                None,
+                None,
+                None,
+            )
+            .await;
+    }
 
     Ok((StatusCode::OK, Json(json!({ "success": true, "access_granted_until": granted_str }))).into_response())
 }
 
 pub async fn reject_access_request(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Path(id): Path<String>,
     Json(payload): Json<ReviewAccessRequestPayload>,
 ) -> Result<Response, AppError> {
@@ -386,83 +435,25 @@ pub async fn reject_access_request(
         &conn,
         &id,
         "rejected",
-        "admin",
+        &ctx.username,
         payload.comment.as_deref(),
         None,
     )
     .await?;
+    if let Some(ref audit) = storage.audit {
+        audit
+            .log(
+                Some(&ctx.username),
+                "vault:RejectAccess",
+                &id,
+                "success",
+                None,
+                None,
+                None,
+            )
+            .await;
+    }
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
 }
 
-// Bulk Import & Export
-#[derive(Deserialize)]
-pub struct ImportSecretsPayload {
-    pub project_id: Option<String>,
-    pub environment: String,
-    pub raw_env: Option<String>,
-    pub key_values: Option<HashMap<String, String>>,
-}
-
-pub async fn import_secrets(
-    State(storage): State<FileStorage>,
-    Json(payload): Json<ImportSecretsPayload>,
-) -> Result<Response, AppError> {
-    let conn = storage.vault_conn()?;
-    let mut imported = 0;
-    let project_id = payload.project_id.unwrap_or_else(|| "default".to_string());
-
-    let mut map = payload.key_values.unwrap_or_default();
-    if let Some(raw) = payload.raw_env {
-        for line in raw.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                continue;
-            }
-            if let Some((k, v)) = trimmed.split_once('=') {
-                let key = k.trim().to_string();
-                let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-                if !key.is_empty() {
-                    map.insert(key, val);
-                }
-            }
-        }
-    }
-
-    for (k, v) in map {
-        let encrypted = crypto::encrypt_secret(v.as_bytes())?;
-        if let Ok(Some(existing)) = db::vault::get_secret_by_name(&conn, Some(&project_id), &payload.environment, &k).await {
-            let next_v = existing.current_version + 1;
-            let _ = db::vault::update_secret_value(
-                &conn,
-                &existing.id,
-                next_v,
-                &encrypted,
-                None,
-                Some("Bulk import update"),
-                Some("admin"),
-            )
-            .await;
-        } else {
-            let row = db::vault::VaultSecretRow {
-                id: uuid::Uuid::new_v4().to_string(),
-                project_id: project_id.clone(),
-                name: k,
-                environment: payload.environment.clone(),
-                secret_type: "kv".to_string(),
-                description: Some("Imported from .env".to_string()),
-                tags: None,
-                current_version: 1,
-                encrypted_value: encrypted,
-                metadata_json: None,
-                requires_approval: false,
-                created_by: Some("admin".to_string()),
-                created_at: String::new(),
-                updated_at: String::new(),
-            };
-            let _ = db::vault::create_secret(&conn, &row).await;
-        }
-        imported += 1;
-    }
-
-    Ok((StatusCode::OK, Json(json!({ "success": true, "imported_count": imported }))).into_response())
-}
+pub use super::export_handlers::import_secrets;

@@ -49,6 +49,10 @@ async fn post_bucket_dispatcher(
     Path(bucket): Path<String>,
     request: Request,
 ) -> Response {
+    let query_str = request.uri().query().unwrap_or("");
+    if query_str == "delete" || query_str.starts_with("delete&") || query_str.contains("&delete") {
+        return bucket_handlers::delete_objects(State(storage), Path(bucket), request).await;
+    }
     bucket_handlers::get_bucket(State(storage), Path(bucket), request).await
 }
 

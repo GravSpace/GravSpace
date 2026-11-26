@@ -97,7 +97,7 @@ pub async fn stream_federation_events(
     {
         auth.strip_prefix("Bearer ").unwrap_or(auth).to_string()
     } else {
-        String::new()
+        crate::auth::middleware::extract_cookie(&headers, "gravspace_session").unwrap_or_default()
     };
 
     if token.is_empty() {

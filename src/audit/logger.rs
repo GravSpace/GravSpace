@@ -31,6 +31,7 @@ impl AuditLogger {
         self.tx.subscribe()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn log(
         &self,
         username: Option<&str>,

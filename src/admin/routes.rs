@@ -26,12 +26,8 @@ pub fn admin_router(
     let auth_routes = Router::new()
         .route("/login", post(auth_handlers::login_handler))
         .route("/api/login", post(auth_handlers::login_handler))
-        .with_state(storage.clone());
-
-    let public_system_routes = Router::new()
-        .route("/system/database-stats", get(settings_handlers::get_database_stats))
-        .route("/api/admin/system/database-stats", get(settings_handlers::get_database_stats))
-        .route("/admin/system/database-stats", get(settings_handlers::get_database_stats))
+        .route("/logout", post(auth_handlers::logout_handler))
+        .route("/api/logout", post(auth_handlers::logout_handler))
         .with_state(storage.clone());
 
     let bucket_and_object_routes = Router::new()
@@ -166,7 +162,9 @@ pub fn admin_router(
         .route("/federation/queue/completed", delete(federation_handlers::clear_completed_queue));
 
     let iam_routes = Router::new()
+        .route("/auth/session", get(auth_handlers::session_handler))
         .route("/system/network", get(network_handlers::get_network_info))
+        .route("/system/database-stats", get(settings_handlers::get_database_stats))
         .route("/system/db-checkpoint", post(settings_handlers::trigger_db_checkpoint))
         .route("/s3-explorer/execute", post(s3_explorer_handlers::execute_s3_command))
         .route("/stats", get(analytics_handlers::get_system_stats))
@@ -255,7 +253,6 @@ pub fn admin_router(
 
     Router::new()
         .merge(auth_routes)
-        .merge(public_system_routes)
         .merge(admin_prefixed)
         .merge(ws_routes)
 }

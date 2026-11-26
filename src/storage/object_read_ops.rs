@@ -14,6 +14,7 @@ impl FileStorage {
         version_id: Option<&str>,
         range_header: Option<&str>,
     ) -> Result<(Vec<u8>, ObjectMeta, Option<String>), AppError> {
+        super::object_ops::validate_storage_path(bucket, key)?;
         let meta = self.stat_object(bucket, key, version_id).await?;
 
         // S3 standard: directory markers (virtual folders) return empty payload (0 bytes)
@@ -45,7 +46,7 @@ impl FileStorage {
                     let ep = e.path();
                     if ep.is_file()
                         && !ep.ends_with("latest")
-                        && !ep.extension().map_or(false, |x| x == "tags")
+                        && !ep.extension().is_some_and(|x| x == "tags")
                     {
                         if let Ok(Ok(mtime)) = ep.metadata().map(|m| m.modified()) {
                             if mtime >= newest_time {

@@ -25,10 +25,11 @@ export function useFederationStream({ onEvent, enabled = true }: UseFederationSt
   onEventRef.current = onEvent
   authFetchRef.current = authFetch
 
+  const isAuthenticated = Boolean(authState?.isAuthenticated)
   const token = (authState as any)?.token || ''
 
   useEffect(() => {
-    if (!enabled || !token) return
+    if (!enabled || !isAuthenticated) return
 
     let isDisposed = false
     let reconnectTimeout: ReturnType<typeof setTimeout>
@@ -101,7 +102,7 @@ export function useFederationStream({ onEvent, enabled = true }: UseFederationSt
       }
       setIsConnected(false)
     }
-  }, [token, enabled])
+  }, [isAuthenticated, token, enabled])
 
   return { isConnected, lastEvent }
 }

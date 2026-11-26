@@ -79,7 +79,7 @@ export function AppSidebar() {
 
   // Sync live version from backend if available
   useEffect(() => {
-    if (!authState?.token) return
+    if (!authState?.isAuthenticated) return
     authFetch(`${API_BASE}/admin/settings`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -88,7 +88,7 @@ export function AppSidebar() {
         }
       })
       .catch(() => {})
-  }, [authState?.token, authFetch, API_BASE])
+  }, [authState?.isAuthenticated, authFetch, API_BASE])
 
   // Keyboard shortcut listener (Cmd+K / Ctrl+K)
   useEffect(() => {

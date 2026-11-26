@@ -25,8 +25,26 @@ const defaultState: AuthState = {
 function loadStoredAuth(): AuthState {
   if (typeof window === 'undefined') return defaultState
   try {
-    const stored = localStorage.getItem(STORAGE_KEY) || sessionStorage.getItem(STORAGE_KEY)
-    if (stored) return JSON.parse(stored)
+    const raw = localStorage.getItem(STORAGE_KEY) || sessionStorage.getItem(STORAGE_KEY)
+    // Remove legacy duplicated sessionStorage entry so auth metadata lives in one place
+    sessionStorage.removeItem(STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') return defaultState
+      const sanitized: AuthState = {
+        accessKeyId: '',
+        secretAccessKey: '',
+        token: '',
+        username: typeof parsed.username === 'string' ? parsed.username : '',
+        isAuthenticated: Boolean(parsed.isAuthenticated && parsed.username),
+        isDefaultPassword: Boolean(parsed.isDefaultPassword),
+      }
+      // Scrub legacy plaintext secretAccessKey / token if present from older sessions
+      if ('secretAccessKey' in parsed || 'accessKeyId' in parsed || 'token' in parsed) {
+        saveAuth(sanitized)
+      }
+      return sanitized
+    }
   } catch {
     // ignore
   }
@@ -36,12 +54,20 @@ function loadStoredAuth(): AuthState {
 function saveAuth(state: AuthState) {
   if (typeof window === 'undefined') return
   try {
+    sessionStorage.removeItem(STORAGE_KEY)
     if (state.isAuthenticated) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+      // Never persist secretAccessKey, accessKeyId, or JWT in Web Storage;
+      // the backend authenticates browser requests via the HttpOnly gravspace_session cookie.
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          username: state.username,
+          isAuthenticated: true,
+          isDefaultPassword: Boolean(state.isDefaultPassword),
+        }),
+      )
     } else {
       localStorage.removeItem(STORAGE_KEY)
-      sessionStorage.removeItem(STORAGE_KEY)
     }
   } catch {
     // ignore
@@ -78,6 +104,7 @@ export function useAuth() {
         const apiBase = import.meta.env.VITE_API_BASE ?? '/api'
         const response = await fetch(`${apiBase}/login`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ username: accessKeyId, password: secretAccessKey }),
         })
@@ -90,9 +117,9 @@ export function useAuth() {
 
         const data = await response.json()
         setGlobalAuth({
-          accessKeyId,
-          secretAccessKey,
-          token: data.token,
+          accessKeyId: '',
+          secretAccessKey: '',
+          token: '',
           username: data.username,
           isAuthenticated: true,
           isDefaultPassword: !!data.is_default_password,
@@ -107,15 +134,16 @@ export function useAuth() {
   )
 
   const logout = useCallback(() => {
+    const apiBase = import.meta.env.VITE_API_BASE ?? '/api'
+    void fetch(`${apiBase}/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    }).catch(() => {})
     setGlobalAuth(defaultState)
   }, [])
 
   const getCredentials = useCallback(() => {
-    if (!_authState.isAuthenticated) return null
-    return {
-      accessKeyId: _authState.accessKeyId,
-      secretAccessKey: _authState.secretAccessKey,
-    }
+    return null
   }, [])
 
   const authFetch = useCallback(
@@ -125,8 +153,9 @@ export function useAuth() {
         throw new Error('Not authenticated')
       }
 
-      const headers: HeadersInit = {
-        Authorization: `Bearer ${_authState.token}`,
+      const headers: Record<string, string> = {}
+      if (_authState.token) {
+        headers.Authorization = `Bearer ${_authState.token}`
       }
 
       let body = options.body
@@ -138,12 +167,13 @@ export function useAuth() {
         !(body instanceof Blob) &&
         !(body instanceof URLSearchParams)
       ) {
-        ;(headers as Record<string, string>)['Content-Type'] = 'application/json'
+        headers['Content-Type'] = 'application/json'
         body = JSON.stringify(body)
       }
 
       const res = await fetch(url, {
         ...options,
+        credentials: options.credentials ?? 'include',
         body,
         headers: { ...headers, ...(options.headers as Record<string, string>) },
       })
