@@ -17,6 +17,7 @@ pub struct PresignedUrlRow {
     pub created_at: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_presigned_url(
     conn: &Connection,
     bucket: &str,
@@ -150,4 +151,38 @@ pub async fn is_signature_used(conn: &Connection, signature: &str) -> Result<boo
         .map_err(|e| DbError::Query(e.to_string()))?;
 
     Ok(rows.next().await.map_err(|e| DbError::Query(e.to_string()))?.is_some())
+}
+
+pub async fn get_presigned_url_by_signature(
+    conn: &Connection,
+    signature: &str,
+) -> Result<Option<PresignedUrlRow>, AppError> {
+    let mut rows = conn
+        .query(
+            "SELECT id, bucket, key, url, signature, method, expires_at, allowed_ip,
+                    one_time_use, is_revoked, created_at
+             FROM presigned_urls WHERE signature = ?1 LIMIT 1",
+            params![signature],
+        )
+        .await
+        .map_err(|e| DbError::Query(e.to_string()))?;
+
+    if let Some(row) = rows.next().await.map_err(|e| DbError::Query(e.to_string()))? {
+        let one_time: i64 = row.get(8).unwrap_or(0);
+        let revoked: i64 = row.get(9).unwrap_or(0);
+        return Ok(Some(PresignedUrlRow {
+            id: row.get(0).map_err(|e| DbError::Query(e.to_string()))?,
+            bucket: row.get(1).unwrap_or_default(),
+            key: row.get(2).unwrap_or_default(),
+            url: row.get(3).unwrap_or_default(),
+            signature: row.get(4).unwrap_or_default(),
+            method: row.get(5).unwrap_or_default(),
+            expires_at: row.get(6).unwrap_or_default(),
+            allowed_ip: row.get(7).ok(),
+            one_time_use: one_time != 0,
+            is_revoked: revoked != 0,
+            created_at: row.get(10).unwrap_or_default(),
+        }));
+    }
+    Ok(None)
 }

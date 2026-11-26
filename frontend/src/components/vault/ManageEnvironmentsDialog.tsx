@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Plus, Trash2, Check, AlertCircle, Layers } from 'lucide-react'
+import { Plus, Trash2, Check, Layers } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -116,7 +116,7 @@ export function ManageEnvironmentsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-2xl text-xs">
+      <DialogContent className="sm:max-w-xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-2xl text-xs">
         <DialogHeader className="px-6 py-4 border-b border-border/50 bg-muted/20">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary">

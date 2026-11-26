@@ -40,6 +40,7 @@ import { useBatchOperations } from './useBatchOperations'
 import { BulkActionsBar } from './BulkActionsBar'
 import { BulkDeleteDialog } from './BulkDeleteDialog'
 import type { CrossServerShare } from '../federation/federationTypes'
+import type { InboundFederationBinding } from './federationBadgeTypes'
 import type { S3Object, BucketInfo } from '../../routes/admin/buckets/$bucket'
 
 function formatSize(bytes: number): string {
@@ -117,6 +118,8 @@ interface Props {
   apiBase: string
   bucketInfo: BucketInfo | null
   shares?: CrossServerShare[]
+  inboundShares?: InboundFederationBinding[]
+  onDismissInbound?: (id: number) => void
   showVersions?: boolean
   onRefresh?: () => void
 }
@@ -143,6 +146,8 @@ export function BucketObjectTable({
   apiBase,
   bucketInfo,
   shares,
+  inboundShares,
+  onDismissInbound,
   showVersions = false,
   onRefresh,
 }: Props) {
@@ -253,7 +258,13 @@ export function BucketObjectTable({
                       <Folder className="w-4 h-4 text-amber-500" />
                     </div>
                     <span className="font-medium text-sm">{folderName}/</span>
-                    <FolderFederationBadge currentBucket={bucketName} folderPrefix={prefix} shares={shares} />
+                    <FolderFederationBadge
+                      currentBucket={bucketName}
+                      folderPrefix={prefix}
+                      shares={shares}
+                      inboundShares={inboundShares}
+                      onDismissInbound={onDismissInbound}
+                    />
                     {pub && (
                       <Badge className="text-[8px] h-3.5 px-1 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/10 border-0">
                         public

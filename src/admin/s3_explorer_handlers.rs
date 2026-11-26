@@ -41,36 +41,41 @@ pub struct S3ExplorerResponse {
     pub error: Option<String>,
 }
 
+pub struct S3ExplorerSignParams<'a> {
+    pub method: &'a str,
+    pub endpoint: &'a str,
+    pub canonical_uri: &'a str,
+    pub canonical_query: &'a str,
+    pub payload: &'a [u8],
+    pub access_key: &'a str,
+    pub secret_key: &'a str,
+    pub region: &'a str,
+    pub extra_headers: &'a [(&'a str, &'a str)],
+}
+
 pub fn sign_s3_explorer_request(
     builder: reqwest::RequestBuilder,
-    method: &str,
-    endpoint: &str,
-    canonical_uri: &str,
-    canonical_query: &str,
-    payload: &[u8],
-    access_key: &str,
-    secret_key: &str,
-    region: &str,
-    extra_headers: &[(&str, &str)],
+    params: &S3ExplorerSignParams<'_>,
 ) -> reqwest::RequestBuilder {
     let now = Utc::now();
     let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let date_stamp = now.format("%Y%m%d").to_string();
 
-    let stripped = endpoint
+    let stripped = params
+        .endpoint
         .strip_prefix("https://")
-        .or_else(|| endpoint.strip_prefix("http://"))
-        .unwrap_or(endpoint);
+        .or_else(|| params.endpoint.strip_prefix("http://"))
+        .unwrap_or(params.endpoint);
     let host = stripped.split('/').next().unwrap_or(stripped);
 
-    let payload_hash = sha256_hex(payload);
+    let payload_hash = sha256_hex(params.payload);
 
     let mut header_pairs: Vec<(&str, String)> = vec![
         ("host", host.to_string()),
         ("x-amz-content-sha256", payload_hash.clone()),
         ("x-amz-date", amz_date.clone()),
     ];
-    for (k, v) in extra_headers {
+    for (k, v) in params.extra_headers {
         header_pairs.push((k, v.to_string()));
     }
     header_pairs.sort_by(|a, b| a.0.cmp(b.0));
@@ -84,16 +89,29 @@ pub fn sign_s3_explorer_request(
     let signed_headers = signed_headers_vec.join(";");
 
     let canonical_request = format!(
-        "{method}\n{canonical_uri}\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        params.method,
+        params.canonical_uri,
+        params.canonical_query,
+        canonical_headers,
+        signed_headers,
+        payload_hash
     );
 
     let algorithm = "AWS4-HMAC-SHA256";
-    let credential_scope = format!("{date_stamp}/{region}/s3/aws4_request");
+    let credential_scope = format!("{date_stamp}/{}/s3/aws4_request", params.region);
     let string_to_sign = build_string_to_sign(algorithm, &amz_date, &credential_scope, &canonical_request);
-    let signature = calculate_signature(secret_key, &date_stamp, region, "s3", &string_to_sign);
+    let signature = calculate_signature(
+        params.secret_key,
+        &date_stamp,
+        params.region,
+        "s3",
+        &string_to_sign,
+    );
 
     let auth_header = format!(
-        "{algorithm} Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
+        "{algorithm} Credential={}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}",
+        params.access_key
     );
 
     let mut b = builder
@@ -103,7 +121,7 @@ pub fn sign_s3_explorer_request(
         .header("x-amz-content-sha256", payload_hash)
         .header("Authorization", auth_header);
 
-    for (k, v) in extra_headers {
+    for (k, v) in params.extra_headers {
         b = b.header(*k, *v);
     }
     b
@@ -113,17 +131,7 @@ pub async fn execute_s3_command(
     State(_storage): State<FileStorage>,
     Json(payload): Json<S3ExplorerRequest>,
 ) -> Result<Response, AppError> {
-    let raw_endpoint = payload.endpoint.trim().trim_end_matches('/');
-    if raw_endpoint.is_empty() {
-        return Err(AppError::BadRequest("Target S3 endpoint is required".to_string()));
-    }
-
-    let parsed_url = reqwest::Url::parse(raw_endpoint)
-        .map_err(|e| AppError::BadRequest(format!("Invalid S3 endpoint URL: {e}")))?;
-
-    if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
-        return Err(AppError::BadRequest("Only HTTP and HTTPS endpoints are permitted".to_string()));
-    }
+    let raw_endpoint = super::ssrf::validate_outbound_url(&payload.endpoint, "S3 endpoint")?;
 
     let p = &payload.params;
     let bucket = p.get("Bucket").and_then(|v| v.as_str()).unwrap_or("").trim_matches('/');
@@ -169,7 +177,9 @@ pub async fn execute_s3_command(
         }
         "GetBucketVersioning" => ("GET", format!("/{bucket}"), "versioning=".to_string(), Vec::new(), Vec::new()),
         "PutBucketVersioning" => {
-            let status = p.get("Status").and_then(|v| v.as_str()).unwrap_or("Enabled");
+            let status = crate::s3::xml::escape_xml(
+                p.get("Status").and_then(|v| v.as_str()).unwrap_or("Enabled"),
+            );
             let xml = format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?><VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>{status}</Status></VersioningConfiguration>"#
             );
@@ -193,8 +203,12 @@ pub async fn execute_s3_command(
             let body = if let Some(tag_set) = p.get("TagSet").and_then(|v| v.as_array()) {
                 let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8"?><Tagging><TagSet>"#);
                 for tag in tag_set {
-                    let k = tag.get("Key").and_then(|v| v.as_str()).unwrap_or("");
-                    let val = tag.get("Value").and_then(|v| v.as_str()).unwrap_or("");
+                    let k = crate::s3::xml::escape_xml(
+                        tag.get("Key").and_then(|v| v.as_str()).unwrap_or(""),
+                    );
+                    let val = crate::s3::xml::escape_xml(
+                        tag.get("Value").and_then(|v| v.as_str()).unwrap_or(""),
+                    );
                     xml.push_str(&format!("<Tag><Key>{k}</Key><Value>{val}</Value></Tag>"));
                 }
                 xml.push_str("</TagSet></Tagging>");
@@ -229,15 +243,17 @@ pub async fn execute_s3_command(
 
     req_builder = sign_s3_explorer_request(
         req_builder,
-        method,
-        raw_endpoint,
-        &canonical_uri,
-        &canonical_query,
-        &req_body,
-        &payload.access_key_id,
-        &payload.secret_access_key,
-        &payload.region,
-        &extra_headers,
+        &S3ExplorerSignParams {
+            method,
+            endpoint: &raw_endpoint,
+            canonical_uri: &canonical_uri,
+            canonical_query: &canonical_query,
+            payload: &req_body,
+            access_key: &payload.access_key_id,
+            secret_key: &payload.secret_access_key,
+            region: &payload.region,
+            extra_headers: &extra_headers,
+        },
     );
 
     if !req_body.is_empty() {
@@ -260,7 +276,7 @@ pub async fn execute_s3_command(
             let bytes = resp.bytes().await.unwrap_or_default();
             let body_str = String::from_utf8_lossy(&bytes).to_string();
 
-            let success = status >= 200 && status < 300;
+            let success = (200..300).contains(&status);
             let err_msg = if !success {
                 Some(format!("S3 error HTTP {status}: {body_str}"))
             } else {

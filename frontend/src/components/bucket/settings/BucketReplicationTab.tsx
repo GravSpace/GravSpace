@@ -54,7 +54,7 @@ export function BucketReplicationTab({
     <div className="space-y-4 py-2 px-1">
       <div className="p-4 border rounded-lg bg-slate-50 dark:bg-slate-900/50 space-y-4">
         <h3 className="text-xs font-bold uppercase tracking-wider">Create Replication Rule</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label className="text-xs font-semibold">Destination Bucket</Label>
             <select

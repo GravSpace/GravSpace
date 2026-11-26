@@ -26,6 +26,15 @@ impl Config {
         let _ = dotenvy::dotenv();
 
         let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "secret".to_string());
+        let strict_secrets = env::var("GRAVSPACE_STRICT_SECRETS")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        if jwt_secret == "secret" {
+            if strict_secrets {
+                panic!("GRAVSPACE_STRICT_SECRETS=true requires a custom non-default JWT_SECRET");
+            }
+            tracing::warn!("Security warning: JWT_SECRET is using insecure default value; set JWT_SECRET in .env");
+        }
         let admin_port = env::var("ADMIN_PORT").unwrap_or_else(|_| "8080".to_string());
         let s3_port = env::var("S3_PORT").unwrap_or_else(|_| "9000".to_string());
 
@@ -77,6 +86,12 @@ impl Config {
 
         let key_str = env::var("SSE_MASTER_KEY")
             .unwrap_or_else(|_| "this-is-a-very-secret-key-32byte".to_string());
+        if key_str == "this-is-a-very-secret-key-32byte" {
+            if strict_secrets {
+                panic!("GRAVSPACE_STRICT_SECRETS=true requires a custom 32-byte SSE_MASTER_KEY");
+            }
+            tracing::warn!("Security warning: SSE_MASTER_KEY is using insecure default value; set SSE_MASTER_KEY in .env");
+        }
         let sse_master_key = key_str.into_bytes();
 
         let sync_worker_interval_secs = env::var("SYNC_WORKER_INTERVAL")

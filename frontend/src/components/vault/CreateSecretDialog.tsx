@@ -1,25 +1,18 @@
 import { useState, useEffect } from 'react'
 import {
-  KeyRound,
-  Bot,
-  Key,
-  ShieldCheck,
   Plus,
   Sparkles,
   Lock,
   ShieldAlert,
   ChevronDown,
   ClipboardPaste,
-  FileCode,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Textarea } from '../ui/textarea'
 import { Switch } from '../ui/switch'
-import { Badge } from '../ui/badge'
 import { toast } from 'sonner'
 import {
   TYPE_CONFIG,
@@ -28,6 +21,7 @@ import {
   type SecretType,
   getEnvTheme,
 } from './vaultTypes'
+import { SecretFileField } from './SecretFileField'
 import { Folder } from '#/lib/iconsax-adapter'
 
 interface Props {
@@ -82,6 +76,7 @@ export function CreateSecretDialog({
   // Certificate specific fields
   const [certPem, setCertPem] = useState('')
   const [privateKeyPem, setPrivateKeyPem] = useState('')
+  const [fileEncoding, setFileEncoding] = useState<'utf8' | 'base64'>('utf8')
 
   function handleGenerateAgentToken() {
     const raw = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '')
@@ -112,6 +107,7 @@ export function CreateSecretDialog({
     setKeyPassword('')
     setCertPem('')
     setPrivateKeyPem('')
+    setFileEncoding('utf8')
     onClose()
   }
 
@@ -144,6 +140,15 @@ export function CreateSecretDialog({
         certificate: certPem.trim(),
         private_key: privateKeyPem.trim(),
       })
+    } else if (activeType === 'file') {
+      if (!finalValue.trim()) {
+        toast.error('Secret file content is required.')
+        return
+      }
+      metadata = {
+        file_name: name.trim(),
+        encoding: fileEncoding,
+      }
     } else {
       if (!finalValue.trim()) {
         toast.error('Secret value is required.')
@@ -194,7 +199,7 @@ export function CreateSecretDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetForm() }}>
-      <DialogContent className="w-full max-w-[calc(100vw-2rem)] sm:max-w-xl rounded-2xl border border-border/80 bg-card p-0 overflow-hidden shadow-2xl max-h-[92vh] flex flex-col text-xs">
+      <DialogContent className="w-full max-w-[calc(100vw-2rem)] sm:max-w-3xl rounded-2xl border border-border/80 bg-card p-0 overflow-hidden shadow-2xl max-h-[92vh] flex flex-col text-xs">
         <DialogHeader className="px-5 py-3.5 border-b border-border/50 bg-muted/20 flex flex-row items-center justify-between shrink-0 pr-12">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0 shadow-2xs">
@@ -252,8 +257,8 @@ export function CreateSecretDialog({
             <Label className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Secret Category
             </Label>
-            <div className="grid grid-cols-4 gap-1.5 p-1 rounded-xl bg-muted/40 border border-border/60">
-              {(['kv', 'agent_token', 'keystore', 'certificate'] as const).map((type) => {
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 p-1 rounded-xl bg-muted/40 border border-border/60">
+              {(['kv', 'agent_token', 'file', 'keystore', 'certificate'] as const).map((type) => {
                 const conf = TYPE_CONFIG[type]
                 const Icon = conf.icon
                 const isSelected = activeType === type
@@ -263,8 +268,8 @@ export function CreateSecretDialog({
                     type="button"
                     onClick={() => setActiveType(type)}
                     className={`py-2 px-1.5 rounded-lg text-center transition-all flex flex-col items-center gap-1 cursor-pointer select-none ${isSelected
-                        ? 'bg-card text-foreground border border-border shadow-2xs font-semibold'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50 border border-transparent'
+                      ? 'bg-card text-foreground border border-border shadow-2xs font-semibold'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50 border border-transparent'
                       }`}
                   >
                     <Icon className={`w-3.5 h-3.5 ${isSelected ? 'text-primary' : conf.color}`} />
@@ -275,7 +280,6 @@ export function CreateSecretDialog({
             </div>
           </div>
 
-          {/* Name & Basic Info */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div className="space-y-1">
               <Label className="text-xs font-semibold flex items-center gap-1 text-foreground">
@@ -289,9 +293,11 @@ export function CreateSecretDialog({
                     ? 'e.g. DATABASE_URL'
                     : activeType === 'agent_token'
                       ? 'e.g. AGENT_PAYMENT_BOT'
-                      : activeType === 'keystore'
-                        ? 'e.g. release-keystore.jks'
-                        : 'e.g. wildcard.domain.crt'
+                      : activeType === 'file'
+                        ? 'e.g. service-account.json'
+                        : activeType === 'keystore'
+                          ? 'e.g. release-keystore.jks'
+                          : 'e.g. wildcard.domain.crt'
                 }
                 className="h-8 font-mono text-xs"
                 required
@@ -300,37 +306,39 @@ export function CreateSecretDialog({
 
             <div className="space-y-1">
               <Label className="text-xs font-semibold text-foreground">Tags (comma-separated)</Label>
-              <Input
-                value={tagsStr}
-                onChange={(e) => setTagsStr(e.target.value)}
-                placeholder="database, payment, ai"
-                className="h-8 text-xs"
-              />
+              <Input value={tagsStr} onChange={(e) => setTagsStr(e.target.value)} placeholder="database, payment, ai" className="h-8 text-xs" />
             </div>
           </div>
 
-          {/* Type Specific Fields */}
+          {activeType === 'file' && (
+            <SecretFileField
+              fileName={name}
+              value={value}
+              encoding={fileEncoding}
+              disabled={submitting}
+              onChange={({ value: nextVal, encoding: nextEnc, fileName }) => {
+                setValue(nextVal)
+                setFileEncoding(nextEnc)
+                if (fileName) setName(fileName)
+              }}
+            />
+          )}
+
           {activeType === 'kv' && (
             <div className="space-y-1">
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-semibold text-foreground">
-                  Secret Value <span className="text-rose-500">*</span>
-                </Label>
+                <Label className="text-xs font-semibold text-foreground">Secret Value <span className="text-rose-500">*</span></Label>
                 <button
                   type="button"
                   onClick={async () => {
                     try {
                       const text = await navigator.clipboard.readText()
-                      if (text) {
-                        setValue(text)
-                        toast.success('Pasted from clipboard')
-                      }
+                      if (text) { setValue(text); toast.success('Pasted from clipboard') }
                     } catch { }
                   }}
                   className="text-[10px] text-muted-foreground hover:text-primary flex items-center gap-1 transition-colors cursor-pointer"
                 >
-                  <ClipboardPaste className="w-3 h-3" />
-                  <span>Paste</span>
+                  <ClipboardPaste className="w-3 h-3" /> <span>Paste</span>
                 </button>
               </div>
               <Textarea
@@ -347,23 +355,11 @@ export function CreateSecretDialog({
             <div className="space-y-1">
               <div className="flex items-center justify-between">
                 <Label className="text-xs font-semibold text-foreground">Agent Bearer Secret</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleGenerateAgentToken}
-                  className="h-6 text-[10px] gap-1 text-primary border-primary/30 hover:bg-primary/10"
-                >
+                <Button type="button" variant="outline" size="sm" onClick={handleGenerateAgentToken} className="h-6 text-[10px] gap-1 text-primary border-primary/30 hover:bg-primary/10">
                   <Sparkles className="w-3 h-3" /> Auto-Generate Token
                 </Button>
               </div>
-              <Input
-                value={value}
-                onChange={(e) => setValue(e.target.value)}
-                placeholder="Click auto-generate or paste token..."
-                className="h-8 font-mono text-xs"
-                required
-              />
+              <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Click auto-generate or paste token..." className="h-8 font-mono text-xs" required />
             </div>
           )}
 
@@ -373,43 +369,22 @@ export function CreateSecretDialog({
                 <Label className="text-xs font-semibold text-foreground">Upload KeyStore (.jks, .p12, .keystore)</Label>
                 <Input
                   type="file"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0]
-                    if (f) handleFileRead(f)
-                  }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileRead(f) }}
                   className="h-8 text-xs file:mr-2 file:py-0.5 file:px-2 file:rounded-md file:border-0 file:text-[10px] file:bg-primary file:text-primary-foreground cursor-pointer"
                 />
               </div>
-
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground">Key Alias</Label>
-                  <Input
-                    value={keyAlias}
-                    onChange={(e) => setKeyAlias(e.target.value)}
-                    placeholder="my-key-alias"
-                    className="h-8 font-mono text-xs"
-                  />
+                  <Input value={keyAlias} onChange={(e) => setKeyAlias(e.target.value)} placeholder="my-key-alias" className="h-8 font-mono text-xs" />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground">Store Password</Label>
-                  <Input
-                    type="password"
-                    value={storePassword}
-                    onChange={(e) => setStorePassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="h-8 font-mono text-xs"
-                  />
+                  <Input type="password" value={storePassword} onChange={(e) => setStorePassword(e.target.value)} placeholder="••••••••" className="h-8 font-mono text-xs" />
                 </div>
                 <div className="space-y-1">
                   <Label className="text-[11px] text-muted-foreground">Key Password</Label>
-                  <Input
-                    type="password"
-                    value={keyPassword}
-                    onChange={(e) => setKeyPassword(e.target.value)}
-                    placeholder="(Same as store)"
-                    className="h-8 font-mono text-xs"
-                  />
+                  <Input type="password" value={keyPassword} onChange={(e) => setKeyPassword(e.target.value)} placeholder="(Same as store)" className="h-8 font-mono text-xs" />
                 </div>
               </div>
             </div>
@@ -419,22 +394,11 @@ export function CreateSecretDialog({
             <div className="space-y-2">
               <div className="space-y-1">
                 <Label className="text-xs font-semibold text-foreground">Certificate Body (PEM / CRT)</Label>
-                <Textarea
-                  value={certPem}
-                  onChange={(e) => setCertPem(e.target.value)}
-                  placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
-                  className="min-h-[75px] font-mono text-xs resize-none"
-                  required
-                />
+                <Textarea value={certPem} onChange={(e) => setCertPem(e.target.value)} placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" className="min-h-[75px] font-mono text-xs resize-none" required />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs font-semibold text-foreground">Private Key (Optional)</Label>
-                <Textarea
-                  value={privateKeyPem}
-                  onChange={(e) => setPrivateKeyPem(e.target.value)}
-                  placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----"
-                  className="min-h-[65px] font-mono text-xs resize-none"
-                />
+                <Textarea value={privateKeyPem} onChange={(e) => setPrivateKeyPem(e.target.value)} placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;...&#10;-----END RSA PRIVATE KEY-----" className="min-h-[65px] font-mono text-xs resize-none" />
               </div>
             </div>
           )}

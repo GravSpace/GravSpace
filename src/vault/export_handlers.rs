@@ -1,14 +1,17 @@
+use crate::auth::middleware::AuthContext;
 use crate::db;
 use crate::error::AppError;
 use crate::storage::FileStorage;
 use crate::vault::crypto;
 use axum::{
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
+    Json,
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 pub struct ExportSecretsQuery {
@@ -29,8 +32,22 @@ fn escape_csv(val: &str) -> String {
 
 pub async fn export_secrets(
     State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
     Query(q): Query<ExportSecretsQuery>,
 ) -> Result<Response, AppError> {
+    if let Some(ref audit) = storage.audit {
+        audit
+            .log(
+                Some(&ctx.username),
+                "vault:ExportSecrets",
+                q.project.as_deref().unwrap_or("all"),
+                "success",
+                None,
+                None,
+                None,
+            )
+            .await;
+    }
     let conn = storage.vault_conn()?;
     let project_filter = q.project.as_deref().filter(|p| *p != "all" && !p.is_empty());
     let env_filter = q.env.as_deref().filter(|e| *e != "all" && !e.is_empty());
@@ -141,6 +158,9 @@ pub async fn export_secrets(
 
             let mut current_env_header = String::new();
             for s in filtered {
+                if s.secret_type == "keystore" || s.secret_type == "file" {
+                    continue;
+                }
                 if target_env == "all" && s.environment != current_env_header {
                     current_env_header = s.environment.clone();
                     output.push_str(&format!("\n# === Environment: {} ===\n", current_env_header));
@@ -162,4 +182,93 @@ pub async fn export_secrets(
                 .into_response())
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct ImportSecretsPayload {
+    pub project_id: Option<String>,
+    pub environment: String,
+    pub raw_env: Option<String>,
+    pub key_values: Option<HashMap<String, String>>,
+}
+
+pub async fn import_secrets(
+    State(storage): State<FileStorage>,
+    Extension(ctx): Extension<AuthContext>,
+    Json(payload): Json<ImportSecretsPayload>,
+) -> Result<Response, AppError> {
+    let conn = storage.vault_conn()?;
+    let mut imported = 0;
+    let project_id = payload.project_id.unwrap_or_else(|| "default".to_string());
+
+    let mut map = payload.key_values.unwrap_or_default();
+    if let Some(raw) = payload.raw_env {
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = trimmed.split_once('=') {
+                let key = k.trim().to_string();
+                let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
+                if !key.is_empty() {
+                    map.insert(key, val);
+                }
+            }
+        }
+    }
+
+    for (k, v) in map {
+        let encrypted = crypto::encrypt_secret(v.as_bytes())?;
+        if let Ok(Some(existing)) =
+            db::vault::get_secret_by_name(&conn, Some(&project_id), &payload.environment, &k).await
+        {
+            let next_v = existing.current_version + 1;
+            let _ = db::vault::update_secret_value(
+                &conn,
+                &existing.id,
+                next_v,
+                &encrypted,
+                None,
+                Some("Bulk import update"),
+                Some(&ctx.username),
+            )
+            .await;
+        } else {
+            let row = db::vault::VaultSecretRow {
+                id: uuid::Uuid::new_v4().to_string(),
+                project_id: project_id.clone(),
+                name: k,
+                environment: payload.environment.clone(),
+                secret_type: "kv".to_string(),
+                description: Some("Imported from .env".to_string()),
+                tags: None,
+                current_version: 1,
+                encrypted_value: encrypted,
+                metadata_json: None,
+                requires_approval: false,
+                created_by: Some(ctx.username.clone()),
+                created_at: String::new(),
+                updated_at: String::new(),
+            };
+            let _ = db::vault::create_secret(&conn, &row).await;
+        }
+        imported += 1;
+    }
+
+    if let Some(ref audit) = storage.audit {
+        audit
+            .log(
+                Some(&ctx.username),
+                "vault:ImportSecrets",
+                &format!("{project_id}/{}", payload.environment),
+                "success",
+                None,
+                None,
+                Some(&format!("imported_count={imported}")),
+            )
+            .await;
+    }
+
+    Ok((StatusCode::OK, Json(json!({ "success": true, "imported_count": imported }))).into_response())
 }

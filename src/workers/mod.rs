@@ -1,5 +1,8 @@
 pub mod analytics;
 pub mod db_maintenance;
+pub mod federation_announce;
+pub mod federation_pull;
+pub mod federation_transfer;
 pub mod federation_worker;
 pub mod lifecycle;
 pub mod notifications;

@@ -147,7 +147,17 @@ pub async fn stream_audit_logs(
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // Authenticate: check ?token=... or Authorization header
+    if let Some(ticket) = params.get("ticket") {
+        if crate::admin::federation_handlers::consume_ws_ticket(ticket) {
+            let logger = state.logger.clone();
+            return Ok(ws
+                .on_upgrade(move |socket| handle_audit_ws(socket, logger))
+                .into_response());
+        }
+        return Err(crate::error::AuthError::TokenInvalid.into());
+    }
+
+    // Fallback: check ?token=..., Authorization header, or HttpOnly session cookie
     let token = if let Some(t) = params.get("token") {
         t.clone()
     } else if let Some(auth) = headers
@@ -156,7 +166,7 @@ pub async fn stream_audit_logs(
     {
         auth.strip_prefix("Bearer ").unwrap_or(auth).to_string()
     } else {
-        String::new()
+        crate::auth::middleware::extract_cookie(&headers, "gravspace_session").unwrap_or_default()
     };
 
     if token.is_empty() {

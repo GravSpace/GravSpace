@@ -225,7 +225,7 @@ pub async fn get_bucket_website(
     let val: serde_json::Value = website_opt
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
-        .unwrap_or_else(|| json!(null));
+        .unwrap_or(serde_json::Value::Null);
     Ok((StatusCode::OK, Json(val)).into_response())
 }
 

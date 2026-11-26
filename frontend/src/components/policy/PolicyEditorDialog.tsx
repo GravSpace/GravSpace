@@ -97,8 +97,8 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) resetDialog() }}>
-      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl bg-card">
-        <DialogHeader className="px-6 py-4 border-b border-border/50 shrink-0 bg-muted/20 flex flex-row items-center gap-3">
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] flex flex-col p-0 gap-0 overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xl bg-card">
+        <DialogHeader className="px-4 sm:px-6 py-4 border-b border-border/50 shrink-0 bg-muted/20 flex flex-row items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center shrink-0">
             <Shield className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
           </div>
@@ -110,7 +110,7 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
           </div>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 space-y-4">
           <div className="space-y-1.5">
             <Label className="text-xs font-semibold">Policy Name</Label>
             <Input
@@ -134,7 +134,7 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
             <TabsContent value="builder" className="space-y-4 mt-3">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Quick Presets</p>
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {PRESETS.map((preset) => {
                     const c = COLOR_MAP[preset.color]
                     const Icon = preset.icon
@@ -155,7 +155,7 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
 
               <div className="space-y-3 max-h-[36vh] overflow-y-auto pr-1">
                 {statements.map((stmt, stmtIdx) => (
-                  <div key={stmtIdx} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-card p-4 space-y-3">
+                  <div key={stmtIdx} className="rounded-xl border border-slate-200 dark:border-slate-800 bg-card p-3.5 sm:p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-700 dark:text-slate-300">Statement #{stmtIdx + 1}</span>
                       {statements.length > 1 && (
@@ -170,7 +170,7 @@ export function PolicyEditorDialog({ open, onClose, buckets, onCreated }: Props)
                       )}
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1.5">
                         <Label className="text-[10px] font-bold uppercase tracking-wider opacity-70">Effect</Label>
                         <div className="flex gap-1.5">

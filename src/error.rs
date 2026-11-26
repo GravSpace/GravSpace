@@ -29,6 +29,9 @@ pub enum AppError {
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
+    #[error("Too many requests: {0}")]
+    TooManyRequests(String),
+
     #[error("Internal server error: {0}")]
     Internal(String),
 }
@@ -94,6 +97,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
             AppError::Storage(StorageError::BucketNotFound(b)) => {
                 (StatusCode::NOT_FOUND, format!("Bucket '{b}' not found"))
             }
@@ -135,7 +139,10 @@ impl IntoResponse for AppError {
             | AppError::Db(DbError::Query(ref msg))
             | AppError::Internal(ref msg) => {
                 tracing::error!("Internal server error (500): {msg}");
-                (StatusCode::INTERNAL_SERVER_ERROR, msg.clone())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_string(),
+                )
             }
         };
 

@@ -2,7 +2,7 @@ use super::xml::{
     s3_error, s3_xml_response, CompleteMultipartUploadPayload, CompleteMultipartUploadResult,
     InitiateMultipartUploadResult,
 };
-use crate::auth::middleware::verify_s3_request;
+use crate::auth::middleware::verify_s3_http;
 use crate::storage::FileStorage;
 use axum::{
     extract::{Path, Request, State},
@@ -15,21 +15,9 @@ pub async fn initiate_multipart(
     Path((bucket, key)): Path<(String, String)>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    let query_str = request.uri().query().unwrap_or("");
-
-    if let Err(e) = verify_s3_request(
-        &storage.db,
-        &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
-        "s3:PutObject",
-        &bucket,
-        &key,
-    )
-    .await
+    if let Err(e) =
+        verify_s3_http(&storage.db, &storage.config, &request, "s3:PutObject", &bucket, &key)
+            .await
     {
         return e.into_response();
     }
@@ -54,21 +42,9 @@ pub async fn upload_part(
     part_number: i64,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    let query_str = request.uri().query().unwrap_or("");
-
-    if let Err(e) = verify_s3_request(
-        &storage.db,
-        &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
-        "s3:PutObject",
-        &bucket,
-        &key,
-    )
-    .await
+    if let Err(e) =
+        verify_s3_http(&storage.db, &storage.config, &request, "s3:PutObject", &bucket, &key)
+            .await
     {
         return e.into_response();
     }
@@ -94,21 +70,9 @@ pub async fn complete_multipart(
     upload_id: String,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    let query_str = request.uri().query().unwrap_or("");
-
-    if let Err(e) = verify_s3_request(
-        &storage.db,
-        &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
-        "s3:PutObject",
-        &bucket,
-        &key,
-    )
-    .await
+    if let Err(e) =
+        verify_s3_http(&storage.db, &storage.config, &request, "s3:PutObject", &bucket, &key)
+            .await
     {
         return e.into_response();
     }
@@ -153,16 +117,10 @@ pub async fn abort_multipart(
     upload_id: String,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    let query_str = request.uri().query().unwrap_or("");
-
-    if let Err(e) = verify_s3_request(
+    if let Err(e) = verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
+        &request,
         "s3:AbortMultipartUpload",
         &bucket,
         &key,

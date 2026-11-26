@@ -27,7 +27,7 @@ pub fn detect_local_ip() -> Option<String> {
     }
 }
 
-fn get_hostname() -> String {
+pub fn get_hostname() -> String {
     if let Ok(h) = std::env::var("HOSTNAME") {
         let trimmed = h.trim();
         if !trimmed.is_empty() {

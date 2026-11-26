@@ -25,7 +25,7 @@ export function TransferManager() {
   if (!showTransferManager || transfers.length === 0) return null
 
   return (
-    <div className="fixed bottom-6 right-6 w-96 max-h-[500px] flex flex-col bg-[#1e2329] border border-slate-700/50 rounded-xl shadow-2xl overflow-hidden z-50 transition-all duration-300">
+    <div className="fixed bottom-3 inset-x-3 sm:inset-x-auto sm:bottom-6 sm:right-6 sm:w-96 max-h-[70dvh] sm:max-h-[500px] flex flex-col bg-[#1e2329] border border-slate-700/50 rounded-xl shadow-2xl overflow-hidden z-50 transition-all duration-300">
       {/* HEADER */}
       <header className="h-14 px-4 flex items-center justify-between border-b border-white/5 bg-white/[0.02]">
         <h2 className="text-sm font-bold text-slate-100 tracking-wide uppercase">

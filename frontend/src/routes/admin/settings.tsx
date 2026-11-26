@@ -57,15 +57,15 @@ function SettingsPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">System Settings</h1>
-          <p className="text-xs text-muted-foreground">Configure global server and storage parameters.</p>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">System Settings</h1>
+          <p className="hidden sm:block text-xs text-muted-foreground">Configure global server and storage parameters.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={fetchSettings} disabled={loading} className="h-8">
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+        <div className="flex items-center gap-2 sm:gap-3">
+          <Button variant="outline" size="sm" onClick={fetchSettings} disabled={loading} className="h-8" aria-label="Refresh settings">
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-2 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Button size="sm" onClick={saveSettings} disabled={saving} className="h-8">
             {saving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
@@ -74,9 +74,9 @@ function SettingsPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-6 max-w-3xl">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-6 max-w-3xl w-full">
         <Tabs defaultValue="general">
-          <TabsList className="mb-6">
+          <TabsList className="mb-6 w-full sm:w-auto overflow-x-auto justify-start">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="storage">Storage</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
@@ -84,11 +84,11 @@ function SettingsPage() {
           </TabsList>
 
           <TabsContent value="general" className="space-y-6">
-            <div className="rounded-xl border bg-card p-5 space-y-3">
+            <div className="rounded-xl border bg-card p-4 sm:p-5 space-y-3">
               <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
                 <Server className="w-3.5 h-3.5" /> System Information
               </h3>
-              <div className="grid grid-cols-2 gap-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                 <div>
                   <span className="text-muted-foreground block text-[10px] uppercase font-bold tracking-wider">Application</span>
                   <span className="font-semibold text-foreground">GravSpace Cloud Storage</span>

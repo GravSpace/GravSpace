@@ -7,7 +7,8 @@ use std::fs;
 
 impl FileStorage {
     pub async fn create_bucket(&self, name: &str) -> Result<(), AppError> {
-        if name.starts_with('.') || name.len() < 3 || name.len() > 63 {
+        super::object_ops::validate_bucket_name(name)?;
+        if name.len() < 3 {
             return Err(AppError::BadRequest("Invalid bucket name".to_string()));
         }
 

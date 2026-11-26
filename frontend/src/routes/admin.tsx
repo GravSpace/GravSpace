@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { getAuthState } from '../hooks/useAuth'
 import { useAuth } from '../hooks/useAuth'
 import { AppSidebar } from '../components/AppSidebar'
+import { MobileTopBar } from '../components/MobileTopBar'
 import { TransferManager } from '../components/TransferManager'
 import { PasswordOnboardingModal } from '../components/PasswordOnboardingModal'
 import { SidebarProvider, SidebarInset } from '../components/ui/sidebar'
@@ -31,10 +32,11 @@ function AdminLayout() {
 
   return (
     <SidebarProvider>
-      <div className="flex h-screen w-full bg-background text-foreground overflow-hidden">
+      <div className="flex h-dvh w-full bg-background text-foreground overflow-hidden">
         <AppSidebar />
 
-        <SidebarInset className="flex flex-col flex-1 overflow-hidden">
+        <SidebarInset className="flex flex-col flex-1 min-w-0 overflow-hidden">
+          <MobileTopBar />
           <Outlet />
         </SidebarInset>
 

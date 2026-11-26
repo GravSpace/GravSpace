@@ -3,7 +3,7 @@ use std::env;
 use std::process::{Command, ExitStatus};
 
 const DEFAULT_ADMIN_ENDPOINT: &str = "http://127.0.0.1:8080";
-const DEFAULT_S3_ENDPOINT: &str = "http://127.0.0.1:9001";
+const DEFAULT_S3_ENDPOINT: &str = "http://127.0.0.1:9000";
 
 #[tokio::main]
 async fn main() {
@@ -18,7 +18,10 @@ async fn main() {
         "vault" => handle_vault_command(&args[2..]).await,
         "s3" => handle_s3_command(&args[2..]).await,
         "version" | "-v" | "--version" => {
-            println!("grav CLI v0.5.0 (GravSpace Cloud Native CLI)");
+            println!(
+                "grav CLI v{} (GravSpace Cloud Native CLI)",
+                env!("CARGO_PKG_VERSION")
+            );
         }
         "help" | "-h" | "--help" => print_help(),
         other => {
@@ -90,7 +93,10 @@ async fn cmd_status() {
             println!("  Admin API: {endpoint}");
             println!("  S3 API:    {DEFAULT_S3_ENDPOINT}");
 
-            let stats_url = format!("{}/api/admin/system/database-stats", endpoint.trim_end_matches('/'));
+            let stats_url = format!(
+                "{}/api/admin/system/database-stats",
+                endpoint.trim_end_matches('/')
+            );
             let mut req = reqwest::Client::new().get(&stats_url);
             if let Some(tok) = get_token(&HashMap::new()) {
                 req = req.header("Authorization", format!("Bearer {tok}"));
@@ -98,10 +104,22 @@ async fn cmd_status() {
             if let Ok(stats_res) = req.send().await {
                 if stats_res.status().is_success() {
                     if let Ok(stats) = stats_res.json::<serde_json::Value>().await {
-                        let sharding_on = stats.get("sharding_enabled").and_then(|v| v.as_bool()).unwrap_or(false);
-                        let num_shards = stats.get("num_shards").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let db_size = stats.get("db_size_human").and_then(|v| v.as_str()).unwrap_or("-");
-                        let wal_size = stats.get("wal_size_human").and_then(|v| v.as_str()).unwrap_or("-");
+                        let sharding_on = stats
+                            .get("sharding_enabled")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let num_shards = stats
+                            .get("num_shards")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let db_size = stats
+                            .get("db_size_human")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-");
+                        let wal_size = stats
+                            .get("wal_size_human")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-");
                         println!(
                             "  Sharding:  {} ({} Partitions: objects_00..objects_{:02})",
                             if sharding_on { "ACTIVE" } else { "DISABLED" },
@@ -109,7 +127,7 @@ async fn cmd_status() {
                             num_shards.saturating_sub(1)
                         );
                         println!("  DB Size:   {} (WAL: {})", db_size, wal_size);
-                        if let Some(_) = stats.get("databases") {
+                        if stats.get("databases").is_some() {
                             println!("  Databases: 3 Physical Domains (turso.db, vault.db, federation.db)");
                         }
                     }
@@ -151,13 +169,22 @@ async fn cmd_vault_run(args: &[String]) {
     }
 
     let endpoint = get_endpoint(&flags);
-    let project = flags.get("project").cloned().unwrap_or_else(|| "default".to_string());
-    let env_slug = flags.get("env").cloned().unwrap_or_else(|| "development".to_string());
+    let project = flags
+        .get("project")
+        .cloned()
+        .unwrap_or_else(|| "default".to_string());
+    let env_slug = flags
+        .get("env")
+        .cloned()
+        .unwrap_or_else(|| "development".to_string());
 
     println!("🔒 [grav-vault] Fetching secrets for project: '{project}', env: '{env_slug}'...");
     let env_vars = fetch_vault_secrets(&endpoint, &project, &env_slug, get_token(&flags)).await;
 
-    println!("🚀 [grav-vault] Injecting {} secrets into memory child process...", env_vars.len());
+    println!(
+        "🚀 [grav-vault] Injecting {} secrets into memory child process...",
+        env_vars.len()
+    );
     let child_cmd = &cmd_parts[0];
     let child_args = &cmd_parts[1..];
 
@@ -185,8 +212,14 @@ async fn cmd_vault_run(args: &[String]) {
 async fn cmd_vault_pull(args: &[String]) {
     let flags = parse_flags(args);
     let endpoint = get_endpoint(&flags);
-    let project = flags.get("project").cloned().unwrap_or_else(|| "default".to_string());
-    let env_slug = flags.get("env").cloned().unwrap_or_else(|| "development".to_string());
+    let project = flags
+        .get("project")
+        .cloned()
+        .unwrap_or_else(|| "default".to_string());
+    let env_slug = flags
+        .get("env")
+        .cloned()
+        .unwrap_or_else(|| "development".to_string());
 
     let env_vars = fetch_vault_secrets(&endpoint, &project, &env_slug, get_token(&flags)).await;
 
@@ -242,12 +275,11 @@ fn parse_dotenv_text(text: &str) -> HashMap<String, String> {
         if let Some((k, v)) = trimmed.split_once('=') {
             let key = k.trim().to_string();
             let mut val = v.trim().to_string();
-            if (val.starts_with('"') && val.ends_with('"'))
-                || (val.starts_with('\'') && val.ends_with('\''))
+            if ((val.starts_with('"') && val.ends_with('"'))
+                || (val.starts_with('\'') && val.ends_with('\'')))
+                && val.len() >= 2
             {
-                if val.len() >= 2 {
-                    val = val[1..val.len() - 1].to_string();
-                }
+                val = val[1..val.len() - 1].to_string();
             }
             map.insert(key, val);
         }

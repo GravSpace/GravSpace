@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Lock,
   Eye,
@@ -17,7 +17,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react'
-import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import {
   TYPE_CONFIG,
@@ -27,6 +26,7 @@ import {
   getProjectTheme,
   getProjectIcon,
 } from './vaultTypes'
+import { detectSecretFileExt, formatSecretFileSize } from './vaultDownload'
 import { toast } from 'sonner'
 
 interface Props {
@@ -84,16 +84,16 @@ export function SecretsTable({
     <div className="rounded-xl border border-border/60 bg-card overflow-hidden shadow-2xs">
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
-          <thead className="bg-muted/30 border-b border-border/50 text-muted-foreground font-medium text-[11px]">
-            <tr>
-              <th className="py-2.5 px-3.5">Key / Secret Name</th>
-              {currentProject === 'all' && <th className="py-2.5 px-3">Project</th>}
-              {currentEnv === 'all' && <th className="py-2.5 px-3">Environment</th>}
-              <th className="py-2.5 px-3">Type</th>
-              <th className="py-2.5 px-3">Value</th>
-              <th className="py-2.5 px-3">PAM Security</th>
-              <th className="py-2.5 px-3">Version</th>
-              <th className="py-2.5 px-3 text-right">Actions</th>
+          <thead className="bg-muted/35 border-b border-border/50 text-muted-foreground font-medium text-[11px]">
+            <tr className="whitespace-nowrap">
+              <th className="py-2 px-3.5">Key / Secret Name</th>
+              {currentProject === 'all' && <th className="py-2 px-3">Project</th>}
+              {currentEnv === 'all' && <th className="py-2 px-3">Environment</th>}
+              <th className="py-2 px-3">Type</th>
+              <th className="py-2 px-3">Value</th>
+              <th className="py-2 px-3">PAM Security</th>
+              <th className="py-2 px-3">Version</th>
+              <th className="py-2 px-3.5 text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/30">
@@ -135,33 +135,35 @@ export function SecretsTable({
 
                 return (
                   <tr key={s.id} className="hover:bg-muted/25 transition-colors group">
-                    {/* Key Name & Tags */}
-                    <td className="py-2.5 px-3.5">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-6 h-6 rounded-md bg-muted/60 flex items-center justify-center shrink-0 border border-border/40">
-                          <TypeIcon className={`w-3 h-3 ${typeConf?.color}`} />
+                    {/* Key Name, Description & Tags */}
+                    <td className="py-2 px-3.5 max-w-[230px] sm:max-w-[320px] lg:max-w-[380px]">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-7 h-7 rounded-lg bg-muted/60 flex items-center justify-center shrink-0 border border-border/50">
+                          <TypeIcon className={`w-3.5 h-3.5 ${typeConf?.color}`} />
                         </div>
-                        <div>
-                          <button
-                            type="button"
-                            onClick={() => copyKeyName(s.name)}
-                            className="font-mono font-semibold text-foreground text-xs hover:text-primary transition-colors text-left flex items-center gap-1 group/btn cursor-pointer"
-                            title="Click to copy name"
-                          >
-                            <span>{s.name}</span>
-                            <Copy className="w-2.5 h-2.5 opacity-0 group-hover/btn:opacity-60 transition-opacity" />
-                          </button>
-                          {s.description && (
-                            <span className="text-[11px] text-muted-foreground truncate block max-w-xs mt-0.5">
-                              {s.description}
-                            </span>
-                          )}
-                          {s.tags && s.tags.length > 0 && (
-                            <div className="flex items-center gap-1 mt-1">
-                              {s.tags.map((tag) => (
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <button
+                              type="button"
+                              onClick={() => copyKeyName(s.name)}
+                              className="font-mono font-semibold text-foreground text-xs hover:text-primary transition-colors text-left inline-flex items-center gap-1.5 min-w-0 max-w-full group/btn cursor-pointer"
+                              title={`${s.name} (click to copy)`}
+                            >
+                              <span className="truncate">{s.name}</span>
+                              <Copy className="w-3 h-3 shrink-0 opacity-0 group-hover/btn:opacity-70 transition-opacity" />
+                            </button>
+                          </div>
+                          {(s.description || (s.tags && s.tags.length > 0)) && (
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5 min-w-0">
+                              {s.description && (
+                                <span className="text-[11px] text-muted-foreground truncate max-w-[220px]">
+                                  {s.description}
+                                </span>
+                              )}
+                              {s.tags?.map((tag) => (
                                 <span
                                   key={tag}
-                                  className="text-[9px] py-0 px-1.5 rounded-sm bg-muted/50 border border-border/50 text-muted-foreground font-mono"
+                                  className="inline-flex items-center text-[10px] leading-tight py-0.5 px-1.5 rounded-md bg-muted/60 border border-border/50 text-muted-foreground font-mono"
                                 >
                                   #{tag}
                                 </span>
@@ -174,7 +176,7 @@ export function SecretsTable({
 
                     {/* Project Pill if viewing All Projects */}
                     {currentProject === 'all' && (
-                      <td className="py-2.5 px-3">
+                      <td className="py-2 px-3 whitespace-nowrap">
                         {(() => {
                           const proj = projects?.find((p) => p.slug === s.project_id)
                           const theme = getProjectTheme(proj?.color)
@@ -182,7 +184,7 @@ export function SecretsTable({
                           return (
                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${theme.badge}`}>
                               <IconComp className="w-2.5 h-2.5 shrink-0" />
-                              <span className="truncate max-w-[80px]">{proj?.name || s.project_id}</span>
+                              <span className="truncate max-w-[90px]">{proj?.name || s.project_id}</span>
                             </span>
                           )
                         })()}
@@ -191,7 +193,7 @@ export function SecretsTable({
 
                     {/* Environment Pill if viewing All */}
                     {currentEnv === 'all' && (
-                      <td className="py-2.5 px-3">
+                      <td className="py-2 px-3 whitespace-nowrap">
                         <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium border ${envTheme.badge}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${envTheme.dot}`} />
                           <span className="capitalize">{s.environment}</span>
@@ -199,61 +201,70 @@ export function SecretsTable({
                       </td>
                     )}
 
-                    {/* Type Badge */}
-                    <td className="py-2.5 px-3">
-                      <span className="text-[11px] text-muted-foreground font-medium">
-                        {typeConf?.label || s.secret_type}
-                      </span>
+                    {/* Type & File Meta */}
+                    <td className="py-2 px-3 whitespace-nowrap">
+                      <div className="inline-flex items-center gap-1.5">
+                        <span className="text-[11px] text-foreground/85 font-medium">
+                          {typeConf?.label || s.secret_type}
+                        </span>
+                        {s.secret_type === 'file' && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-sky-500/10 border border-sky-500/20 text-[10px] font-mono font-medium text-sky-600 dark:text-sky-400">
+                            .{detectSecretFileExt(s.name, s.metadata)}
+                            {s.metadata?.size_bytes ? ` · ${formatSecretFileSize(s.metadata.size_bytes)}` : ''}
+                          </span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Masked / Revealed Value */}
-                    <td className="py-2.5 px-3 max-w-xs">
-                      <div className="font-mono text-[11px] py-1 px-2 rounded-md bg-muted/30 border border-border/40 select-all truncate">
+                    <td className="py-2 px-3">
+                      <div className="font-mono text-[11px] h-7 px-2.5 rounded-md bg-muted/35 border border-border/50 inline-flex items-center max-w-[180px] select-all truncate">
                         {isRevealed ? (
-                          <span className="text-foreground">{revealedMap[s.id]}</span>
+                          <span className="text-foreground truncate">{revealedMap[s.id]}</span>
                         ) : (
-                          <span className="text-muted-foreground tracking-widest text-[10px]">••••••••••••••••</span>
+                          <span className="text-muted-foreground tracking-widest text-[10px]">••••••••••••</span>
                         )}
                       </div>
                     </td>
 
                     {/* PAM Status */}
-                    <td className="py-2.5 px-3">
+                    <td className="py-2 px-3 whitespace-nowrap">
                       {s.requires_approval ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
                           <ShieldAlert className="w-3 h-3 text-amber-500" />
                           PAM Guarded
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] text-muted-foreground border border-border/50">
-                          <ShieldCheck className="w-3 h-3 opacity-50" />
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] text-muted-foreground bg-muted/30 border border-border/50">
+                          <ShieldCheck className="w-3 h-3 opacity-60" />
                           Direct
                         </span>
                       )}
                     </td>
 
                     {/* Version */}
-                    <td className="py-2.5 px-3 font-mono text-[11px]">
+                    <td className="py-2 px-3 font-mono text-[11px] whitespace-nowrap">
                       <button
                         type="button"
                         onClick={() => onSelectDetail(s)}
-                        className="px-1.5 py-0.5 rounded-md border border-border/60 hover:bg-muted font-mono text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        className="h-6 px-2 rounded-md border border-border/60 bg-background/50 hover:bg-muted font-mono text-[10px] font-medium text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                         title="Click to view version history"
                       >
                         v{s.current_version}
                       </button>
                     </td>
 
-                    {/* Actions */}
-                    <td className="py-2.5 px-3 text-right">
-                      <div className="flex items-center justify-end gap-1">
+                    {/* Grouped Compact Actions */}
+                    <td className="py-2 px-3.5 text-right whitespace-nowrap">
+                      <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg border border-border/60 bg-muted/25">
                         <Button
                           variant="ghost"
                           size="icon"
                           onClick={() => onToggleReveal(s)}
                           disabled={isRevealing}
+                          aria-label={isRevealed ? `Hide ${s.name}` : `Reveal ${s.name}`}
                           title={isRevealed ? 'Hide value' : 'Reveal value'}
-                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-background"
                         >
                           {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                         </Button>
@@ -262,8 +273,9 @@ export function SecretsTable({
                           variant="ghost"
                           size="icon"
                           onClick={() => onCopy(s)}
+                          aria-label={`Copy ${s.name} value`}
                           title="Copy decrypted value"
-                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-background"
                         >
                           <Copy className="w-3.5 h-3.5" />
                         </Button>
@@ -272,8 +284,9 @@ export function SecretsTable({
                           variant="ghost"
                           size="icon"
                           onClick={() => onDownload(s, s.secret_type === 'keystore' ? 'bundle' : 'file')}
+                          aria-label={`Download ${s.name}`}
                           title={s.secret_type === 'keystore' ? 'Download keystore & credentials bundle (.zip)' : 'Download secret file / key'}
-                          className="h-7 w-7 text-muted-foreground hover:text-primary"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-primary hover:bg-background"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </Button>
@@ -282,8 +295,9 @@ export function SecretsTable({
                           variant="ghost"
                           size="icon"
                           onClick={() => onSelectDetail(s)}
+                          aria-label={`Details and versions for ${s.name}`}
                           title="Details, rotate, and version rollback"
-                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-background"
                         >
                           <History className="w-3.5 h-3.5" />
                         </Button>
@@ -292,8 +306,9 @@ export function SecretsTable({
                           variant="ghost"
                           size="icon"
                           onClick={() => onDelete(s.id)}
+                          aria-label={`Delete ${s.name}`}
                           title="Delete secret"
-                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          className="h-6 w-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
@@ -307,9 +322,9 @@ export function SecretsTable({
         </table>
       </div>
 
-      {/* Pagination Footer */}
+      {/* Compact Pagination Footer */}
       {secrets.length > 0 && (
-        <div className="px-4 py-2.5 border-t border-border/50 bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs text-muted-foreground">
+        <div className="px-3.5 py-2 border-t border-border/50 bg-muted/20 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
           <div className="flex items-center gap-2">
             <span>
               Showing <strong className="text-foreground">{Math.min(secrets.length, (page - 1) * pageSize + 1)}</strong>–

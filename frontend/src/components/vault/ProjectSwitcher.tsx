@@ -1,13 +1,11 @@
 import { useState, useMemo } from 'react'
 import {
-  Folder,
   Globe,
   Plus,
   Settings2,
   Check,
   ChevronsUpDown,
   Search,
-  Sparkles,
 } from 'lucide-react'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Button } from '../ui/button'

@@ -94,17 +94,18 @@ export function useBatchOperations(
     }
   }, [selectedKeys, itemsMap])
 
-  const toggleKey = useCallback((key: string) => {
-    setSelectedKeys((prev) => {
-      const next = new Set(prev)
+  const toggleKey = useCallback(
+    (key: string) => {
+      const next = new Set(selectedKeys)
       if (next.has(key)) {
         next.delete(key)
       } else {
         next.add(key)
       }
-      return next
-    })
-  }, [])
+      setSelectedKeys(next)
+    },
+    [selectedKeys, setSelectedKeys],
+  )
 
   const toggleAll = useCallback((currentItems: (S3Object | string)[], checked: boolean) => {
     if (checked) {

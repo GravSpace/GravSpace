@@ -1,344 +1,325 @@
-use crate::auth::signature::{build_string_to_sign, calculate_signature, sha256_hex, uri_encode};
+use crate::admin::federation_handlers::{broadcast_federation_event, get_federation_tx};
 use crate::db;
 use crate::storage::FileStorage;
-use chrono::Utc;
-use std::time::Duration;
+use crate::workers::federation_pull::run_two_way_pull_sync;
+use crate::workers::federation_transfer::{transfer_sync_item, TransferOutcome};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
-fn sign_s3_request(
-    builder: reqwest::RequestBuilder,
-    method: &str,
-    endpoint: &str,
-    bucket: &str,
-    encoded_key: &str,
-    payload: &[u8],
-    access_key: &str,
-    secret_key: &str,
-) -> reqwest::RequestBuilder {
-    let now = Utc::now();
-    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-    let date_stamp = now.format("%Y%m%d").to_string();
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+const SAFETY_RECONCILE_INTERVAL: Duration = Duration::from_secs(300);
 
-    let stripped = endpoint
-        .strip_prefix("https://")
-        .or_else(|| endpoint.strip_prefix("http://"))
-        .unwrap_or(endpoint);
-    let host = stripped.split('/').next().unwrap_or(stripped);
-
-    let payload_hash = sha256_hex(payload);
-    let canonical_uri = format!("/{}/{}", bucket.trim_matches('/'), encoded_key.trim_matches('/'));
-    let canonical_headers = format!("host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
-    let signed_headers = "host;x-amz-content-sha256;x-amz-date";
-    let canonical_request = format!("{method}\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
-
-    let algorithm = "AWS4-HMAC-SHA256";
-    let credential_scope = format!("{date_stamp}/us-east-1/s3/aws4_request");
-    let string_to_sign = build_string_to_sign(algorithm, &amz_date, &credential_scope, &canonical_request);
-
-    let signature = calculate_signature(secret_key, &date_stamp, "us-east-1", "s3", &string_to_sign);
-    let auth_header = format!(
-        "{algorithm} Credential={access_key}/{credential_scope}, SignedHeaders={signed_headers}, Signature={signature}"
-    );
-
-    builder
-        .header("Host", host)
-        .header("User-Agent", "GravSpace-Federation/0.2.0")
-        .header("x-amz-date", amz_date)
-        .header("x-amz-content-sha256", payload_hash)
-        .header("Authorization", auth_header)
-}
-
-pub async fn start_federation_worker(storage: FileStorage) {
-    info!("GravSpace Federation & Resilient Outbox worker started");
-
-    // Clean up any historic directory marker entries in sync queue that caused read errors
+/// Runs startup catch-up: resets stuck `syncing` rows, expedites backoff timers,
+/// clears legacy directory markers, and reconciles all enabled shares.
+async fn run_startup_recovery(storage: &FileStorage) {
     if let Ok(conn) = storage.federation_conn() {
         let _ = conn
             .execute(
-                "UPDATE sync_queue SET status = 'completed', error_message = NULL WHERE (source_key LIKE '%/' OR target_key LIKE '%/') AND status != 'completed'",
+                "UPDATE sync_queue SET status = 'completed', last_error = NULL
+                 WHERE (source_key LIKE '%/' OR target_key LIKE '%/') AND status != 'completed'",
                 (),
             )
             .await;
+        let _ = conn
+            .execute(
+                "UPDATE sync_queue SET status = 'pending', updated_at = datetime('now')
+                 WHERE status = 'syncing'",
+                (),
+            )
+            .await;
+        let _ = db::federation_recovery::expedite_pending_for_peer(&conn, None).await;
     }
 
-    let client = reqwest::Client::builder()
+    match storage.reconcile_all_enabled_shares(None).await {
+        Ok(enqueued) if enqueued > 0 => {
+            info!("Startup federation catch-up queued {enqueued} drifted objects");
+        }
+        Err(e) => warn!("Startup federation catch-up failed: {e}"),
+        _ => {}
+    }
+
+    let storage_c = storage.clone();
+    tokio::spawn(async move {
+        crate::workers::federation_announce::announce_all_enabled_shares(&storage_c).await;
+    });
+}
+
+/// Probes remote peer `/health` endpoints and triggers immediate catch-up when a peer
+/// transitions back to `healthy` after being offline/unreachable/degraded (RTO recovery).
+async fn run_heartbeat_phase(
+    storage: &FileStorage,
+    conn: &turso::Connection,
+    probe_client: &reqwest::Client,
+    transfer_client: &reqwest::Client,
+    peer_state_cache: &mut HashMap<i64, (String, Instant)>,
+) {
+    let Ok(peers) = db::federation::list_remote_servers(conn).await else {
+        return;
+    };
+
+    for peer in peers {
+        let health_url = format!("{}/health", peer.endpoint.trim_end_matches('/'));
+        let start = Instant::now();
+        let (status_str, latency) = match probe_client.get(&health_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                ("healthy".to_string(), start.elapsed().as_millis() as i64)
+            }
+            Ok(resp) => {
+                let s = if resp.status().is_server_error() {
+                    "degraded"
+                } else {
+                    "healthy"
+                };
+                (s.to_string(), start.elapsed().as_millis() as i64)
+            }
+            Err(_) => ("unreachable".to_string(), 0),
+        };
+
+        broadcast_federation_event(
+            "peer_heartbeat",
+            serde_json::json!({
+                "id": peer.id,
+                "status": status_str,
+                "latency_ms": latency
+            }),
+        );
+
+        let prev_status = peer_state_cache
+            .get(&peer.id)
+            .map(|(s, _)| s.clone())
+            .unwrap_or_else(|| peer.status.clone());
+        let recovered = status_str == "healthy" && prev_status != "healthy";
+
+        let should_persist = match peer_state_cache.get(&peer.id) {
+            Some((last_status, last_persisted)) => {
+                last_status != &status_str || last_persisted.elapsed() >= Duration::from_secs(60)
+            }
+            None => true,
+        };
+
+        if should_persist {
+            let _ = db::federation::update_server_status(conn, peer.id, &status_str, latency).await;
+            peer_state_cache.insert(peer.id, (status_str, Instant::now()));
+        }
+
+        if recovered {
+            let expedited = db::federation_recovery::expedite_pending_for_peer(conn, Some(peer.id))
+                .await
+                .unwrap_or(0);
+            let reconciled = storage
+                .reconcile_all_enabled_shares(Some(peer.id))
+                .await
+                .unwrap_or(0);
+            let pulled = run_two_way_pull_sync(storage, conn, transfer_client, Some(peer.id)).await;
+            if expedited > 0 || reconciled > 0 || pulled > 0 {
+                info!(
+                    "Peer '{}' recovered from '{prev_status}' -> expedited {expedited} queued + reconciled {reconciled} + pulled {pulled} remote items",
+                    peer.name
+                );
+            }
+        }
+    }
+}
+
+/// Drains up to 10 ready outbox items using the long-timeout transfer client.
+async fn drain_queue_phase(
+    storage: &FileStorage,
+    conn: &turso::Connection,
+    transfer_client: &reqwest::Client,
+    peer_state_cache: &mut HashMap<i64, (String, Instant)>,
+) {
+    let Ok(pending_items) = db::federation::get_pending_sync_items(conn, 10).await else {
+        return;
+    };
+    if pending_items.is_empty() {
+        return;
+    }
+
+    let shares = db::federation::list_shares(conn).await.unwrap_or_default();
+    let peers = db::federation::list_remote_servers(conn)
+        .await
+        .unwrap_or_default();
+
+    for item in pending_items {
+        let Some(share) = shares.iter().find(|s| s.id == item.share_id && s.enabled) else {
+            let _ = db::federation::mark_item_completed(conn, item.id).await;
+            continue;
+        };
+
+        let Some(peer) = peers.iter().find(|p| p.id == share.remote_server_id) else {
+            let _ = db::federation_recovery::mark_item_retry_or_failed(
+                conn,
+                item.id,
+                "Remote server peer not found",
+                60,
+                item.attempts + 1,
+                item.max_attempts,
+                false,
+            )
+            .await;
+            continue;
+        };
+
+        if item.source_key.ends_with('/') || item.target_key.ends_with('/') {
+            let _ = db::federation::mark_item_completed(conn, item.id).await;
+            let _ = db::federation::update_share_status(conn, share.id, "in_sync").await;
+            broadcast_federation_event(
+                "queue_updated",
+                serde_json::json!({ "id": item.id, "share_id": share.id, "status": "completed" }),
+            );
+            debug!("Skipped directory marker sync for {}", item.source_key);
+            continue;
+        }
+
+        let _ = conn
+            .execute(
+                "UPDATE sync_queue SET status = 'syncing', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+                libsql::params![item.id],
+            )
+            .await;
+        broadcast_federation_event(
+            "queue_updated",
+            serde_json::json!({ "id": item.id, "share_id": share.id, "status": "syncing" }),
+        );
+
+        match transfer_sync_item(storage, transfer_client, &item, share, peer).await {
+            TransferOutcome::Success => {
+                let _ = db::federation::mark_item_completed(conn, item.id).await;
+                let _ = db::federation::update_share_status(conn, share.id, "in_sync").await;
+                broadcast_federation_event(
+                    "queue_updated",
+                    serde_json::json!({ "id": item.id, "share_id": share.id, "status": "completed" }),
+                );
+                debug!(
+                    "Sync completed for {} -> {}",
+                    item.source_key, item.target_key
+                );
+            }
+            outcome => {
+                let (err_msg, is_permanent, is_unreachable) = match outcome {
+                    TransferOutcome::PermanentError(m) => (m, true, false),
+                    TransferOutcome::TransientError(m) => (m, false, false),
+                    TransferOutcome::Unreachable(m) => (m, false, true),
+                    TransferOutcome::Success => unreachable!(),
+                };
+                let attempts = item.attempts + 1;
+                let exp_delay = (2_i64.pow(attempts.min(7) as u32) * 2).min(300);
+                warn!(
+                    "Sync failed for item #{}: {err_msg}, next_delay={exp_delay}s",
+                    item.id
+                );
+                let final_status = db::federation_recovery::mark_item_retry_or_failed(
+                    conn,
+                    item.id,
+                    &err_msg,
+                    exp_delay,
+                    attempts,
+                    item.max_attempts,
+                    is_permanent,
+                )
+                .await
+                .unwrap_or("pending");
+                let _ = db::federation::update_share_status(conn, share.id, "pending_retry").await;
+                if is_unreachable {
+                    let _ =
+                        db::federation::update_server_status(conn, peer.id, "unreachable", 0).await;
+                    peer_state_cache.insert(peer.id, ("unreachable".to_string(), Instant::now()));
+                }
+                broadcast_federation_event(
+                    "queue_updated",
+                    serde_json::json!({
+                        "id": item.id,
+                        "share_id": share.id,
+                        "status": final_status,
+                        "last_error": err_msg
+                    }),
+                );
+            }
+        }
+    }
+}
+
+/// Starts the resilient cross-server federation worker handling heartbeats,
+/// startup/RTO catch-up reconciliation, event-driven wakeups, and outbox draining.
+pub async fn start_federation_worker(storage: FileStorage) {
+    info!("GravSpace Federation & Resilient Outbox worker started");
+    run_startup_recovery(&storage).await;
+
+    let probe_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let transfer_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(300))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
 
     let mut interval = tokio::time::interval(Duration::from_secs(3));
-    let mut last_heartbeat_tick = std::time::Instant::now() - Duration::from_secs(60);
-    let mut peer_state_cache: std::collections::HashMap<i64, (String, std::time::Instant)> =
-        std::collections::HashMap::new();
-    let mut event_rx = crate::admin::federation_handlers::get_federation_tx().subscribe();
+    let mut last_heartbeat_tick = Instant::now() - Duration::from_secs(60);
+    let mut last_reconcile_tick = Instant::now();
+    let mut peer_state_cache: HashMap<i64, (String, Instant)> = HashMap::new();
+    let mut event_rx = get_federation_tx().subscribe();
 
     loop {
-        // Event-driven reactive wakeup: wakes immediately on new queue items (<1ms) or every 3s for maintenance
+        let mut trigger_two_way_pull = false;
         tokio::select! {
             _ = interval.tick() => {},
-            Ok(msg) = event_rx.recv() => {
-                if !msg.contains("queue_enqueued") && !msg.contains("reconciled") {
-                    continue;
-                }
-            }
-        }
-
-        let conn = match storage.federation_conn() {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        // 1. Heartbeat Phase: check health of remote peers every 30 seconds
-        if last_heartbeat_tick.elapsed() >= Duration::from_secs(30) {
-            last_heartbeat_tick = std::time::Instant::now();
-            if let Ok(peers) = db::federation::list_remote_servers(&conn).await {
-                for peer in peers {
-                    let health_url = format!("{}/health", peer.endpoint.trim_end_matches('/'));
-                    let start = std::time::Instant::now();
-                    let (status_str, latency) = match client.get(&health_url).send().await {
-                        Ok(resp) if resp.status().is_success() => {
-                            ("healthy".to_string(), start.elapsed().as_millis() as i64)
-                        }
-                        Ok(resp) => {
-                            let s = if resp.status().is_server_error() {
-                                "degraded"
-                            } else {
-                                "healthy"
-                            };
-                            (s.to_string(), start.elapsed().as_millis() as i64)
-                        }
-                        Err(_) => ("unreachable".to_string(), 0),
-                    };
-
-                    // Broadcast live SSE event immediately on every probe
-                    crate::admin::federation_handlers::broadcast_federation_event(
-                        "peer_heartbeat",
-                        serde_json::json!({
-                            "id": peer.id,
-                            "status": status_str,
-                            "latency_ms": latency
-                        }),
-                    );
-
-                    // Throttling: Only write UPDATE to SQLite disk if status changed or 60s elapsed
-                    let should_persist = match peer_state_cache.get(&peer.id) {
-                        Some((last_status, last_persisted)) => {
-                            last_status != &status_str
-                                || last_persisted.elapsed() >= Duration::from_secs(60)
-                        }
-                        None => true,
-                    };
-
-                    if should_persist {
-                        let _ = db::federation::update_server_status(
-                            &conn,
-                            peer.id,
-                            &status_str,
-                            latency,
-                        )
-                        .await;
-                        peer_state_cache.insert(peer.id, (status_str, std::time::Instant::now()));
-                    }
-                }
-            }
-        }
-
-        // 2. Queue Drain Phase: Process pending sync outbox items
-        let pending_items = match db::federation::get_pending_sync_items(&conn, 10).await {
-            Ok(items) => items,
-            Err(_) => continue,
-        };
-
-        if pending_items.is_empty() {
-            continue;
-        }
-
-        let shares = db::federation::list_shares(&conn).await.unwrap_or_default();
-        let peers = db::federation::list_remote_servers(&conn).await.unwrap_or_default();
-
-        for item in pending_items {
-            let share = match shares.iter().find(|s| s.id == item.share_id) {
-                Some(s) if s.enabled => s,
-                _ => {
-                    let _ = db::federation::mark_item_completed(&conn, item.id).await;
-                    continue;
-                }
-            };
-
-            let peer = match peers.iter().find(|p| p.id == share.remote_server_id) {
-                Some(p) => p,
-                None => {
-                    let _ = db::federation::mark_item_failed(
-                        &conn,
-                        item.id,
-                        "Remote server peer not found",
-                        60,
-                    )
-                    .await;
-                    continue;
-                }
-            };
-
-            // Directory markers (keys ending with '/') do not hold physical file data.
-            // Target nodes create parent directories implicitly when files are written.
-            if item.source_key.ends_with('/') || item.target_key.ends_with('/') {
-                let _ = db::federation::mark_item_completed(&conn, item.id).await;
-                let _ = db::federation::update_share_status(&conn, share.id, "in_sync").await;
-                crate::admin::federation_handlers::broadcast_federation_event("queue_updated", serde_json::json!({
-                    "id": item.id,
-                    "share_id": share.id,
-                    "status": "completed"
-                }));
-                debug!("Skipped directory marker sync for {}", item.source_key);
-                continue;
-            }
-
-            let is_s3_peer = peer.s3_endpoint.is_some()
-                || (!peer.access_key.is_empty() && !peer.secret_key.starts_with("eyJ"));
-
-            let base_ep = if let Some(ref s3_ep) = peer.s3_endpoint {
-                let trimmed = s3_ep.trim().trim_end_matches('/');
-                if !trimmed.is_empty() {
-                    trimmed.to_string()
-                } else if peer.endpoint.contains(":8080") {
-                    peer.endpoint.trim_end_matches('/').replace(":8080", ":9001")
-                } else {
-                    peer.endpoint.trim_end_matches('/').to_string()
-                }
-            } else if peer.endpoint.contains(":8080") {
-                peer.endpoint.trim_end_matches('/').replace(":8080", ":9001")
-            } else {
-                peer.endpoint.trim_end_matches('/').to_string()
-            };
-
-            let encoded_key: String = item
-                .target_key
-                .trim_start_matches('/')
-                .split('/')
-                .map(|seg| uri_encode(seg, true))
-                .collect::<Vec<_>>()
-                .join("/");
-
-            let (target_url, use_sigv4) = if is_s3_peer {
-                (
-                    format!("{base_ep}/{}/{}", item.target_bucket, encoded_key),
-                    true,
-                )
-            } else {
-                (
-                    format!("{base_ep}/admin/buckets/{}/objects/{}", item.target_bucket, encoded_key),
-                    false,
-                )
-            };
-
-            let sync_result = if item.action == "DELETE" {
-                let req_builder = client.delete(&target_url);
-                let req = if use_sigv4 {
-                    sign_s3_request(
-                        req_builder,
-                        "DELETE",
-                        &base_ep,
-                        &item.target_bucket,
-                        &encoded_key,
-                        b"",
-                        &peer.access_key,
-                        &peer.secret_key,
-                    )
-                } else {
-                    req_builder
-                        .header("Authorization", format!("Bearer {}", peer.secret_key))
-                        .header("User-Agent", "GravSpace-Federation/0.2.0")
-                };
-                req.send().await
-            } else {
-                // Action == "PUT"
-                match storage
-                    .get_object(&item.source_bucket, &item.source_key, None, None)
-                    .await
-                {
-                    Ok((data, meta, _)) => {
-                        let req_builder = client
-                            .put(&target_url)
-                            .header("Content-Type", meta.content_type.clone())
-                            .body(data.clone());
-                        let req = if use_sigv4 {
-                            sign_s3_request(
-                                req_builder,
-                                "PUT",
-                                &base_ep,
-                                &item.target_bucket,
-                                &encoded_key,
-                                &data,
-                                &peer.access_key,
-                                &peer.secret_key,
-                            )
-                        } else {
-                            req_builder
-                                .header("Authorization", format!("Bearer {}", peer.secret_key))
-                                .header("User-Agent", "GravSpace-Federation/0.2.0")
-                        };
-                        req.send().await
-                    }
-                    Err(e) => {
-                        if item.source_key.ends_with('/') {
-                            let _ = db::federation::mark_item_completed(&conn, item.id).await;
+            res = event_rx.recv() => {
+                match res {
+                    Ok(msg) => {
+                        if msg.contains("shares_changed")
+                            && (msg.contains("created") || msg.contains("updated"))
+                        {
+                            let _ = storage.reconcile_all_enabled_shares(None).await;
+                            trigger_two_way_pull = true;
+                        } else if msg.contains("shares_changed") && msg.contains("reconciled") {
+                            trigger_two_way_pull = true;
+                        } else if !msg.contains("queue_enqueued")
+                            && !msg.contains("reconciled")
+                            && !msg.contains("retry")
+                        {
                             continue;
                         }
-                        let _ = db::federation::mark_item_failed(
-                            &conn,
-                            item.id,
-                            &format!("Local object read error: {e}"),
-                            30,
-                        )
-                        .await;
-                        continue;
                     }
-                }
-            };
-
-            match sync_result {
-                Ok(resp) if resp.status().is_success() || (item.action == "DELETE" && resp.status() == 404) => {
-                    let _ = db::federation::mark_item_completed(&conn, item.id).await;
-                    let _ = db::federation::update_share_status(&conn, share.id, "in_sync").await;
-                    crate::admin::federation_handlers::broadcast_federation_event("queue_updated", serde_json::json!({
-                        "id": item.id,
-                        "share_id": share.id,
-                        "status": "completed"
-                    }));
-                    debug!("Sync completed for {} -> {}", item.source_key, item.target_key);
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let err_body = resp.text().await.unwrap_or_else(|_| "Unknown HTTP error".to_string());
-                    let attempts = item.attempts + 1;
-                    let exp_delay = (2_i64.pow(attempts.min(7) as u32) * 2).min(300);
-                    let err_msg = format!("HTTP {status}: {err_body}");
-                    warn!("Sync failed for item #{}: {err_msg}, retrying in {exp_delay}s", item.id);
-                    let _ = db::federation::mark_item_failed(&conn, item.id, &err_msg, exp_delay).await;
-                    let _ = db::federation::update_share_status(&conn, share.id, "pending_retry").await;
-                    crate::admin::federation_handlers::broadcast_federation_event("queue_updated", serde_json::json!({
-                        "id": item.id,
-                        "share_id": share.id,
-                        "status": "failed",
-                        "last_error": err_msg
-                    }));
-                }
-                Err(e) => {
-                    let attempts = item.attempts + 1;
-                    let exp_delay = (2_i64.pow(attempts.min(7) as u32) * 2).min(300);
-                    let err_msg = format!("Network/Connection error: {e}");
-                    warn!("Sync network failure for item #{}: {err_msg}, retrying in {exp_delay}s", item.id);
-                    let _ = db::federation::mark_item_failed(&conn, item.id, &err_msg, exp_delay).await;
-                    let _ = db::federation::update_share_status(&conn, share.id, "pending_retry").await;
-                    let _ = db::federation::update_server_status(&conn, peer.id, "unreachable", 0).await;
-                    crate::admin::federation_handlers::broadcast_federation_event("queue_updated", serde_json::json!({
-                        "id": item.id,
-                        "share_id": share.id,
-                        "status": "failed",
-                        "last_error": err_msg
-                    }));
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        event_rx = get_federation_tx().subscribe();
+                    }
                 }
             }
         }
+
+        let Ok(conn) = storage.federation_conn() else {
+            continue;
+        };
+
+        if last_heartbeat_tick.elapsed() >= HEARTBEAT_INTERVAL {
+            last_heartbeat_tick = Instant::now();
+            run_heartbeat_phase(
+                &storage,
+                &conn,
+                &probe_client,
+                &transfer_client,
+                &mut peer_state_cache,
+            )
+            .await;
+        }
+
+        if trigger_two_way_pull || last_reconcile_tick.elapsed() >= SAFETY_RECONCILE_INTERVAL {
+            if last_reconcile_tick.elapsed() >= SAFETY_RECONCILE_INTERVAL {
+                last_reconcile_tick = Instant::now();
+                if let Err(e) = storage.reconcile_all_enabled_shares(None).await {
+                    warn!("Periodic federation reconcile failed: {e}");
+                }
+            }
+            let pulled = run_two_way_pull_sync(&storage, &conn, &transfer_client, None).await;
+            if pulled > 0 {
+                info!("Two-way pull sync fetched {pulled} remote objects");
+            }
+        }
+
+        drain_queue_phase(&storage, &conn, &transfer_client, &mut peer_state_cache).await;
     }
 }

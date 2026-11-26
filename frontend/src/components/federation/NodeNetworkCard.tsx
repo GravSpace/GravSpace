@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Copy, Check, Network, Radio, ShieldCheck, RefreshCw } from 'lucide-react'
+import { Copy, Check, Network, RefreshCw } from 'lucide-react'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
 import { useAuth } from '../../hooks/useAuth'

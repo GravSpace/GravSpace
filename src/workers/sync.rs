@@ -13,6 +13,8 @@ pub async fn start_sync_worker(storage: FileStorage, interval_secs: u64) {
         interval.tick().await;
         if let Err(e) = sync_all(&storage).await {
             error!("Filesystem sync error: {e}");
+        } else {
+            let _ = storage.reconcile_all_enabled_shares(None).await;
         }
     }
 }

@@ -46,7 +46,7 @@ export function S3CredentialSelector({
   onChangeEndpoint,
   onTestConnection,
   testing,
-  networkInfo,
+  networkInfo: _networkInfo,
   executionMode = 'relay',
   onChangeExecutionMode,
 }: Props) {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Download, Copy, Check, FileText, Code2, Table, ShieldAlert, RefreshCw } from 'lucide-react'
 import {
   Dialog,
@@ -137,8 +137,8 @@ export function ExportSecretsDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-2xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-2xl text-xs">
-        <DialogHeader className="px-6 py-4 border-b border-border/50 bg-muted/20 flex flex-row items-center gap-3">
+      <DialogContent className="sm:max-w-2xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-2xl text-xs">
+        <DialogHeader className="px-4 sm:px-6 py-4 border-b border-border/50 bg-muted/20 flex flex-row items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
             <Download className="w-5 h-5" />
           </div>
@@ -152,11 +152,11 @@ export function ExportSecretsDialog({
           </div>
         </DialogHeader>
 
-        <div className="px-6 py-4 space-y-4 max-h-[75vh] overflow-y-auto">
+        <div className="px-4 sm:px-6 py-4 space-y-4 max-h-[75vh] overflow-y-auto">
           {/* Format Selector Tabs */}
           <div className="space-y-1.5">
             <Label className="text-[11px] font-semibold">Export Format</Label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => setFormat('dotenv')}

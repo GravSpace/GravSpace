@@ -42,6 +42,16 @@ impl FileStorage {
             let _ = fs::rename(&trash_path, &live_path);
         }
         self.invalidate_object_list_cache(bucket, key).await;
+
+        if !key.ends_with('/') {
+            let (size, hash) = match db::objects::get_object(&conn, bucket, key, version_id).await {
+                Ok(Some(obj)) => (obj.size, obj.content_hash),
+                _ => (0, None),
+            };
+            let _ = self
+                .notify_federation_change(bucket, key, "PUT", version_id, hash.as_deref(), size)
+                .await;
+        }
         Ok(())
     }
 

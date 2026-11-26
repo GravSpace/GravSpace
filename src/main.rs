@@ -27,7 +27,8 @@ use axum::{routing::get, Router};
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use axum::http::{header, HeaderName, HeaderValue};
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, Any, CorsLayer};
 use tracing::info;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -122,11 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start background workers
     workers::start_workers(storage.clone(), db.clone(), config.clone(), dispatcher.clone());
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any)
-        .expose_headers(Any);
+    let cors = build_cors_layer(&config.cors_origins);
 
     // Build filtered trace layer to suppress repetitive health check spam
     let trace_layer = tower_http::trace::TraceLayer::new_for_http().make_span_with(
@@ -180,19 +177,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut s3_rx = shutdown_rx;
 
     let mut admin_server = tokio::spawn(async move {
-        let _ = axum::serve(admin_listener, admin_app)
-            .with_graceful_shutdown(async move {
-                let _ = admin_rx.wait_for(|&v| v).await;
-            })
-            .await;
+        let _ = axum::serve(
+            admin_listener,
+            admin_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = admin_rx.wait_for(|&v| v).await;
+        })
+        .await;
     });
 
     let mut s3_server = tokio::spawn(async move {
-        let _ = axum::serve(s3_listener, s3_app)
-            .with_graceful_shutdown(async move {
-                let _ = s3_rx.wait_for(|&v| v).await;
-            })
-            .await;
+        let _ = axum::serve(
+            s3_listener,
+            s3_app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move {
+            let _ = s3_rx.wait_for(|&v| v).await;
+        })
+        .await;
     });
 
     tokio::select! {
@@ -233,5 +236,65 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
+    }
+}
+
+fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
+    let explicit_origins: Vec<HeaderValue> = cors_origins
+        .iter()
+        .filter(|o| o.as_str() != "*")
+        .filter_map(|o| HeaderValue::from_str(o).ok())
+        .collect();
+
+    if cors_origins.iter().any(|o| o == "*") || explicit_origins.is_empty() {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .expose_headers(Any)
+    } else {
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(explicit_origins))
+            .allow_methods(AllowMethods::mirror_request())
+            .allow_headers(AllowHeaders::mirror_request())
+            .expose_headers([
+                header::CONTENT_TYPE,
+                header::CONTENT_LENGTH,
+                header::CONTENT_DISPOSITION,
+                header::CONTENT_RANGE,
+                header::ETAG,
+                header::LAST_MODIFIED,
+                HeaderName::from_static("x-amz-version-id"),
+                HeaderName::from_static("x-amz-bucket-region"),
+                HeaderName::from_static("x-amz-server-side-encryption"),
+            ])
+            .allow_credentials(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_cors_layer;
+    use axum::{body::Body, http::Request, routing::get, Router};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn cors_layer_supports_wildcard_and_explicit_credentialed_origins_without_panic() {
+        for origins in [vec!["*".to_string()], vec!["http://localhost:3000".to_string()]] {
+            let app = Router::new()
+                .route("/health", get(|| async { "ok" }))
+                .layer(build_cors_layer(&origins));
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .uri("/health")
+                        .header("origin", "http://localhost:3000")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        }
     }
 }

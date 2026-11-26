@@ -13,27 +13,49 @@ interface UseFederationStreamOptions {
   enabled?: boolean
 }
 
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
+
 export function useFederationStream({ onEvent, enabled = true }: UseFederationStreamOptions = {}) {
-  const { authState } = useAuth()
+  const { authState, authFetch } = useAuth()
   const [isConnected, setIsConnected] = useState(false)
   const [lastEvent, setLastEvent] = useState<FederationWsMessage | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const onEventRef = useRef(onEvent)
+  const authFetchRef = useRef(authFetch)
   onEventRef.current = onEvent
+  authFetchRef.current = authFetch
 
+  const isAuthenticated = Boolean(authState?.isAuthenticated)
   const token = (authState as any)?.token || ''
 
   useEffect(() => {
-    if (!enabled || !token) return
+    if (!enabled || !isAuthenticated) return
 
     let isDisposed = false
     let reconnectTimeout: ReturnType<typeof setTimeout>
     let ws: WebSocket | null = null
 
-    function connect() {
+    async function connect() {
       if (isDisposed) return
       try {
-        const wsUrl = getFederationStreamWsUrl(token)
+        let wsUrl: string
+        try {
+          const ticketRes = await authFetchRef.current(`${API_BASE}/admin/federation/stream-ticket`, {
+            method: 'POST',
+          })
+          if (ticketRes.ok) {
+            const ticketData = await ticketRes.json()
+            wsUrl = ticketData?.ticket
+              ? getFederationStreamWsUrl(ticketData.ticket, true)
+              : getFederationStreamWsUrl(token, false)
+          } else {
+            wsUrl = getFederationStreamWsUrl(token, false)
+          }
+        } catch {
+          wsUrl = getFederationStreamWsUrl(token, false)
+        }
+
+        if (isDisposed) return
         ws = new WebSocket(wsUrl)
         wsRef.current = ws
 
@@ -80,7 +102,7 @@ export function useFederationStream({ onEvent, enabled = true }: UseFederationSt
       }
       setIsConnected(false)
     }
-  }, [token, enabled])
+  }, [isAuthenticated, token, enabled])
 
   return { isConnected, lastEvent }
 }

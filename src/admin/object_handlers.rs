@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use crate::auth::signature::{calculate_signature, uri_encode};
 use crate::db;
 use crate::error::AppError;
-use crate::storage::FileStorage;
+use crate::storage::{object_stream_ops::open_object_byte_stream, FileStorage};
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -137,7 +137,20 @@ pub async fn get_object(
     Query(query): Query<ObjectVersionQuery>,
 ) -> Result<Response, AppError> {
     let vid = query.version_id.as_deref().or(query.version_id_camel.as_deref());
-    let (data, meta, _) = storage.get_object(&bucket, &key, vid, None).await?;
+    let (mut res, meta) = if let Some((path, total_len, meta)) =
+        storage.resolve_raw_object_path(&bucket, &key, vid).await?
+    {
+        let mut r = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from_stream(open_object_byte_stream(path)))
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        r.headers_mut()
+            .insert(header::CONTENT_LENGTH, (total_len.max(0) as u64).into());
+        (r, meta)
+    } else {
+        let (data, meta, _) = storage.get_object(&bucket, &key, vid, None).await?;
+        ((StatusCode::OK, data).into_response(), meta)
+    };
     let content_type = if meta.content_type.is_empty() || meta.content_type == "application/octet-stream" {
         mime_guess::from_path(&key)
             .first_or_octet_stream()
@@ -146,7 +159,6 @@ pub async fn get_object(
         meta.content_type
     };
 
-    let mut res = (StatusCode::OK, data).into_response();
     if let Ok(val) = content_type.parse() {
         res.headers_mut().insert(header::CONTENT_TYPE, val);
     }
@@ -167,8 +179,21 @@ pub async fn download_object(
     Query(query): Query<ObjectVersionQuery>,
 ) -> Result<Response, AppError> {
     let vid = query.version_id.as_deref().or(query.version_id_camel.as_deref());
-    let (data, meta, _) = storage.get_object(&bucket, &key, vid, None).await?;
-    let filename = key.split('/').last().unwrap_or(&key);
+    let (mut res, meta) = if let Some((path, total_len, meta)) =
+        storage.resolve_raw_object_path(&bucket, &key, vid).await?
+    {
+        let mut r = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from_stream(open_object_byte_stream(path)))
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        r.headers_mut()
+            .insert(header::CONTENT_LENGTH, (total_len.max(0) as u64).into());
+        (r, meta)
+    } else {
+        let (data, meta, _) = storage.get_object(&bucket, &key, vid, None).await?;
+        ((StatusCode::OK, data).into_response(), meta)
+    };
+    let filename = key.split('/').next_back().unwrap_or(&key);
     let content_type = if meta.content_type.is_empty() || meta.content_type == "application/octet-stream" {
         mime_guess::from_path(&key)
             .first_or_octet_stream()
@@ -177,7 +202,6 @@ pub async fn download_object(
         meta.content_type
     };
 
-    let mut res = (StatusCode::OK, data).into_response();
     if let Ok(val) = content_type.parse() {
         res.headers_mut().insert(header::CONTENT_TYPE, val);
     }
@@ -192,9 +216,17 @@ pub async fn download_object(
     Ok(res)
 }
 
+fn is_replicated_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-gravspace-replicated")
+        .and_then(|v| v.to_str().ok())
+        == Some("1")
+}
+
 pub async fn put_object(
     State(storage): State<FileStorage>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
     let clean_key = key.trim_start_matches('/');
@@ -203,7 +235,13 @@ pub async fn put_object(
             "Invalid object key: suffix reserved for object controls".to_string(),
         ));
     }
-    let version_id = storage.put_object(&bucket, &key, body.to_vec(), None).await?;
+    let replicated = is_replicated_request(&headers);
+    let version_id = storage
+        .put_object_with_options(&bucket, &key, body.to_vec(), None, replicated)
+        .await?;
+    if replicated {
+        storage.record_inbound_from_headers(&headers, &bucket, "admin").await;
+    }
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:PutObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
     }
@@ -213,10 +251,17 @@ pub async fn put_object(
 pub async fn delete_object(
     State(storage): State<FileStorage>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
     Query(query): Query<ObjectVersionQuery>,
 ) -> Result<Response, AppError> {
     let vid = query.version_id.or(query.version_id_camel);
-    storage.delete_object(&bucket, &key, vid.as_deref(), false).await?;
+    let replicated = is_replicated_request(&headers);
+    storage
+        .delete_object_with_options(&bucket, &key, vid.as_deref(), false, replicated)
+        .await?;
+    if replicated {
+        storage.record_inbound_from_headers(&headers, &bucket, "admin").await;
+    }
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:DeleteObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
     }
@@ -286,87 +331,29 @@ pub async fn copy_objects(
 pub struct SharePayload {
     pub key: String,
     pub expires_in: Option<i64>,
+    pub allowed_ip: Option<String>,
+    pub one_time_use: Option<bool>,
 }
 
 pub async fn share_object(
     State(storage): State<FileStorage>,
     Path(bucket): Path<String>,
+    headers: HeaderMap,
     Json(payload): Json<SharePayload>,
 ) -> Result<Response, AppError> {
-    let expires_in = payload.expires_in.unwrap_or(3600);
-    let now = chrono::Utc::now();
-    let date_stamp = now.format("%Y%m%d").to_string();
-    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
-
-    let host = if storage.config.server_host.is_empty() {
-        format!("localhost:{}", storage.config.s3_port)
-    } else {
-        storage.config.server_host.clone()
-    };
-
-    let conn = storage.db.conn()?;
-    let admin_key = db::users::list_access_keys(&conn, "admin")
-        .await?
-        .into_iter()
-        .next()
-        .unwrap_or(db::users::AccessKeyRecord {
-            access_key_id: "admin".to_string(),
-            secret_access_key: "admin".to_string(),
-            username: "admin".to_string(),
-            created_at: String::new(),
-        });
-
-    let credential = format!("{}/{date_stamp}/us-east-1/s3/aws4_request", admin_key.access_key_id);
-    let path = format!("/{bucket}/{}", payload.key.trim_start_matches('/'));
-
-    let mut query_params = vec![
-        ("X-Amz-Algorithm", "AWS4-HMAC-SHA256".to_string()),
-        ("X-Amz-Credential", credential),
-        ("X-Amz-Date", amz_date.clone()),
-        ("X-Amz-Expires", expires_in.to_string()),
-        ("X-Amz-SignedHeaders", "host".to_string()),
-    ];
-    query_params.sort_by(|a, b| a.0.cmp(b.0));
-
-    let canonical_query: Vec<String> = query_params
-        .iter()
-        .map(|(k, v)| format!("{}={}", uri_encode(k, true), uri_encode(v, true)))
-        .collect();
-    let canonical_query_str = canonical_query.join("&");
-
-    let canonical_headers = format!("host:{host}\n");
-    let canonical_request = format!(
-        "GET\n{path}\n{canonical_query_str}\n{canonical_headers}\nhost\nUNSIGNED-PAYLOAD"
-    );
-
-    let string_to_sign = format!(
-        "AWS4-HMAC-SHA256\n{amz_date}\n{date_stamp}/us-east-1/s3/aws4_request\n{}",
-        crate::auth::signature::sha256_hex(canonical_request.as_bytes())
-    );
-
-    let signature = calculate_signature(
-        &admin_key.secret_access_key,
-        &date_stamp,
-        "us-east-1",
-        "s3",
-        &string_to_sign,
-    );
-
-    let presigned_url = format!("http://{host}{path}?{canonical_query_str}&X-Amz-Signature={signature}");
-
-    let expires_at = (now + chrono::Duration::seconds(expires_in)).to_rfc3339();
-    let _ = db::presign::create_presigned_url(
-        &conn,
-        &bucket,
-        &payload.key,
-        &presigned_url,
-        &signature,
-        "GET",
-        &expires_at,
-        None,
-        false,
+    let presigned_url = super::presign_handlers::build_and_store_presigned_url(
+        &storage,
+        &headers,
+        super::presign_handlers::PresignRequestSpec {
+            bucket: &bucket,
+            key: &payload.key,
+            method: "GET",
+            expires_secs: payload.expires_in.unwrap_or(3600),
+            allowed_ip: payload.allowed_ip.as_deref(),
+            one_time_use: payload.one_time_use.unwrap_or(false),
+        },
     )
-    .await;
+    .await?;
 
     Ok((StatusCode::OK, Json(json!({ "url": presigned_url }))).into_response())
 }
@@ -412,81 +399,4 @@ pub async fn put_object_tagging(
     }
 }
 
-#[derive(Deserialize)]
-pub struct RetentionQuery {
-    pub key: String,
-    #[serde(rename = "versionId")]
-    pub version_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct RetentionPayload {
-    #[serde(default, rename = "retainUntilDate", alias = "retain_until_date", alias = "retain_until")]
-    pub retain_until_date: Option<String>,
-    #[serde(default)]
-    pub mode: String,
-}
-
-pub async fn set_object_retention(
-    State(storage): State<FileStorage>,
-    Path(bucket): Path<String>,
-    Query(query): Query<RetentionQuery>,
-    Json(payload): Json<RetentionPayload>,
-) -> Result<Response, AppError> {
-    let mode_upper = payload.mode.trim().to_uppercase();
-    let is_clear = mode_upper.is_empty() || mode_upper == "NONE";
-    if !is_clear && mode_upper != "COMPLIANCE" && mode_upper != "GOVERNANCE" {
-        return Err(AppError::BadRequest(
-            "Mode must be COMPLIANCE, GOVERNANCE, or NONE".to_string(),
-        ));
-    }
-    let conn = storage.db.conn()?;
-    let key = query.key.trim_start_matches('/');
-    let version_id = query.version_id.as_deref().unwrap_or("");
-    let mode_arg = if is_clear { None } else { Some(mode_upper.as_str()) };
-    let retain_arg = if is_clear { None } else { payload.retain_until_date.as_deref() };
-    db::objects::set_object_retention(
-        &conn,
-        &bucket,
-        key,
-        version_id,
-        retain_arg,
-        mode_arg,
-    )
-    .await?;
-    Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
-}
-
-#[derive(Deserialize)]
-pub struct LegalHoldQuery {
-    pub key: String,
-    #[serde(rename = "versionId")]
-    pub version_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct LegalHoldPayload {
-    pub hold: bool,
-    pub reason: Option<String>,
-}
-
-pub async fn set_object_legal_hold(
-    State(storage): State<FileStorage>,
-    Path(bucket): Path<String>,
-    Query(query): Query<LegalHoldQuery>,
-    Json(payload): Json<LegalHoldPayload>,
-) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
-    let key = query.key.trim_start_matches('/');
-    let version_id = query.version_id.as_deref().unwrap_or("");
-    db::objects::set_object_legal_hold(
-        &conn,
-        &bucket,
-        key,
-        version_id,
-        payload.hold,
-        payload.reason.as_deref().unwrap_or(""),
-    )
-    .await?;
-    Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
-}
+pub use super::object_lock_handlers::{set_object_legal_hold, set_object_retention};

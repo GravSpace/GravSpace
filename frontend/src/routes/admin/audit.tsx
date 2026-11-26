@@ -8,7 +8,7 @@ import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Input } from '../../components/ui/input'
 import { useAuth } from '../../hooks/useAuth'
-import { getAuditStreamWsUrl } from '../../lib/utils'
+import { fetchWsTicketOrToken, getAuditStreamWsUrl } from '../../lib/utils'
 
 export const Route = createFileRoute('/admin/audit')({
   component: AuditPage,
@@ -96,10 +96,6 @@ function getActionStyle(action?: string): string {
   return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
 }
 
-function buildWsUrl(token: string): string {
-  return getAuditStreamWsUrl(token)
-}
-
 function AuditPage() {
   const { authFetch, authState } = useAuth()
   const [logs, setLogs] = useState<NormalisedEntry[]>([])
@@ -134,20 +130,25 @@ function AuditPage() {
     fetchLogs(0)
 
     const token = (authState as any)?.token || ''
-    const wsUrl = buildWsUrl(token)
 
     let ws: WebSocket
     let reconnectTimer: ReturnType<typeof setTimeout>
+    let isDisposed = false
 
-    function connect() {
+    async function connect() {
+      const { credential, useTicket } = await fetchWsTicketOrToken(authFetch, token)
+      if (isDisposed || !credential) return
+      const wsUrl = getAuditStreamWsUrl(credential, useTicket)
       ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => setWsConnected(true)
       ws.onclose = () => {
         setWsConnected(false)
-        // Auto-reconnect after 3 s
-        reconnectTimer = setTimeout(connect, 3000)
+        if (!isDisposed) {
+          // Auto-reconnect after 3 s
+          reconnectTimer = setTimeout(connect, 3000)
+        }
       }
       ws.onerror = () => ws.close()
       ws.onmessage = (e) => {
@@ -158,9 +159,10 @@ function AuditPage() {
       }
     }
 
-    connect()
+    void connect()
 
     return () => {
+      isDisposed = true
       clearTimeout(reconnectTimer)
       wsRef.current?.close()
     }
@@ -195,12 +197,12 @@ function AuditPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
       {/* ─── Header ──────────────────────────────────────────────────────── */}
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Audit Logs</h1>
-          <p className="text-xs text-muted-foreground">Compliance and security event history.</p>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">Audit Logs</h1>
+          <p className="hidden sm:block text-xs text-muted-foreground">Compliance and security event history.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
           {/* Live indicator */}
           <div className="flex items-center gap-1.5">
             {wsConnected ? (
@@ -216,7 +218,7 @@ function AuditPage() {
           </div>
 
           {/* Search */}
-          <div className="relative" suppressHydrationWarning>
+          <div className="relative flex-1 min-w-[150px] sm:flex-none" suppressHydrationWarning>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               value={search}
@@ -225,7 +227,7 @@ function AuditPage() {
               autoComplete="off"
               data-protonpass-ignore="true"
               data-1p-ignore="true"
-              className="h-8 w-52 pl-8 text-xs"
+              className="h-8 w-full sm:w-52 pl-8 text-xs"
             />
             {search && (
               <button onClick={() => setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
@@ -235,7 +237,7 @@ function AuditPage() {
           </div>
 
           {/* Result filter */}
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             <Button
               variant={filterResult === '' ? 'secondary' : 'ghost'}
               size="sm"
@@ -262,15 +264,15 @@ function AuditPage() {
             </Button>
           </div>
 
-          <Button variant="outline" size="sm" onClick={() => fetchLogs(0)} disabled={loading} className="h-8">
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+          <Button variant="outline" size="sm" onClick={() => fetchLogs(0)} disabled={loading} className="h-8 ml-auto sm:ml-0" aria-label="Refresh audit logs">
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-2 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
       </header>
 
       {/* ─── Table ───────────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-auto p-4 flex flex-col gap-3">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-4 flex flex-col gap-3">
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden bg-card shadow-sm flex-1">
           <div className="overflow-x-auto h-full">
             <table className="w-full text-xs">

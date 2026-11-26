@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Database, FileUp, RefreshCw } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { useAuth } from '../../hooks/useAuth'
-import { getAuditStreamWsUrl } from '../../lib/utils'
+import { fetchWsTicketOrToken, getAuditStreamWsUrl } from '../../lib/utils'
 import {
   formatSize,
   formatSavings,
@@ -36,6 +36,7 @@ function DashboardPage() {
   const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected')
   const [liveLogs, setLiveLogs] = useState<any[]>([])
   const wsRef = useRef<WebSocket | null>(null)
+  const wsConnectSeqRef = useRef(0)
 
   const fetchAllData = useCallback(async () => {
     if (!authState.isAuthenticated) return
@@ -60,12 +61,15 @@ function DashboardPage() {
     }
   }, [authFetch, authState.isAuthenticated])
 
-  const connectWS = useCallback(() => {
+  const connectWS = useCallback(async () => {
     if (!authState.isAuthenticated) return
+    const connectSeq = ++wsConnectSeqRef.current
     if (wsRef.current) wsRef.current.close()
     setWsStatus('connecting')
     const token = authState?.token || ''
-    const wsUrl = getAuditStreamWsUrl(token)
+    const { credential, useTicket } = await fetchWsTicketOrToken(authFetch, token)
+    if (wsConnectSeqRef.current !== connectSeq || !credential) return
+    const wsUrl = getAuditStreamWsUrl(credential, useTicket)
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     ws.onopen = () => setWsStatus('connected')
@@ -100,13 +104,14 @@ function DashboardPage() {
     }
     ws.onclose = () => setWsStatus('disconnected')
     ws.onerror = () => setWsStatus('disconnected')
-  }, [authState?.token, authState.isAuthenticated])
+  }, [authFetch, authState?.token, authState.isAuthenticated])
 
   useEffect(() => {
     if (!authState.isAuthenticated) return
     fetchAllData()
-    connectWS()
+    void connectWS()
     return () => {
+      wsConnectSeqRef.current += 1
       if (wsRef.current) wsRef.current.close()
     }
   }, [authState.isAuthenticated, fetchAllData, connectWS])
@@ -201,12 +206,12 @@ function DashboardPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">System Overview</h1>
-          <p className="text-xs text-muted-foreground">Real-time health, operations, and telemetry metrics.</p>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">System Overview</h1>
+          <p className="hidden sm:block text-xs text-muted-foreground">Real-time health, operations, and telemetry metrics.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-200 dark:border-slate-800 bg-background text-[11px] font-mono">
             <span
               className={`h-2 w-2 rounded-full ${wsStatus === 'connected'
@@ -240,7 +245,7 @@ function DashboardPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-5 space-y-4">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-5 space-y-4">
         <DashboardStatCards stats={topStats} />
 
         <DashboardCharts

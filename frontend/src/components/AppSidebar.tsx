@@ -31,6 +31,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from './ui/sidebar'
 import { Avatar, AvatarFallback } from './ui/avatar'
 import { Button } from './ui/button'
@@ -61,6 +62,7 @@ function formatSize(bytes: number): string {
 
 export function AppSidebar() {
   const { authState, logout } = useAuth()
+  const { isMobile, setOpenMobile } = useSidebar()
   const { activeTransfersCount, setShowTransferManager, showTransferManager } =
     useTransfers()
   const navigate = useNavigate()
@@ -79,7 +81,7 @@ export function AppSidebar() {
 
   // Sync live version from backend if available
   useEffect(() => {
-    if (!authState?.token) return
+    if (!authState?.isAuthenticated) return
     authFetch(`${API_BASE}/admin/settings`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -88,9 +90,9 @@ export function AppSidebar() {
         }
       })
       .catch(() => {})
-  }, [authState?.token, authFetch, API_BASE])
+  }, [authState?.isAuthenticated, authFetch, API_BASE])
 
-  // Keyboard shortcut listener (Cmd+K / Ctrl+K)
+  // Keyboard shortcut (Cmd+K / Ctrl+K) and mobile header search trigger
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
@@ -98,8 +100,13 @@ export function AppSidebar() {
         setShowSearch((prev) => !prev)
       }
     }
+    const handleOpenSearch = () => setShowSearch(true)
     window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('gravspace:open-search', handleOpenSearch)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('gravspace:open-search', handleOpenSearch)
+    }
   }, [])
 
   // Run search when query changes
@@ -181,7 +188,10 @@ export function AppSidebar() {
                     <SidebarMenuItem key={item.path}>
                       <SidebarMenuButton
                         isActive={isActive}
-                        onClick={() => navigate({ to: item.path })}
+                        onClick={() => {
+                          navigate({ to: item.path })
+                          if (isMobile) setOpenMobile(false)
+                        }}
                         tooltip={item.label}
                       >
                         <item.icon className="w-4 h-4" />
@@ -206,7 +216,10 @@ export function AppSidebar() {
                   ? 'bg-primary/10 text-primary hover:bg-primary/20'
                   : 'text-muted-foreground'
               }`}
-              onClick={() => setShowTransferManager(!showTransferManager)}
+              onClick={() => {
+                setShowTransferManager(!showTransferManager)
+                if (isMobile) setOpenMobile(false)
+              }}
             >
               <div className="relative">
                 <UploadCloud className="w-4 h-4" />

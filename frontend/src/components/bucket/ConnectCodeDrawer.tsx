@@ -4,7 +4,6 @@ import {
   Copy,
   Check,
   Terminal,
-  ExternalLink,
   Key,
 } from 'lucide-react'
 import {
@@ -150,7 +149,7 @@ curl -i ${s3Endpoint}/${bucketName}`;
 
           {/* Language Tabs */}
           <Tabs defaultValue="nodejs" className="w-full">
-            <TabsList className="grid grid-cols-4 h-8 p-1 bg-muted/50 rounded-xl mb-3">
+            <TabsList className="grid grid-cols-2 sm:grid-cols-4 h-auto gap-1 p-1 bg-muted/50 rounded-xl mb-3">
               <TabsTrigger value="nodejs" className="text-xs">Node.js</TabsTrigger>
               <TabsTrigger value="python" className="text-xs">Python</TabsTrigger>
               <TabsTrigger value="golang" className="text-xs">Golang</TabsTrigger>

@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::storage::FileStorage;
 use axum::{
     middleware,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use std::sync::Arc;
@@ -26,12 +26,8 @@ pub fn admin_router(
     let auth_routes = Router::new()
         .route("/login", post(auth_handlers::login_handler))
         .route("/api/login", post(auth_handlers::login_handler))
-        .with_state(storage.clone());
-
-    let public_system_routes = Router::new()
-        .route("/system/database-stats", get(settings_handlers::get_database_stats))
-        .route("/api/admin/system/database-stats", get(settings_handlers::get_database_stats))
-        .route("/admin/system/database-stats", get(settings_handlers::get_database_stats))
+        .route("/logout", post(auth_handlers::logout_handler))
+        .route("/api/logout", post(auth_handlers::logout_handler))
         .with_state(storage.clone());
 
     let bucket_and_object_routes = Router::new()
@@ -151,19 +147,26 @@ pub fn admin_router(
         .route("/trash-bulk", delete(trash_handlers::bulk_delete_trash_objects))
         .route("/trash/empty", delete(trash_handlers::empty_trash))
         .route("/search", get(analytics_handlers::global_search))
+        .route("/federation/stream-ticket", post(federation_handlers::create_stream_ticket))
         .route("/federation/test-endpoint", post(federation_handlers::test_remote_endpoint))
         .route("/federation/peers", get(federation_handlers::list_peers).post(federation_handlers::create_peer))
-        .route("/federation/peers/{id}", delete(federation_handlers::delete_peer))
+        .route("/federation/peers/{id}", put(federation_handlers::update_peer).patch(federation_handlers::update_peer).delete(federation_handlers::delete_peer))
+        .route("/federation/peers/{id}/secret", get(federation_handlers::get_peer_secret))
         .route("/federation/peers/{id}/ping", post(federation_handlers::ping_peer))
         .route("/federation/shares", get(federation_handlers::list_shares).post(federation_handlers::create_share))
-        .route("/federation/shares/{id}", delete(federation_handlers::delete_share))
+        .route("/federation/inbound", get(federation_handlers::list_inbound_shares))
+        .route("/federation/inbound/{id}", delete(federation_handlers::delete_inbound_share))
+        .route("/federation/shares/{id}", put(federation_handlers::update_share).patch(federation_handlers::update_share).delete(federation_handlers::delete_share))
+        .route("/federation/shares/{id}/toggle", patch(federation_handlers::toggle_share).post(federation_handlers::toggle_share))
         .route("/federation/shares/{id}/reconcile", post(federation_handlers::reconcile_share))
         .route("/federation/queue", get(federation_handlers::list_queue))
         .route("/federation/queue/retry-failed", post(federation_handlers::retry_failed_queue))
         .route("/federation/queue/completed", delete(federation_handlers::clear_completed_queue));
 
     let iam_routes = Router::new()
+        .route("/auth/session", get(auth_handlers::session_handler))
         .route("/system/network", get(network_handlers::get_network_info))
+        .route("/system/database-stats", get(settings_handlers::get_database_stats))
         .route("/system/db-checkpoint", post(settings_handlers::trigger_db_checkpoint))
         .route("/s3-explorer/execute", post(s3_explorer_handlers::execute_s3_command))
         .route("/stats", get(analytics_handlers::get_system_stats))
@@ -207,6 +210,7 @@ pub fn admin_router(
         .route("/vault/secrets", get(vault_handlers::list_secrets).post(vault_handlers::create_secret))
         .route("/vault/secrets/{id}", put(vault_handlers::update_secret).delete(vault_handlers::delete_secret))
         .route("/vault/secrets/{id}/reveal", get(vault_handlers::reveal_secret))
+        .route("/vault/secrets/{id}/download", get(vault_handlers::download_secret))
         .route("/vault/secrets/{id}/versions", get(vault_handlers::list_versions))
         .route("/vault/secrets/{id}/rollback", post(vault_handlers::rollback_version))
         .route("/vault/access-requests", get(vault_handlers::list_access_requests).post(vault_handlers::create_access_request))
@@ -252,7 +256,6 @@ pub fn admin_router(
 
     Router::new()
         .merge(auth_routes)
-        .merge(public_system_routes)
         .merge(admin_prefixed)
         .merge(ws_routes)
 }

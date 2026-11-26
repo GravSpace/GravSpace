@@ -27,15 +27,13 @@ pub fn encrypt_bytes(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let mut output = Vec::with_capacity(NONCE_SIZE + plaintext.len() + TAG_SIZE);
     output.extend_from_slice(&base_nonce);
 
-    let mut seq = 0u32;
-    for chunk in plaintext.chunks(CHUNK_SIZE) {
-        let chunk_nonce = derive_chunk_nonce(&base_nonce, seq);
+    for (seq, chunk) in plaintext.chunks(CHUNK_SIZE).enumerate() {
+        let chunk_nonce = derive_chunk_nonce(&base_nonce, seq as u32);
         let nonce = Nonce::from_slice(&chunk_nonce);
         let ciphertext = cipher
             .encrypt(nonce, chunk)
             .map_err(|e| format!("Encryption error: {e}"))?;
         output.extend_from_slice(&ciphertext);
-        seq += 1;
     }
 
     Ok(output)
@@ -55,15 +53,13 @@ pub fn decrypt_bytes(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
     let chunk_full_size = CHUNK_SIZE + TAG_SIZE;
     let mut output = Vec::with_capacity(data.len());
 
-    let mut seq = 0u32;
-    for chunk in data.chunks(chunk_full_size) {
-        let chunk_nonce = derive_chunk_nonce(&base_nonce, seq);
+    for (seq, chunk) in data.chunks(chunk_full_size).enumerate() {
+        let chunk_nonce = derive_chunk_nonce(&base_nonce, seq as u32);
         let nonce = Nonce::from_slice(&chunk_nonce);
         let plaintext = cipher
             .decrypt(nonce, chunk)
             .map_err(|e| format!("Decryption error at chunk {seq}: {e}"))?;
         output.extend_from_slice(&plaintext);
-        seq += 1;
     }
 
     Ok(output)

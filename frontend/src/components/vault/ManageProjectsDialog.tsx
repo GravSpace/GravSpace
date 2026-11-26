@@ -5,7 +5,6 @@ import {
   Trash2,
   Edit2,
   Check,
-  Sparkles,
   Bot,
   Smartphone,
   Globe,
@@ -252,7 +251,7 @@ export function ManageProjectsDialog({
                   if (isEditing) {
                     return (
                       <div key={p.id} className="p-3.5 rounded-xl border border-primary/40 bg-card space-y-3 shadow-xs">
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           <div className="space-y-1">
                             <Label className="text-[11px]">Project Name</Label>
                             <Input
@@ -377,7 +376,7 @@ export function ManageProjectsDialog({
 
             <TabsContent value="create" className="mt-0">
               <form onSubmit={handleCreate} className="space-y-3.5 text-xs">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs font-semibold">
                       Project Name <span className="text-rose-500">*</span>

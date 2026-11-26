@@ -1,8 +1,9 @@
 use super::xml::{
-    s3_error, s3_xml_response, BucketItem, BucketsContainer, CommonPrefixItem,
-    ListAllMyBucketsResult, ListBucketResult, ObjectItem, Owner,
+    s3_error, s3_xml_response, BucketItem, BucketsContainer, CommonPrefixItem, DeleteErrorXml,
+    DeleteObjectsRequest, DeleteResultXml, DeletedObjectXml, ListAllMyBucketsResult,
+    ListBucketResult, ObjectItem, Owner,
 };
-use crate::auth::middleware::verify_s3_request;
+use crate::auth::middleware::verify_s3_http;
 use crate::db;
 use crate::storage::FileStorage;
 use axum::{
@@ -16,14 +17,10 @@ pub async fn list_buckets(
     State(storage): State<FileStorage>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    if let Err(e) = verify_s3_request(
+    if let Err(e) = verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        request.uri().query(),
-        headers,
+        &request,
         "s3:ListAllMyBuckets",
         "",
         "",
@@ -69,29 +66,31 @@ pub async fn head_bucket(
     Path(bucket): Path<String>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    if let Err(e) = verify_s3_request(
+    let actor = match verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        request.uri().query(),
-        headers,
+        &request,
         "s3:ListBucket",
         &bucket,
         "",
     )
     .await
     {
-        return s3_error(
-            StatusCode::FORBIDDEN,
-            "AccessDenied",
-            &e.to_string(),
-            &bucket,
-        );
-    }
+        Ok(u) => u,
+        Err(e) => {
+            return s3_error(
+                StatusCode::FORBIDDEN,
+                "AccessDenied",
+                &e.to_string(),
+                &bucket,
+            );
+        }
+    };
 
     if storage.bucket_exists(&bucket).await {
+        storage
+            .record_inbound_from_headers(request.headers(), &bucket, &actor)
+            .await;
         (
             StatusCode::OK,
             [
@@ -119,7 +118,6 @@ pub async fn put_bucket(
     Path(bucket): Path<String>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
     let query_str = request.uri().query().unwrap_or("");
 
     let action = if query_str.contains("versioning") {
@@ -130,18 +128,8 @@ pub async fn put_bucket(
         "s3:CreateBucket"
     };
 
-    if let Err(e) = verify_s3_request(
-        &storage.db,
-        &storage.config,
-        request.method(),
-        request.uri().path(),
-        request.uri().query(),
-        headers,
-        action,
-        &bucket,
-        "",
-    )
-    .await
+    if let Err(e) =
+        verify_s3_http(&storage.db, &storage.config, &request, action, &bucket, "").await
     {
         return s3_error(
             StatusCode::FORBIDDEN,
@@ -196,14 +184,10 @@ pub async fn delete_bucket(
     Path(bucket): Path<String>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
-    if let Err(e) = verify_s3_request(
+    if let Err(e) = verify_s3_http(
         &storage.db,
         &storage.config,
-        request.method(),
-        request.uri().path(),
-        request.uri().query(),
-        headers,
+        &request,
         "s3:DeleteBucket",
         &bucket,
         "",
@@ -235,7 +219,6 @@ pub async fn get_bucket(
     Path(bucket): Path<String>,
     request: Request,
 ) -> Response {
-    let headers = request.headers();
     let query_str = request.uri().query().unwrap_or("");
 
     let action = if query_str.contains("versioning") {
@@ -248,18 +231,8 @@ pub async fn get_bucket(
         "s3:ListBucket"
     };
 
-    if let Err(e) = verify_s3_request(
-        &storage.db,
-        &storage.config,
-        request.method(),
-        request.uri().path(),
-        Some(query_str),
-        headers,
-        action,
-        &bucket,
-        "",
-    )
-    .await
+    if let Err(e) =
+        verify_s3_http(&storage.db, &storage.config, &request, action, &bucket, "").await
     {
         return s3_error(
             StatusCode::FORBIDDEN,
@@ -410,6 +383,83 @@ pub async fn get_bucket(
     };
 
     s3_xml_response(StatusCode::OK, &res)
+}
+
+pub async fn delete_objects(
+    State(storage): State<FileStorage>,
+    Path(bucket): Path<String>,
+    request: Request,
+) -> Response {
+    let username = match verify_s3_http(
+        &storage.db,
+        &storage.config,
+        &request,
+        "s3:DeleteObject",
+        &bucket,
+        "",
+    )
+    .await
+    {
+        Ok(u) => u,
+        Err(e) => {
+            return s3_error(
+                StatusCode::FORBIDDEN,
+                "AccessDenied",
+                &e.to_string(),
+                &bucket,
+            );
+        }
+    };
+
+    let body_bytes = match to_bytes(request.into_body(), 2 * 1024 * 1024).await {
+        Ok(b) => b,
+        Err(e) => return s3_error(StatusCode::BAD_REQUEST, "MalformedXML", &e.to_string(), &bucket),
+    };
+
+    let payload: DeleteObjectsRequest = match quick_xml::de::from_reader(body_bytes.as_ref()) {
+        Ok(p) => p,
+        Err(e) => return s3_error(StatusCode::BAD_REQUEST, "MalformedXML", &e.to_string(), &bucket),
+    };
+
+    let mut deleted = Vec::new();
+    let mut errors = Vec::new();
+
+    for item in payload.objects {
+        let vid = item.version_id.as_deref();
+        match storage.delete_object(&bucket, &item.key, vid, false).await {
+            Ok(_) => {
+                if !payload.quiet {
+                    deleted.push(DeletedObjectXml {
+                        key: item.key,
+                        version_id: item.version_id,
+                    });
+                }
+            }
+            Err(err) => {
+                errors.push(DeleteErrorXml {
+                    key: item.key,
+                    code: "AccessDenied".to_string(),
+                    message: err.to_string(),
+                });
+            }
+        }
+    }
+
+    if let Some(ref audit) = storage.audit {
+        audit
+            .log(
+                Some(&username),
+                "s3:DeleteObjects",
+                &format!("{bucket}: {} deleted, {} errors", deleted.len(), errors.len()),
+                "success",
+                None,
+                None,
+                None,
+            )
+            .await;
+    }
+
+    s3_xml_response(StatusCode::OK, &DeleteResultXml { deleted, errors })
 }
 
 fn get_query_param(query: &str, key: &str) -> Option<String> {

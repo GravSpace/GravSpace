@@ -118,23 +118,23 @@ function PresignsPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Presigned Links</h1>
-          <p className="text-xs text-muted-foreground">Manage temporary signed object URLs.</p>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">Presigned Links</h1>
+          <p className="hidden sm:block text-xs text-muted-foreground">Manage temporary signed object URLs.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <Button variant="outline" size="sm" onClick={fetchLinks} disabled={loading} className="h-8">
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+        <div className="flex items-center gap-2 sm:gap-3">
+          <Button variant="outline" size="sm" onClick={fetchLinks} disabled={loading} className="h-8" aria-label="Refresh presigned links">
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-2 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Button size="sm" onClick={() => setShowCreate(true)} className="h-8">
-            <Plus className="w-3.5 h-3.5 mr-2" /> Create Link
+            <Plus className="w-3.5 h-3.5 mr-1.5" /> Create Link
           </Button>
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-6">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-6">
         {links.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground opacity-40">
             <Shield className="w-14 h-14 mb-3" />

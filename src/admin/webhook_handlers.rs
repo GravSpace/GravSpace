@@ -31,12 +31,13 @@ pub async fn create_webhook(
     Path(bucket): Path<String>,
     Json(payload): Json<CreateWebhookPayload>,
 ) -> Result<Response, AppError> {
+    let clean_url = super::ssrf::validate_outbound_url(&payload.url, "Webhook URL")?;
     let conn = storage.db.conn()?;
     let events_json = serde_json::to_string(&payload.events).unwrap_or_default();
     let id = db::webhooks::create_webhook(
         &conn,
         &bucket,
-        &payload.url,
+        &clean_url,
         &events_json,
         payload.secret.as_deref(),
     )
@@ -95,13 +96,15 @@ pub async fn retry_webhook_dlq(
         return Err(AppError::NotFound("DLQ record not found".to_string()));
     };
 
+    let clean_url = super::ssrf::validate_outbound_url(&record.1, "Webhook URL")?;
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let resp = client
-        .post(&record.1)
+        .post(&clean_url)
         .header("Content-Type", "application/json")
         .header("User-Agent", "GravSpace-Webhook-Dispatcher/1.0")
         .header("X-GravSpace-Event", &record.2)

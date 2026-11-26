@@ -80,7 +80,7 @@ export function BucketSecurityTab({ bucketName, info, onInfoUpdated, authFetch, 
       {info?.ObjectLockEnabled && (
         <div className="mt-4 space-y-4 pt-4 border-t animate-in fade-in duration-200">
           <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Default Retention</h4>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label className="text-[10px] font-bold uppercase">Retention Mode</Label>
               <select

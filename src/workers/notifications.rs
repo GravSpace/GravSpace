@@ -74,6 +74,21 @@ async fn process_event(db: &Database, client: &reqwest::Client, event: S3Event) 
             continue;
         }
 
+        if let Err(err) = crate::admin::ssrf::validate_outbound_url(&wh.url, "Webhook URL") {
+            tracing::warn!("Blocked unsafe webhook delivery to {}: {err}", wh.url);
+            let _ = db::webhooks::insert_webhook_dlq(
+                &conn,
+                Some(wh.id),
+                &event.bucket,
+                &wh.url,
+                &event.event_name,
+                &payload,
+                Some("Blocked by SSRF policy"),
+            )
+            .await;
+            continue;
+        }
+
         let mut req = client
             .post(&wh.url)
             .header("Content-Type", "application/json")

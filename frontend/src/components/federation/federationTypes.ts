@@ -6,7 +6,8 @@ export interface RemoteServer {
   endpoint: string
   s3_endpoint?: string | null
   access_key: string
-  secret_key: string
+  secret_key?: string
+  has_secret?: boolean
   status: 'healthy' | 'unreachable' | 'degraded' | string
   latency_ms: number
   last_heartbeat?: string | null
@@ -51,6 +52,24 @@ export interface SyncQueueItem {
 }
 
 export type QueueStatusFilter = 'all' | 'pending' | 'syncing' | 'completed' | 'failed'
+
+export interface QueueCounts {
+  all: number
+  pending: number
+  syncing: number
+  completed: number
+  failed: number
+}
+
+export interface PaginatedSyncQueueResponse {
+  items: SyncQueueItem[]
+  total: number
+  page: number
+  limit: number
+  total_pages: number
+  counts: QueueCounts
+  pending_bytes: number
+}
 
 export function formatBytes(bytes: number): string {
   if (!bytes || bytes === 0) return '0 B'
