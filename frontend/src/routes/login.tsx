@@ -1,6 +1,6 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
-import { ChevronRight, Loader2, ShieldAlert } from 'lucide-react'
+import { ChevronRight, ShieldAlert } from 'lucide-react'
 import { useAuth, getAuthState } from '../hooks/useAuth'
 import {
   Card,
@@ -21,6 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog'
+import { RefreshRightIcon } from '#/components/icon/RefreshRightIcon'
 
 export const Route = createFileRoute('/login')({
   beforeLoad: () => {
@@ -154,7 +155,7 @@ function LoginPage() {
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <RefreshRightIcon className="w-4 h-4 animate-spin" />
                     Verifying...
                   </span>
                 )}

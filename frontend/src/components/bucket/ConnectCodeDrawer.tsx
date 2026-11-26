@@ -4,7 +4,6 @@ import {
   Copy,
   Check,
   Terminal,
-  ExternalLink,
   Key,
 } from 'lucide-react'
 import {

@@ -338,6 +338,22 @@ a {
   background: color-mix(in oklab, var(--header-bg) 84%, transparent 16%);
 }
 
+:root,
+.dark {
+  --ui-background: var(--popover);
+  --ui-foreground: var(--popover-foreground);
+  --ui-muted: var(--muted);
+  --ui-muted-foreground: var(--muted-foreground);
+  --ui-border: var(--border);
+  --ui-input: var(--border);
+  --ui-primary: var(--primary);
+  --ui-primary-foreground: var(--primary-foreground);
+  --ui-destructive: var(--destructive);
+  --ui-ring: color-mix(in oklab, var(--ring) 35%, transparent);
+  --ui-ring-border: var(--ring);
+  --ui-radius: 0.5rem;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

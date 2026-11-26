@@ -5,7 +5,6 @@ import {
   Trash2,
   Edit2,
   Check,
-  Sparkles,
   Bot,
   Smartphone,
   Globe,

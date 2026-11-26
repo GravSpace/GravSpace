@@ -147,7 +147,17 @@ pub async fn stream_audit_logs(
     Query(params): Query<HashMap<String, String>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // Authenticate: check ?token=... or Authorization header
+    if let Some(ticket) = params.get("ticket") {
+        if crate::admin::federation_handlers::consume_ws_ticket(ticket) {
+            let logger = state.logger.clone();
+            return Ok(ws
+                .on_upgrade(move |socket| handle_audit_ws(socket, logger))
+                .into_response());
+        }
+        return Err(crate::error::AuthError::TokenInvalid.into());
+    }
+
+    // Fallback: check ?token=... or Authorization header
     let token = if let Some(t) = params.get("token") {
         t.clone()
     } else if let Some(auth) = headers

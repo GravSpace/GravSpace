@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Download, Copy, Check, FileText, Code2, Table, ShieldAlert, RefreshCw } from 'lucide-react'
 import {
   Dialog,

@@ -156,6 +156,15 @@ impl FileStorage {
         let _ = fs::remove_dir_all(&upload_dir);
 
         self.invalidate_object_list_cache(bucket, key).await;
+        self.on_object_stored(
+            bucket,
+            key,
+            &version_id,
+            total_size,
+            row.etag.as_deref(),
+            row.content_hash.as_deref(),
+        )
+        .await;
 
         Ok(version_id)
     }

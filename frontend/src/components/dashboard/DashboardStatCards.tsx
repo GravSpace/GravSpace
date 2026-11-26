@@ -1,10 +1,10 @@
-import type { LucideIcon } from 'lucide-react'
+import type { ComponentType } from 'react'
 
 export interface StatCardItem {
   label: string
   value: string
   sub: string
-  icon: LucideIcon
+  icon: ComponentType<{ className?: string }>
   accent: 'indigo' | 'emerald' | 'amber' | 'violet' | 'teal' | 'rose'
 }
 

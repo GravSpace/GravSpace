@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::storage::FileStorage;
 use axum::{
     middleware,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Router,
 };
 use std::sync::Arc;
@@ -151,12 +151,15 @@ pub fn admin_router(
         .route("/trash-bulk", delete(trash_handlers::bulk_delete_trash_objects))
         .route("/trash/empty", delete(trash_handlers::empty_trash))
         .route("/search", get(analytics_handlers::global_search))
+        .route("/federation/stream-ticket", post(federation_handlers::create_stream_ticket))
         .route("/federation/test-endpoint", post(federation_handlers::test_remote_endpoint))
         .route("/federation/peers", get(federation_handlers::list_peers).post(federation_handlers::create_peer))
-        .route("/federation/peers/{id}", delete(federation_handlers::delete_peer))
+        .route("/federation/peers/{id}", put(federation_handlers::update_peer).patch(federation_handlers::update_peer).delete(federation_handlers::delete_peer))
+        .route("/federation/peers/{id}/secret", get(federation_handlers::get_peer_secret))
         .route("/federation/peers/{id}/ping", post(federation_handlers::ping_peer))
         .route("/federation/shares", get(federation_handlers::list_shares).post(federation_handlers::create_share))
-        .route("/federation/shares/{id}", delete(federation_handlers::delete_share))
+        .route("/federation/shares/{id}", put(federation_handlers::update_share).patch(federation_handlers::update_share).delete(federation_handlers::delete_share))
+        .route("/federation/shares/{id}/toggle", patch(federation_handlers::toggle_share).post(federation_handlers::toggle_share))
         .route("/federation/shares/{id}/reconcile", post(federation_handlers::reconcile_share))
         .route("/federation/queue", get(federation_handlers::list_queue))
         .route("/federation/queue/retry-failed", post(federation_handlers::retry_failed_queue))

@@ -1,6 +1,9 @@
 pub mod audit;
 pub mod buckets;
 pub mod federation;
+pub mod federation_peers;
+pub mod federation_recovery;
+pub mod federation_shares;
 pub mod migration;
 pub mod multipart;
 pub mod objects;

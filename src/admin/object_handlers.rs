@@ -5,7 +5,7 @@ use crate::error::AppError;
 use crate::storage::FileStorage;
 use axum::{
     extract::{Path, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -192,9 +192,17 @@ pub async fn download_object(
     Ok(res)
 }
 
+fn is_replicated_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-gravspace-replicated")
+        .and_then(|v| v.to_str().ok())
+        == Some("1")
+}
+
 pub async fn put_object(
     State(storage): State<FileStorage>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, AppError> {
     let clean_key = key.trim_start_matches('/');
@@ -203,7 +211,9 @@ pub async fn put_object(
             "Invalid object key: suffix reserved for object controls".to_string(),
         ));
     }
-    let version_id = storage.put_object(&bucket, &key, body.to_vec(), None).await?;
+    let version_id = storage
+        .put_object_with_options(&bucket, &key, body.to_vec(), None, is_replicated_request(&headers))
+        .await?;
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:PutObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
     }
@@ -213,10 +223,13 @@ pub async fn put_object(
 pub async fn delete_object(
     State(storage): State<FileStorage>,
     Path((bucket, key)): Path<(String, String)>,
+    headers: HeaderMap,
     Query(query): Query<ObjectVersionQuery>,
 ) -> Result<Response, AppError> {
     let vid = query.version_id.or(query.version_id_camel);
-    storage.delete_object(&bucket, &key, vid.as_deref(), false).await?;
+    storage
+        .delete_object_with_options(&bucket, &key, vid.as_deref(), false, is_replicated_request(&headers))
+        .await?;
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:DeleteObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
     }
@@ -412,81 +425,4 @@ pub async fn put_object_tagging(
     }
 }
 
-#[derive(Deserialize)]
-pub struct RetentionQuery {
-    pub key: String,
-    #[serde(rename = "versionId")]
-    pub version_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct RetentionPayload {
-    #[serde(default, rename = "retainUntilDate", alias = "retain_until_date", alias = "retain_until")]
-    pub retain_until_date: Option<String>,
-    #[serde(default)]
-    pub mode: String,
-}
-
-pub async fn set_object_retention(
-    State(storage): State<FileStorage>,
-    Path(bucket): Path<String>,
-    Query(query): Query<RetentionQuery>,
-    Json(payload): Json<RetentionPayload>,
-) -> Result<Response, AppError> {
-    let mode_upper = payload.mode.trim().to_uppercase();
-    let is_clear = mode_upper.is_empty() || mode_upper == "NONE";
-    if !is_clear && mode_upper != "COMPLIANCE" && mode_upper != "GOVERNANCE" {
-        return Err(AppError::BadRequest(
-            "Mode must be COMPLIANCE, GOVERNANCE, or NONE".to_string(),
-        ));
-    }
-    let conn = storage.db.conn()?;
-    let key = query.key.trim_start_matches('/');
-    let version_id = query.version_id.as_deref().unwrap_or("");
-    let mode_arg = if is_clear { None } else { Some(mode_upper.as_str()) };
-    let retain_arg = if is_clear { None } else { payload.retain_until_date.as_deref() };
-    db::objects::set_object_retention(
-        &conn,
-        &bucket,
-        key,
-        version_id,
-        retain_arg,
-        mode_arg,
-    )
-    .await?;
-    Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
-}
-
-#[derive(Deserialize)]
-pub struct LegalHoldQuery {
-    pub key: String,
-    #[serde(rename = "versionId")]
-    pub version_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-pub struct LegalHoldPayload {
-    pub hold: bool,
-    pub reason: Option<String>,
-}
-
-pub async fn set_object_legal_hold(
-    State(storage): State<FileStorage>,
-    Path(bucket): Path<String>,
-    Query(query): Query<LegalHoldQuery>,
-    Json(payload): Json<LegalHoldPayload>,
-) -> Result<Response, AppError> {
-    let conn = storage.db.conn()?;
-    let key = query.key.trim_start_matches('/');
-    let version_id = query.version_id.as_deref().unwrap_or("");
-    db::objects::set_object_legal_hold(
-        &conn,
-        &bucket,
-        key,
-        version_id,
-        payload.hold,
-        payload.reason.as_deref().unwrap_or(""),
-    )
-    .await?;
-    Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
-}
+pub use super::object_lock_handlers::{set_object_legal_hold, set_object_retention};

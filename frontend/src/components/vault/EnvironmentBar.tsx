@@ -1,4 +1,3 @@
-import React from 'react'
 import { Plus, Settings2, Globe } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { type VaultEnvironment, getEnvTheme } from './vaultTypes'

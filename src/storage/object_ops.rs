@@ -179,97 +179,6 @@ impl FileStorage {
         Ok(version_id)
     }
 
-    pub async fn put_object_stream<S, E>(
-        &self,
-        bucket: &str,
-        key: &str,
-        stream: S,
-        encryption: Option<&str>,
-    ) -> Result<String, AppError>
-    where
-        S: futures_util::Stream<Item = Result<bytes::Bytes, E>> + Unpin,
-        E: std::fmt::Display,
-    {
-        let conn = self.db.conn()?;
-        let is_versioning_enabled = db::buckets::get_bucket_versioning(&conn, bucket)
-            .await
-            .unwrap_or(false);
-
-        let version_id = if is_versioning_enabled {
-            uuid::Uuid::new_v4().to_string()
-        } else {
-            String::new()
-        };
-
-        let is_folder = key.ends_with('/');
-        let raw_target = self.object_path(bucket, key, &version_id);
-        let target_path = if !is_versioning_enabled && raw_target.is_dir() {
-            raw_target.join("latest")
-        } else {
-            raw_target.clone()
-        };
-
-        let mime = if is_folder {
-            "application/x-directory"
-        } else {
-            mime_guess::from_path(key)
-                .first_raw()
-                .unwrap_or("application/octet-stream")
-        };
-
-        if is_folder {
-            fs::create_dir_all(&target_path).map_err(|e| StorageError::Io(e.to_string()))?;
-            let etag = "\"d41d8cd98f00b204e9800998ecf8427e\"".to_string();
-            let row = ObjectRow {
-                id: 0, bucket: bucket.to_string(), key: key.to_string(), version_id: version_id.clone(),
-                size: 0, etag: Some(etag), content_type: Some(mime.to_string()),
-                modified_at: chrono::Utc::now().to_rfc3339(), is_latest: true, encryption_type: None,
-                retain_until_date: None, legal_hold: false, lock_mode: None, deleted_at: None,
-                legal_hold_reason: None,
-                content_hash: Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string()),
-                compression_type: None, original_size: None, is_deduplicated: false,
-            };
-            db::objects::upsert_object(&conn, &row).await?;
-            self.invalidate_object_list_cache(bucket, key).await;
-            return Ok(version_id);
-        }
-
-        let write_res = super::streaming::write_stream_to_file(stream, &target_path).await?;
-        let etag = format!("\"{}\"", write_res.content_hash);
-
-        let row = ObjectRow {
-            id: 0, bucket: bucket.to_string(), key: key.to_string(), version_id: version_id.clone(),
-            size: write_res.total_bytes, etag: Some(etag), content_type: Some(mime.to_string()),
-            modified_at: chrono::Utc::now().to_rfc3339(), is_latest: true,
-            encryption_type: encryption.map(|s| s.to_string()), retain_until_date: None, legal_hold: false,
-            lock_mode: None, deleted_at: None, legal_hold_reason: None,
-            content_hash: Some(write_res.content_hash), compression_type: None, original_size: None,
-            is_deduplicated: false,
-        };
-
-        db::objects::upsert_object(&conn, &row).await?;
-        self.invalidate_object_list_cache(bucket, key).await;
-
-        if !is_versioning_enabled && raw_target.is_dir() {
-            let _ = fs::write(raw_target.join("latest"), "latest");
-        }
-
-        if let Some(ref d) = self.dispatcher {
-            d.dispatch(crate::workers::notifications::S3Event {
-                event_name: "s3:ObjectCreated:Put".to_string(),
-                bucket: bucket.to_string(),
-                key: key.to_string(),
-                size: write_res.total_bytes,
-                etag: row.etag.clone().unwrap_or_default(),
-                version_id: version_id.clone(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            })
-            .await;
-        }
-
-        Ok(version_id)
-    }
-
     pub async fn copy_object_direct(
         &self,
         src_bucket: &str,
@@ -289,48 +198,40 @@ impl FileStorage {
         data: Vec<u8>,
         encryption: Option<&str>,
     ) -> Result<String, AppError> {
+        self.put_object_with_options(bucket, key, data, encryption, false)
+            .await
+    }
+
+    pub async fn put_object_with_options(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: Vec<u8>,
+        encryption: Option<&str>,
+        skip_federation: bool,
+    ) -> Result<String, AppError> {
         let physical_size = data.len() as i64;
         let version_id = self.put_object_direct(bucket, key, data, encryption).await?;
 
-        // Webhook Event Notification on Put
-        if let Some(ref d) = self.dispatcher {
-            d.dispatch(crate::workers::notifications::S3Event {
-                event_name: "s3:ObjectCreated:Put".to_string(),
-                bucket: bucket.to_string(),
-                key: key.to_string(),
-                size: physical_size,
-                etag: format!("\"{version_id}\""),
-                version_id: version_id.clone(),
-                timestamp: chrono::Utc::now().to_rfc3339(),
-            })
-            .await;
-        }
-
-        // Asynchronous Bucket Replication on Put
-        if let Ok(conn) = self.db.conn() {
-            if let Ok(rules) = db::replications::list_replication_rules(&conn, bucket).await {
-                for rule in rules {
-                    if rule.enabled {
-                        let pfx = rule.prefix.as_deref().unwrap_or("");
-                        if pfx.is_empty() || key.starts_with(pfx) {
-                            let storage_clone = self.clone();
-                            let src_b = bucket.to_string();
-                            let dst_b = rule.destination_bucket.clone();
-                            let k = key.to_string();
-                            tokio::spawn(async move {
-                                let _ = storage_clone.copy_object_direct(&src_b, &k, &dst_b, &k).await;
-                            });
-                        }
-                    }
-                }
+        let (etag, content_hash) = if let Ok(conn) = self.db.conn() {
+            match db::objects::get_object(&conn, bucket, key, &version_id).await {
+                Ok(Some(obj)) => (obj.etag, obj.content_hash),
+                _ => (Some(format!("\"{version_id}\"")), None),
             }
-        }
+        } else {
+            (Some(format!("\"{version_id}\"")), None)
+        };
 
-        // Enqueue Cross-Server Federation Sync (skip directory markers)
-        if !key.ends_with('/') {
-            let _ = self
-                .notify_federation_change(bucket, key, "PUT", &version_id, None, physical_size)
-                .await;
+        if !skip_federation {
+            self.on_object_stored(
+                bucket,
+                key,
+                &version_id,
+                physical_size,
+                etag.as_deref(),
+                content_hash.as_deref(),
+            )
+            .await;
         }
 
         Ok(version_id)
@@ -414,6 +315,18 @@ impl FileStorage {
         version_id: Option<&str>,
         bypass_governance: bool,
     ) -> Result<(), AppError> {
+        self.delete_object_with_options(bucket, key, version_id, bypass_governance, false)
+            .await
+    }
+
+    pub async fn delete_object_with_options(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<&str>,
+        bypass_governance: bool,
+        skip_federation: bool,
+    ) -> Result<(), AppError> {
         let vid = version_id.unwrap_or("");
         self.delete_object_direct(bucket, key, version_id, bypass_governance).await?;
 
@@ -453,11 +366,15 @@ impl FileStorage {
             }
         }
 
-        // Enqueue Cross-Server Federation Deletion (skip directory markers)
-        if !key.ends_with('/') {
-            let _ = self
-                .notify_federation_change(bucket, key, "DELETE", vid, None, 0)
-                .await;
+        // Enqueue Cross-Server Federation Deletion (propagate nested keys when deleting a folder)
+        if !skip_federation {
+            if key.ends_with('/') {
+                let _ = self.reconcile_all_enabled_shares(None).await;
+            } else {
+                let _ = self
+                    .notify_federation_change(bucket, key, "DELETE", vid, None, 0)
+                    .await;
+            }
         }
 
         Ok(())

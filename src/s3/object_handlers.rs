@@ -295,13 +295,20 @@ pub async fn put_object(
         }
     }
 
+    let is_replicated = headers
+        .get("x-gravspace-replicated")
+        .and_then(|h| h.to_str().ok())
+        == Some("1");
     let encryption = headers
         .get("x-amz-server-side-encryption")
         .and_then(|h| h.to_str().ok());
 
     let body_stream = request.into_body().into_data_stream();
 
-    match storage.put_object_stream(&bucket, &key, body_stream, encryption).await {
+    match storage
+        .put_object_stream_with_options(&bucket, &key, body_stream, encryption, is_replicated)
+        .await
+    {
         Ok(version_id) => {
             if let Some(ref audit) = storage.audit {
                 let audit_c = audit.clone();
@@ -366,9 +373,13 @@ pub async fn delete_object(
         }
     };
 
+    let is_replicated = headers
+        .get("x-gravspace-replicated")
+        .and_then(|h| h.to_str().ok())
+        == Some("1");
     let version_id = get_query_param(query_str, "versionId");
     match storage
-        .delete_object(&bucket, &key, version_id.as_deref(), false)
+        .delete_object_with_options(&bucket, &key, version_id.as_deref(), false, is_replicated)
         .await
     {
         Ok(_) => {

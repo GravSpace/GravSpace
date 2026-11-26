@@ -1,25 +1,18 @@
 import { useState, useEffect } from 'react'
 import {
-  KeyRound,
-  Bot,
-  Key,
-  ShieldCheck,
   Plus,
   Sparkles,
   Lock,
   ShieldAlert,
   ChevronDown,
   ClipboardPaste,
-  FileCode,
 } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '../ui/dialog'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Textarea } from '../ui/textarea'
 import { Switch } from '../ui/switch'
-import { Badge } from '../ui/badge'
 import { toast } from 'sonner'
 import {
   TYPE_CONFIG,

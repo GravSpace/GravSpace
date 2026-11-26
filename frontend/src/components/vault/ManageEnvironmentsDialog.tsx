@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Plus, Trash2, Check, AlertCircle, Layers } from 'lucide-react'
+import { Plus, Trash2, Check, Layers } from 'lucide-react'
 import {
   Dialog,
   DialogContent,

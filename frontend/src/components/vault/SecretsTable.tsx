@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Lock,
   Eye,
@@ -17,7 +17,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
 } from 'lucide-react'
-import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import {
   TYPE_CONFIG,

@@ -33,7 +33,7 @@ export function ObjectLockDialog({ object, bucketName, onClose, onSaved, authFet
   async function saveLock() {
     setSaving(true)
     try {
-      const vParam = object.VersionId ? `&versionId=${encodeURIComponent(object.VersionId)}` : ''
+      const vParam = object.VersionID ? `&versionId=${encodeURIComponent(object.VersionID)}` : ''
       const res = await authFetch(
         `${apiBase}/admin/buckets/${encodeURIComponent(bucketName)}/retention?key=${encodeURIComponent(object.Key)}${vParam}`,
         {

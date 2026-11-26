@@ -8,7 +8,7 @@ import { Button } from '../../components/ui/button'
 import { Badge } from '../../components/ui/badge'
 import { Input } from '../../components/ui/input'
 import { useAuth } from '../../hooks/useAuth'
-import { getAuditStreamWsUrl } from '../../lib/utils'
+import { fetchWsTicketOrToken, getAuditStreamWsUrl } from '../../lib/utils'
 
 export const Route = createFileRoute('/admin/audit')({
   component: AuditPage,
@@ -96,10 +96,6 @@ function getActionStyle(action?: string): string {
   return 'bg-slate-500/10 text-slate-600 dark:text-slate-400 border-slate-500/20'
 }
 
-function buildWsUrl(token: string): string {
-  return getAuditStreamWsUrl(token)
-}
-
 function AuditPage() {
   const { authFetch, authState } = useAuth()
   const [logs, setLogs] = useState<NormalisedEntry[]>([])
@@ -134,20 +130,25 @@ function AuditPage() {
     fetchLogs(0)
 
     const token = (authState as any)?.token || ''
-    const wsUrl = buildWsUrl(token)
 
     let ws: WebSocket
     let reconnectTimer: ReturnType<typeof setTimeout>
+    let isDisposed = false
 
-    function connect() {
+    async function connect() {
+      const { credential, useTicket } = await fetchWsTicketOrToken(authFetch, token)
+      if (isDisposed || !credential) return
+      const wsUrl = getAuditStreamWsUrl(credential, useTicket)
       ws = new WebSocket(wsUrl)
       wsRef.current = ws
 
       ws.onopen = () => setWsConnected(true)
       ws.onclose = () => {
         setWsConnected(false)
-        // Auto-reconnect after 3 s
-        reconnectTimer = setTimeout(connect, 3000)
+        if (!isDisposed) {
+          // Auto-reconnect after 3 s
+          reconnectTimer = setTimeout(connect, 3000)
+        }
       }
       ws.onerror = () => ws.close()
       ws.onmessage = (e) => {
@@ -158,9 +159,10 @@ function AuditPage() {
       }
     }
 
-    connect()
+    void connect()
 
     return () => {
+      isDisposed = true
       clearTimeout(reconnectTimer)
       wsRef.current?.close()
     }

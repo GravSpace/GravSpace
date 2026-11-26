@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { Database, FileUp, RefreshCw } from 'lucide-react'
 import { Button } from '../../components/ui/button'
 import { useAuth } from '../../hooks/useAuth'
-import { getAuditStreamWsUrl } from '../../lib/utils'
+import { fetchWsTicketOrToken, getAuditStreamWsUrl } from '../../lib/utils'
 import {
   formatSize,
   formatSavings,
@@ -36,6 +36,7 @@ function DashboardPage() {
   const [wsStatus, setWsStatus] = useState<WsStatus>('disconnected')
   const [liveLogs, setLiveLogs] = useState<any[]>([])
   const wsRef = useRef<WebSocket | null>(null)
+  const wsConnectSeqRef = useRef(0)
 
   const fetchAllData = useCallback(async () => {
     if (!authState.isAuthenticated) return
@@ -60,12 +61,15 @@ function DashboardPage() {
     }
   }, [authFetch, authState.isAuthenticated])
 
-  const connectWS = useCallback(() => {
+  const connectWS = useCallback(async () => {
     if (!authState.isAuthenticated) return
+    const connectSeq = ++wsConnectSeqRef.current
     if (wsRef.current) wsRef.current.close()
     setWsStatus('connecting')
     const token = authState?.token || ''
-    const wsUrl = getAuditStreamWsUrl(token)
+    const { credential, useTicket } = await fetchWsTicketOrToken(authFetch, token)
+    if (wsConnectSeqRef.current !== connectSeq || !credential) return
+    const wsUrl = getAuditStreamWsUrl(credential, useTicket)
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
     ws.onopen = () => setWsStatus('connected')
@@ -100,13 +104,14 @@ function DashboardPage() {
     }
     ws.onclose = () => setWsStatus('disconnected')
     ws.onerror = () => setWsStatus('disconnected')
-  }, [authState?.token, authState.isAuthenticated])
+  }, [authFetch, authState?.token, authState.isAuthenticated])
 
   useEffect(() => {
     if (!authState.isAuthenticated) return
     fetchAllData()
-    connectWS()
+    void connectWS()
     return () => {
+      wsConnectSeqRef.current += 1
       if (wsRef.current) wsRef.current.close()
     }
   }, [authState.isAuthenticated, fetchAllData, connectWS])
