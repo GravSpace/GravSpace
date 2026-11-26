@@ -66,7 +66,7 @@ pub async fn head_bucket(
     Path(bucket): Path<String>,
     request: Request,
 ) -> Response {
-    if let Err(e) = verify_s3_http(
+    let actor = match verify_s3_http(
         &storage.db,
         &storage.config,
         &request,
@@ -76,15 +76,21 @@ pub async fn head_bucket(
     )
     .await
     {
-        return s3_error(
-            StatusCode::FORBIDDEN,
-            "AccessDenied",
-            &e.to_string(),
-            &bucket,
-        );
-    }
+        Ok(u) => u,
+        Err(e) => {
+            return s3_error(
+                StatusCode::FORBIDDEN,
+                "AccessDenied",
+                &e.to_string(),
+                &bucket,
+            );
+        }
+    };
 
     if storage.bucket_exists(&bucket).await {
+        storage
+            .record_inbound_from_headers(request.headers(), &bucket, &actor)
+            .await;
         (
             StatusCode::OK,
             [

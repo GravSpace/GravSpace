@@ -96,6 +96,11 @@ pub async fn create_share(
     .await?;
 
     broadcast_federation_event("shares_changed", json!({ "action": "created", "id": id }));
+    crate::workers::federation_announce::spawn_share_announcement_by_id(
+        storage.clone(),
+        id,
+        "active",
+    );
     Ok((
         StatusCode::CREATED,
         Json(json!({ "id": id, "success": true })),
@@ -142,6 +147,11 @@ pub async fn update_share(
     if payload.enabled {
         let _ = storage.reconcile_share(id).await;
     }
+    crate::workers::federation_announce::spawn_share_announcement_by_id(
+        storage.clone(),
+        id,
+        if payload.enabled { "active" } else { "disabled" },
+    );
     broadcast_federation_event("shares_changed", json!({ "action": "updated", "id": id }));
     Ok((StatusCode::OK, Json(json!({ "id": id, "success": true }))).into_response())
 }
@@ -162,6 +172,11 @@ pub async fn toggle_share(
     if enabled {
         let _ = storage.reconcile_share(id).await;
     }
+    crate::workers::federation_announce::spawn_share_announcement_by_id(
+        storage.clone(),
+        id,
+        if enabled { "active" } else { "disabled" },
+    );
     broadcast_federation_event(
         "shares_changed",
         json!({ "action": "toggled", "id": id, "enabled": enabled }),
@@ -178,6 +193,13 @@ pub async fn delete_share(
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
     let conn = storage.federation_conn()?;
+    if let Ok(shares) = db::federation::list_shares(&conn).await {
+        if let Some(share) = shares.into_iter().find(|s| s.id == id) {
+            if let Ok(Some(peer)) = db::federation::get_remote_server(&conn, share.remote_server_id).await {
+                crate::workers::federation_announce::spawn_share_announcement(share, peer, "removed");
+            }
+        }
+    }
     db::federation::delete_share(&conn, id).await?;
     broadcast_federation_event("shares_changed", json!({ "action": "deleted", "id": id }));
     Ok((StatusCode::OK, Json(json!({ "success": true }))).into_response())
@@ -188,6 +210,11 @@ pub async fn reconcile_share(
     Path(id): Path<i64>,
 ) -> Result<Response, AppError> {
     let enqueued = storage.reconcile_share(id).await?;
+    crate::workers::federation_announce::spawn_share_announcement_by_id(
+        storage.clone(),
+        id,
+        "active",
+    );
     broadcast_federation_event(
         "shares_changed",
         json!({ "action": "reconciled", "id": id, "enqueued_count": enqueued }),

@@ -32,7 +32,7 @@ import {
 } from '../../../components/ui/dropdown-menu'
 import { useAuth } from '../../../hooks/useAuth'
 import { BucketFederationBadge } from '../../../components/bucket/FederationBadge'
-import type { CrossServerShare } from '../../../components/federation/federationTypes'
+import { useBucketFederation } from '../../../components/bucket/useBucketFederation'
 
 export const Route = createFileRoute('/admin/buckets/')({
   component: BucketsPage,
@@ -61,7 +61,7 @@ function BucketsPage() {
   const { authFetch } = useAuth()
   const navigate = useNavigate()
   const [buckets, setBuckets] = useState<string[]>([])
-  const [shares, setShares] = useState<CrossServerShare[]>([])
+  const { shares, inboundShares, refreshFederation, dismissInbound } = useBucketFederation(API_BASE, authFetch)
   const [users, setUsers] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -79,11 +79,10 @@ function BucketsPage() {
   const fetchBuckets = useCallback(async () => {
     setLoading(true)
     try {
-      const [res, sharesRes] = await Promise.all([
+      const [res] = await Promise.all([
         authFetch(`${API_BASE}/admin/buckets`),
-        authFetch(`${API_BASE}/admin/federation/shares`),
+        refreshFederation(),
       ])
-      if (sharesRes.ok) setShares((await sharesRes.json()) || [])
       if (res.ok) {
         const list: string[] = await res.json()
         setBuckets(list)
@@ -282,13 +281,13 @@ function BucketsPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
       {/* Header */}
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Buckets</h1>
-          <p className="text-xs text-muted-foreground">Manage your cloud storage infrastructure.</p>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">Buckets</h1>
+          <p className="hidden sm:block text-xs text-muted-foreground">Manage your cloud storage infrastructure.</p>
         </div>
-        <div className="flex items-center gap-3" suppressHydrationWarning>
-          <div className="relative" suppressHydrationWarning>
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto" suppressHydrationWarning>
+          <div className="relative flex-1 min-w-[140px] sm:flex-none" suppressHydrationWarning>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
               value={searchQuery}
@@ -299,7 +298,7 @@ function BucketsPage() {
               data-1p-ignore="true"
               suppressHydrationWarning
               placeholder="Filter buckets..."
-              className="h-8 w-44 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60"
+              className="h-8 w-full sm:w-44 pl-8 pr-3 text-xs rounded-md border border-slate-200 dark:border-slate-800 bg-background focus:outline-none focus:ring-2 focus:ring-primary/40 transition-all placeholder:text-muted-foreground/60"
             />
           </div>
           <Button
@@ -307,18 +306,19 @@ function BucketsPage() {
             size="sm"
             onClick={handleSyncAll}
             disabled={loading || syncing}
+            aria-label="Sync Filesystem"
             className="h-8"
           >
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading || syncing ? 'animate-spin' : ''}`} />
-            Sync Filesystem
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-2 ${loading || syncing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Sync Filesystem</span>
           </Button>
           <Button size="sm" onClick={() => setShowCreateDialog(true)} className="h-8">
-            <Plus className="w-3.5 h-3.5 mr-2" /> New Bucket
+            <Plus className="w-3.5 h-3.5 mr-1.5" /> New Bucket
           </Button>
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-6">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-6">
         {/* Loading Skeleton */}
         {loading && buckets.length === 0 && (
           <div className="space-y-3">
@@ -386,7 +386,7 @@ function BucketsPage() {
                               <Lock className="w-2.5 h-2.5 mr-0.5" /> Locked
                             </Badge>
                           )}
-                          <BucketFederationBadge bucket={bucket} shares={shares} />
+                          <BucketFederationBadge bucket={bucket} shares={shares} inboundShares={inboundShares} onDismissInbound={dismissInbound} />
                         </div>
                         <div className="flex items-center gap-3 mt-0.5">
                           <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider opacity-50">

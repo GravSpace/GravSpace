@@ -47,9 +47,29 @@ const config = defineConfig({
   },
   resolve: {
     tsconfigPaths: true,
+    dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime'],
     alias: {
       'lucide-react': path.resolve(__dirname, 'src/lib/iconsax-adapter.tsx'),
     },
+  },
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom',
+      'react-dom/client',
+      'react/jsx-runtime',
+      'react/jsx-dev-runtime',
+      '@ui-sdk/react/alert-dialog',
+      '@ui-sdk/react/button',
+      '@ui-sdk/react/dialog',
+      '@ui-sdk/react/field',
+      '@ui-sdk/react/input',
+      '@ui-sdk/react/pagination',
+      '@ui-sdk/react/password-input',
+      '@ui-sdk/react/select',
+      '@ui-sdk/react/switch',
+      '@ui-sdk/react/tabs',
+    ],
   },
   server: {
     proxy: {

@@ -2,7 +2,7 @@ use crate::auth::middleware::AuthContext;
 use crate::db;
 use crate::error::AppError;
 use crate::storage::FileStorage;
-use crate::vault::{crypto, pam};
+use crate::vault::{crypto, file_ops, pam};
 use axum::{
     extract::{Extension, Path, Query, State},
     http::StatusCode,
@@ -103,23 +103,30 @@ pub async fn create_secret(
     let project_id = payload.project_id.unwrap_or_else(|| "default".to_string());
     let env = payload.environment.unwrap_or_else(|| "development".to_string());
     let s_type = payload.secret_type.unwrap_or_else(|| "kv".to_string());
+    let clean_name = file_ops::validate_secret_name(&payload.name)?;
 
     // Check conflict within same project & environment
-    if let Ok(Some(_)) = db::vault::get_secret_by_name(&conn, Some(&project_id), &env, &payload.name).await {
+    if let Ok(Some(_)) = db::vault::get_secret_by_name(&conn, Some(&project_id), &env, &clean_name).await {
         return Err(AppError::BadRequest(format!(
             "Secret '{}' already exists in environment '{}' for this project",
-            payload.name, env
+            clean_name, env
         )));
     }
 
+    let enriched_meta = file_ops::enrich_secret_metadata(
+        &clean_name,
+        &s_type,
+        &payload.value,
+        payload.metadata,
+    )?;
     let encrypted = crypto::encrypt_secret(payload.value.as_bytes())?;
     let tags_str = payload.tags.map(|t| serde_json::to_string(&t).unwrap_or_default());
-    let meta_str = payload.metadata.map(|m| serde_json::to_string(&m).unwrap_or_default());
+    let meta_str = enriched_meta.map(|m| serde_json::to_string(&m).unwrap_or_default());
 
     let row = db::vault::VaultSecretRow {
         id: id.clone(),
         project_id,
-        name: payload.name,
+        name: clean_name,
         environment: env,
         secret_type: s_type,
         description: payload.description,
@@ -228,6 +235,19 @@ pub async fn update_secret(
 
     // Rotate value if new value provided
     if let Some(new_val) = payload.value {
+        let base_meta = payload.metadata.or_else(|| {
+            secret
+                .metadata_json
+                .as_deref()
+                .and_then(|m| serde_json::from_str(m).ok())
+        });
+        let enriched_meta = file_ops::enrich_secret_metadata(
+            &secret.name,
+            &secret.secret_type,
+            &new_val,
+            base_meta,
+        )?;
+        let merged_meta_str = enriched_meta.map(|m| serde_json::to_string(&m).unwrap_or_default());
         let encrypted = crypto::encrypt_secret(new_val.as_bytes())?;
         let next_v = secret.current_version + 1;
         db::vault::update_secret_value(
@@ -235,7 +255,7 @@ pub async fn update_secret(
             &id,
             next_v,
             &encrypted,
-            meta_str.as_deref(),
+            merged_meta_str.as_deref().or(meta_str.as_deref()),
             payload.comment.as_deref(),
             Some(&ctx.username),
         )
@@ -457,3 +477,4 @@ pub async fn reject_access_request(
 }
 
 pub use super::export_handlers::import_secrets;
+pub use super::file_ops::download_secret;

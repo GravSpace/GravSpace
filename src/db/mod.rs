@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod buckets;
 pub mod federation;
+pub mod federation_inbound;
 pub mod federation_peers;
 pub mod federation_recovery;
 pub mod federation_shares;

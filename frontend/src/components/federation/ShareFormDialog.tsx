@@ -47,7 +47,7 @@ export function ShareFormDialog(props: ShareFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
       <DialogBackdrop className="fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px] data-starting-style:opacity-0 data-ending-style:opacity-0 transition-opacity duration-150" />
-      <DialogContent className="w-[min(34rem,calc(100%-2rem))] p-5 gap-3.5 rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl outline-none data-starting-style:opacity-0 data-starting-style:scale-95 data-ending-style:opacity-0 data-ending-style:scale-95 transition-all duration-150">
+      <DialogContent className="w-[min(52rem,calc(100%-2rem))] p-5 gap-3.5 rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl outline-none data-starting-style:opacity-0 data-starting-style:scale-95 data-ending-style:opacity-0 data-ending-style:scale-95 transition-all duration-150">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2.5 min-w-0">
             <div className="h-9 w-9 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
@@ -122,7 +122,7 @@ export function ShareFormDialog(props: ShareFormDialogProps) {
                   </SelectContent>
                 </Select>
               </Field>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Field name="target_bucket">
                   <FieldLabel>Target Bucket</FieldLabel>
                   <Input value={targetBucket} onValueChange={setTargetBucket} placeholder="statics" required className="h-8 w-full rounded-md border border-border/80 bg-background px-2 text-xs font-mono" />
@@ -143,9 +143,8 @@ export function ShareFormDialog(props: ShareFormDialogProps) {
                   key={mode}
                   type="button"
                   onClick={() => setSyncMode(mode)}
-                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
-                    syncMode === mode ? 'bg-primary text-primary-foreground font-semibold shadow-2xs' : 'text-muted-foreground hover:text-foreground'
-                  }`}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${syncMode === mode ? 'bg-primary text-primary-foreground font-semibold shadow-2xs' : 'text-muted-foreground hover:text-foreground'
+                    }`}
                 >
                   {mode === 'one_way' ? 'One-Way Push' : 'Two-Way Sync'}
                 </button>

@@ -158,6 +158,9 @@ pub async fn export_secrets(
 
             let mut current_env_header = String::new();
             for s in filtered {
+                if s.secret_type == "keystore" || s.secret_type == "file" {
+                    continue;
+                }
                 if target_env == "all" && s.environment != current_env_header {
                     current_env_header = s.environment.clone();
                     output.push_str(&format!("\n# === Environment: {} ===\n", current_env_header));

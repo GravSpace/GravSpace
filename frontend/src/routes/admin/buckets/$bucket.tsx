@@ -16,7 +16,7 @@ import { ConnectCodeDrawer } from '../../../components/bucket/ConnectCodeDrawer'
 import { BucketHeader } from '../../../components/bucket/BucketHeader'
 import { encKey } from '../../../components/bucket/bucketUploadHelpers'
 import { useBucketUploads } from '../../../components/bucket/useBucketUploads'
-import type { CrossServerShare } from '../../../components/federation/federationTypes'
+import { useBucketFederation } from '../../../components/bucket/useBucketFederation'
 
 interface BucketSearch {
   prefix?: string
@@ -70,7 +70,7 @@ function BucketDetailPage() {
   const [loading, setLoading] = useState(false)
   const [showVersions, setShowVersions] = useState(false)
   const [bucketInfo, setBucketInfo] = useState<BucketInfo | null>(null)
-  const [shares, setShares] = useState<CrossServerShare[]>([])
+  const { shares, inboundShares, refreshFederation, dismissInbound } = useBucketFederation(API_BASE, authFetch, bucketName)
   const [users, setUsers] = useState<Record<string, any>>({})
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [searchQuery, setSearchQuery] = useState('')
@@ -147,19 +147,15 @@ function BucketDetailPage() {
 
   const fetchBucketInfo = useCallback(async () => {
     try {
-      const [infoRes, usersRes, sharesRes] = await Promise.all([
+      const [infoRes, usersRes] = await Promise.all([
         authFetch(`${API_BASE}/admin/buckets/${bucketName}/info`),
         authFetch(`${API_BASE}/admin/users`),
-        authFetch(`${API_BASE}/admin/federation/shares`),
+        refreshFederation(),
       ])
       if (infoRes.ok) setBucketInfo(await infoRes.json())
       if (usersRes.ok) setUsers(await usersRes.json())
-      if (sharesRes.ok) {
-        const data: CrossServerShare[] = (await sharesRes.json()) || []
-        setShares(data.filter((s) => s.source_bucket === bucketName && s.enabled))
-      }
     } catch {}
-  }, [bucketName, authFetch])
+  }, [bucketName, authFetch, refreshFederation])
 
   const handleSyncBucket = async () => {
     setSyncing(true)
@@ -367,6 +363,8 @@ function BucketDetailPage() {
         prefixParts={prefixParts}
         bucketInfo={bucketInfo}
         shares={shares}
+        inboundShares={inboundShares}
+        onDismissInbound={dismissInbound}
         searchQuery={searchQuery}
         showVersions={showVersions}
         onToggleShowVersions={() => {
@@ -392,7 +390,7 @@ function BucketDetailPage() {
       <input type="file" multiple onChange={uploadFolder} className="hidden" ref={folderInputRef} {...({ webkitdirectory: '', directory: '' } as any)} />
 
       <main
-        className="flex-1 overflow-auto p-6 relative"
+        className="flex-1 overflow-auto p-3.5 sm:p-6 relative"
         onDragEnter={handleDrag}
         onDragOver={handleDrag}
         onDragLeave={handleDrag}
@@ -433,6 +431,8 @@ function BucketDetailPage() {
           apiBase={API_BASE}
           bucketInfo={bucketInfo}
           shares={shares}
+          inboundShares={inboundShares}
+          onDismissInbound={dismissInbound}
           onRefresh={() => fetchObjects()}
         />
       </main>

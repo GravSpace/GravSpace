@@ -123,7 +123,7 @@ export function BucketSettingsDialog({
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 overflow-hidden flex flex-col mt-4">
-          <TabsList className="grid w-full grid-cols-6 shrink-0">
+          <TabsList className="grid w-full grid-cols-3 sm:grid-cols-6 h-auto gap-1 shrink-0">
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>

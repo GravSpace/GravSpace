@@ -44,7 +44,7 @@ export function VaultHeader({
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-3 text-[11px] text-muted-foreground pl-10.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground pl-0 sm:pl-10.5">
           <span>
             <strong className="text-foreground font-semibold">{totalSecrets}</strong> secrets stored
           </span>

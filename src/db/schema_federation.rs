@@ -49,4 +49,19 @@ CREATE TABLE IF NOT EXISTS sync_queue (
     FOREIGN KEY (share_id) REFERENCES cross_server_shares(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_sync_queue_status_retry ON sync_queue(status, next_retry_at);
+
+CREATE TABLE IF NOT EXISTS federation_inbound_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_node TEXT NOT NULL,
+    source_bucket TEXT NOT NULL,
+    source_prefix TEXT DEFAULT '',
+    target_bucket TEXT NOT NULL,
+    target_prefix TEXT DEFAULT '',
+    sync_mode TEXT DEFAULT 'one_way',
+    share_name TEXT DEFAULT '',
+    last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_node, source_bucket, source_prefix, target_bucket, target_prefix)
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_target_bucket ON federation_inbound_shares(target_bucket);
 "#;

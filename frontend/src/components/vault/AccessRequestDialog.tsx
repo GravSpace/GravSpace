@@ -81,8 +81,8 @@ export function AccessRequestDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-xl">
-        <DialogHeader className="px-6 py-4 border-b border-border/50 bg-muted/20 flex flex-row items-center gap-3">
+      <DialogContent className="sm:max-w-md rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-xl">
+        <DialogHeader className="px-4 sm:px-6 py-4 border-b border-border/50 bg-muted/20 flex flex-row items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
             <ShieldAlert className="w-5 h-5 text-amber-500" />
           </div>
@@ -96,8 +96,8 @@ export function AccessRequestDialog({
           </div>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="px-6 py-4 space-y-4 text-xs">
-          <div className="p-3 rounded-xl bg-muted/30 border border-border/40 flex items-center justify-between">
+        <form onSubmit={handleSubmit} className="px-4 sm:px-6 py-4 space-y-4 text-xs">
+          <div className="p-3 rounded-xl bg-muted/30 border border-border/40 flex flex-wrap items-center justify-between gap-2">
             <div>
               <span className="text-[11px] text-muted-foreground block">Target Resource</span>
               <span className="font-mono font-semibold text-foreground text-xs flex items-center gap-1.5 mt-0.5">
@@ -116,7 +116,7 @@ export function AccessRequestDialog({
               <Clock className="w-3.5 h-3.5 text-muted-foreground" />
               Requested Duration
             </Label>
-            <div className="grid grid-cols-5 gap-1.5">
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
               {DURATION_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}

@@ -1,5 +1,6 @@
 use crate::auth::signature::{build_string_to_sign, calculate_signature, sha256_hex, uri_encode};
-use crate::db::federation::{RemoteServerRow, SyncQueueRow};
+use crate::db::federation::{CrossServerShareRow, RemoteServerRow, SyncQueueRow};
+use crate::storage::federation_provenance::build_provenance_headers;
 use crate::storage::object_stream_ops::open_object_byte_stream;
 use crate::storage::FileStorage;
 use chrono::Utc;
@@ -101,12 +102,23 @@ fn is_permanent_http_status(status: u16) -> bool {
     (400..500).contains(&status) && status != 408 && status != 429
 }
 
+fn apply_provenance(
+    mut builder: reqwest::RequestBuilder,
+    share: &CrossServerShareRow,
+) -> reqwest::RequestBuilder {
+    for (k, v) in build_provenance_headers(share, "active") {
+        builder = builder.header(k, v);
+    }
+    builder
+}
+
 /// Transfers a single queued PUT or DELETE sync item to the target peer,
-/// streaming raw files directly from disk with `x-gravspace-replicated: 1` echo guard.
+/// streaming raw files directly from disk with `x-gravspace-replicated: 1` and provenance headers.
 pub async fn transfer_sync_item(
     storage: &FileStorage,
     client: &reqwest::Client,
     item: &SyncQueueRow,
+    share: &CrossServerShareRow,
     peer: &RemoteServerRow,
 ) -> TransferOutcome {
     let (base_ep, use_sigv4) = resolve_target_endpoint(peer);
@@ -122,9 +134,7 @@ pub async fn transfer_sync_item(
     };
 
     let sync_result = if item.action == "DELETE" {
-        let req_builder = client
-            .delete(&target_url)
-            .header("x-gravspace-replicated", "1");
+        let req_builder = apply_provenance(client.delete(&target_url), share);
         let req = if use_sigv4 {
             let empty_hash = sha256_hex(b"");
             sign_s3_request(
@@ -150,12 +160,14 @@ pub async fn transfer_sync_item(
         {
             Ok(Some((file_path, file_len, meta))) => {
                 let body = reqwest::Body::wrap_stream(open_object_byte_stream(file_path));
-                let req_builder = client
-                    .put(&target_url)
-                    .header("Content-Type", meta.content_type)
-                    .header("Content-Length", file_len.to_string())
-                    .header("x-gravspace-replicated", "1")
-                    .body(body);
+                let req_builder = apply_provenance(
+                    client
+                        .put(&target_url)
+                        .header("Content-Type", meta.content_type)
+                        .header("Content-Length", file_len.to_string()),
+                    share,
+                )
+                .body(body);
                 let req = if use_sigv4 {
                     sign_s3_request(
                         req_builder,
@@ -190,11 +202,13 @@ pub async fn transfer_sync_item(
                 } else {
                     String::new()
                 };
-                let req_builder = client
-                    .put(&target_url)
-                    .header("Content-Type", meta.content_type)
-                    .header("x-gravspace-replicated", "1")
-                    .body(data);
+                let req_builder = apply_provenance(
+                    client
+                        .put(&target_url)
+                        .header("Content-Type", meta.content_type),
+                    share,
+                )
+                .body(data);
                 let req = if use_sigv4 {
                     sign_s3_request(
                         req_builder,

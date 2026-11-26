@@ -173,17 +173,17 @@ function S3ExplorerPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight flex items-center gap-2">
-            <Terminal className="w-5 h-5 text-primary" />
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight flex items-center gap-2">
+            <Terminal className="w-5 h-5 text-primary shrink-0" />
             S3 API Explorer & SDK Tester
           </h1>
-          <p className="text-xs text-muted-foreground">
+          <p className="hidden sm:block text-xs text-muted-foreground">
             Execute official AWS S3 SDK commands directly using IAM Engine credentials.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {executionMode === 'relay' ? (
             <span className="hidden md:inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -209,6 +209,7 @@ function S3ExplorerPage() {
             size="sm"
             onClick={fetchUsersAndBuckets}
             disabled={loadingUsers}
+            aria-label="Refresh explorer credentials"
             className="h-8"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loadingUsers ? 'animate-spin' : ''}`} />
@@ -216,7 +217,7 @@ function S3ExplorerPage() {
         </div>
       </header>
 
-      <main suppressHydrationWarning className="flex-1 overflow-auto p-5 space-y-4">
+      <main suppressHydrationWarning className="flex-1 overflow-auto p-3.5 sm:p-5 space-y-4">
         {/* Credentials Selector */}
         <S3CredentialSelector
           users={users}

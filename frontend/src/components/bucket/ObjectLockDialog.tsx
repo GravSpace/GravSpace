@@ -75,7 +75,7 @@ export function ObjectLockDialog({ object, bucketName, onClose, onSaved, authFet
             <Label className="text-[10px] uppercase tracking-wider font-bold text-muted-foreground">
               Retention Mode
             </Label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {(['', 'GOVERNANCE', 'COMPLIANCE'] as const).map((m) => (
                 <button
                   key={m || 'none'}

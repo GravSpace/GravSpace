@@ -206,3 +206,4 @@ pub async fn clear_completed_queue(
 
 // ================= TEST ENDPOINT HANDLER =================
 pub use crate::admin::federation_probe::test_remote_endpoint;
+pub use crate::admin::federation_inbound_handlers::{delete_inbound_share, list_inbound_shares};

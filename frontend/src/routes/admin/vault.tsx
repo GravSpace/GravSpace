@@ -2,15 +2,12 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import { useAuth } from '../../hooks/useAuth'
 import { toast } from 'sonner'
-import { Search, X, Filter } from 'lucide-react'
-import { Input } from '@/components/ui/input'
+import { VaultFilterBar } from '../../components/vault/VaultFilterBar'
 import {
   type VaultSecret,
   type AccessRequest,
   type VaultEnvironment,
   type VaultProject,
-  type SecretType,
-  TYPE_CONFIG,
   downloadSecretFile,
   downloadKeyStoreBundle,
 } from '../../components/vault/vaultTypes'
@@ -258,234 +255,198 @@ function VaultPage() {
       <div className="p-4 sm:p-6 max-w-7xl w-full mx-auto space-y-4">
         {/* Top Header */}
         <VaultHeader
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        totalSecrets={totalSecretsCount}
-        pamGuardedCount={pamGuardedCount}
-        pendingRequestsCount={pendingRequestsCount}
-        onOpenCreate={() => setShowCreateDialog(true)}
-        onOpenImport={() => setShowImportDialog(true)}
-        onOpenExport={() => setShowExportDialog(true)}
-        onRefresh={() => {
-          fetchProjects()
-          fetchSecrets()
-          fetchEnvironments()
-          fetchAccessRequests()
-        }}
-        loading={loadingSecrets}
-      />
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          totalSecrets={totalSecretsCount}
+          pamGuardedCount={pamGuardedCount}
+          pendingRequestsCount={pendingRequestsCount}
+          onOpenCreate={() => setShowCreateDialog(true)}
+          onOpenImport={() => setShowImportDialog(true)}
+          onOpenExport={() => setShowExportDialog(true)}
+          onRefresh={() => {
+            fetchProjects()
+            fetchSecrets()
+            fetchEnvironments()
+            fetchAccessRequests()
+          }}
+          loading={loadingSecrets}
+        />
 
-      {/* Main Content Area */}
-      <main>
-        {activeTab === 'pam' ? (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-foreground">
-                Privileged Access Management (PAM) Elevation Queue
-              </span>
+        {/* Main Content Area */}
+        <main>
+          {activeTab === 'pam' ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-foreground">
+                  Privileged Access Management (PAM) Elevation Queue
+                </span>
+              </div>
+              <AccessRequestsTable
+                requests={accessRequests}
+                loading={loadingRequests}
+                apiBase={API_BASE}
+                authFetch={authFetch}
+                onRefresh={() => {
+                  fetchAccessRequests()
+                  fetchSecrets()
+                }}
+              />
             </div>
-            <AccessRequestsTable
-              requests={accessRequests}
-              loading={loadingRequests}
-              apiBase={API_BASE}
-              authFetch={authFetch}
-              onRefresh={() => {
-                fetchAccessRequests()
-                fetchSecrets()
-              }}
-            />
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {/* Project Switcher & Environment Bar Row */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-              <ProjectSwitcher
+          ) : (
+            <div className="space-y-3">
+              {/* Project Switcher & Environment Bar Row */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <ProjectSwitcher
+                  projects={projects}
+                  currentProject={currentProject}
+                  onSelectProject={setCurrentProject}
+                  onOpenCreateProject={() => {
+                    setManageProjectsInitialTab('create')
+                    setShowManageProjectsDialog(true)
+                  }}
+                  onOpenManageProjects={() => {
+                    setManageProjectsInitialTab('list')
+                    setShowManageProjectsDialog(true)
+                  }}
+                  totalAllSecrets={totalSecretsCount}
+                />
+
+                <EnvironmentBar
+                  environments={environments}
+                  currentEnv={currentEnv}
+                  onSelectEnv={setCurrentEnv}
+                  onOpenManageEnv={() => setShowManageEnvDialog(true)}
+                  totalCount={totalSecretsCount}
+                  counts={realtimeEnvCounts}
+                />
+              </div>
+
+              {/* Filter and Search Bar */}
+              <VaultFilterBar
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+                selectedType={selectedType}
+                onSelectType={setSelectedType}
+              />
+
+              {/* Secrets Table */}
+              <SecretsTable
+                secrets={secrets}
                 projects={projects}
                 currentProject={currentProject}
-                onSelectProject={setCurrentProject}
-                onOpenCreateProject={() => {
-                  setManageProjectsInitialTab('create')
-                  setShowManageProjectsDialog(true)
-                }}
-                onOpenManageProjects={() => {
-                  setManageProjectsInitialTab('list')
-                  setShowManageProjectsDialog(true)
-                }}
-                totalAllSecrets={totalSecretsCount}
-              />
-
-              <EnvironmentBar
-                environments={environments}
+                revealedMap={revealedMap}
+                revealingId={revealingId}
                 currentEnv={currentEnv}
-                onSelectEnv={setCurrentEnv}
-                onOpenManageEnv={() => setShowManageEnvDialog(true)}
-                totalCount={totalSecretsCount}
-                counts={realtimeEnvCounts}
+                envLabel={currentEnvName}
+                onToggleReveal={handleToggleReveal}
+                onCopy={handleCopy}
+                onDownload={handleDownload}
+                onSelectDetail={(s) => {
+                  setSelectedSecret(s)
+                  setShowDetailDialog(true)
+                }}
+                onDelete={handleDeleteSecret}
+                onOpenCreate={() => setShowCreateDialog(true)}
+                onOpenImport={() => setShowImportDialog(true)}
               />
             </div>
+          )}
+        </main>
 
-            {/* Filter and Search Bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-2 rounded-xl bg-card border border-border/50 shadow-2xs">
-              {/* Search Bar */}
-              <div className="relative flex-1 max-w-md">
-                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search secrets by name, description, or #tag..."
-                  className="h-8 pl-8 pr-7 text-xs bg-background/80"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5 cursor-pointer"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
+        {/* Modals & Dialogs */}
+        <CreateSecretDialog
+          open={showCreateDialog}
+          onClose={() => setShowCreateDialog(false)}
+          projects={projects}
+          currentProject={currentProject}
+          environments={environments}
+          currentEnv={currentEnv}
+          apiBase={API_BASE}
+          authFetch={authFetch}
+          onSecretCreated={() => {
+            fetchSecrets()
+            fetchEnvironments()
+            fetchProjects()
+          }}
+        />
 
-              {/* Type Filter Pills */}
-              <div className="flex items-center gap-1 overflow-x-auto py-0.5 scrollbar-none">
-                <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1 mr-1">
-                  <Filter className="w-3 h-3" />
-                  Type:
-                </span>
-                {(['all', 'kv', 'agent_token', 'keystore', 'certificate'] as const).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setSelectedType(t)}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer ${selectedType === t
-                        ? 'bg-primary/10 text-primary border border-primary/25 font-semibold shadow-2xs'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
-                      }`}
-                  >
-                    {t === 'all' ? 'All Types' : TYPE_CONFIG[t as SecretType]?.label || t}
-                  </button>
-                ))}
-              </div>
-            </div>
+        <SecretDetailDialog
+          open={showDetailDialog}
+          onClose={() => setShowDetailDialog(false)}
+          secret={selectedSecret}
+          apiBase={API_BASE}
+          authFetch={authFetch}
+          onSecretUpdated={() => {
+            fetchSecrets()
+            fetchEnvironments()
+            fetchProjects()
+          }}
+          onDeleteRequested={handleDeleteSecret}
+          onDownload={handleDownload}
+        />
 
-            {/* Secrets Table */}
-            <SecretsTable
-              secrets={secrets}
-              projects={projects}
-              currentProject={currentProject}
-              revealedMap={revealedMap}
-              revealingId={revealingId}
-              currentEnv={currentEnv}
-              envLabel={currentEnvName}
-              onToggleReveal={handleToggleReveal}
-              onCopy={handleCopy}
-              onDownload={handleDownload}
-              onSelectDetail={(s) => {
-                setSelectedSecret(s)
-                setShowDetailDialog(true)
-              }}
-              onDelete={handleDeleteSecret}
-              onOpenCreate={() => setShowCreateDialog(true)}
-              onOpenImport={() => setShowImportDialog(true)}
-            />
-          </div>
-        )}
-      </main>
+        <AccessRequestDialog
+          open={showPamDialog}
+          onClose={() => setShowPamDialog(false)}
+          secret={pamTargetSecret}
+          environment={currentEnv}
+          apiBase={API_BASE}
+          authFetch={authFetch}
+          onRequestCreated={fetchAccessRequests}
+        />
 
-      {/* Modals & Dialogs */}
-      <CreateSecretDialog
-        open={showCreateDialog}
-        onClose={() => setShowCreateDialog(false)}
-        projects={projects}
-        currentProject={currentProject}
-        environments={environments}
-        currentEnv={currentEnv}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-        onSecretCreated={() => {
-          fetchSecrets()
-          fetchEnvironments()
-          fetchProjects()
-        }}
-      />
+        <ImportExportDialog
+          open={showImportDialog}
+          onClose={() => setShowImportDialog(false)}
+          projects={projects}
+          currentProject={currentProject}
+          environments={environments}
+          currentEnv={currentEnv}
+          mode="import"
+          apiBase={API_BASE}
+          authFetch={authFetch}
+          onImportComplete={() => {
+            fetchSecrets()
+            fetchEnvironments()
+            fetchProjects()
+          }}
+        />
 
-      <SecretDetailDialog
-        open={showDetailDialog}
-        onClose={() => setShowDetailDialog(false)}
-        secret={selectedSecret}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-        onSecretUpdated={() => {
-          fetchSecrets()
-          fetchEnvironments()
-          fetchProjects()
-        }}
-        onDeleteRequested={handleDeleteSecret}
-        onDownload={handleDownload}
-      />
+        <ExportSecretsDialog
+          open={showExportDialog}
+          onClose={() => setShowExportDialog(false)}
+          projects={projects}
+          currentProject={currentProject}
+          environments={environments}
+          currentEnv={currentEnv}
+          apiBase={API_BASE}
+          authFetch={authFetch}
+        />
 
-      <AccessRequestDialog
-        open={showPamDialog}
-        onClose={() => setShowPamDialog(false)}
-        secret={pamTargetSecret}
-        environment={currentEnv}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-        onRequestCreated={fetchAccessRequests}
-      />
+        <ManageEnvironmentsDialog
+          open={showManageEnvDialog}
+          onClose={() => setShowManageEnvDialog(false)}
+          environments={environments}
+          apiBase={API_BASE}
+          authFetch={authFetch}
+          onEnvironmentsUpdated={() => {
+            fetchEnvironments()
+            fetchSecrets()
+          }}
+        />
 
-      <ImportExportDialog
-        open={showImportDialog}
-        onClose={() => setShowImportDialog(false)}
-        projects={projects}
-        currentProject={currentProject}
-        environments={environments}
-        currentEnv={currentEnv}
-        mode="import"
-        apiBase={API_BASE}
-        authFetch={authFetch}
-        onImportComplete={() => {
-          fetchSecrets()
-          fetchEnvironments()
-          fetchProjects()
-        }}
-      />
-
-      <ExportSecretsDialog
-        open={showExportDialog}
-        onClose={() => setShowExportDialog(false)}
-        projects={projects}
-        currentProject={currentProject}
-        environments={environments}
-        currentEnv={currentEnv}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-      />
-
-      <ManageEnvironmentsDialog
-        open={showManageEnvDialog}
-        onClose={() => setShowManageEnvDialog(false)}
-        environments={environments}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-        onEnvironmentsUpdated={() => {
-          fetchEnvironments()
-          fetchSecrets()
-        }}
-      />
-
-      <ManageProjectsDialog
-        open={showManageProjectsDialog}
-        onClose={() => setShowManageProjectsDialog(false)}
-        projects={projects}
-        apiBase={API_BASE}
-        authFetch={authFetch}
-        onProjectsUpdated={() => {
-          fetchProjects()
-          fetchSecrets()
-        }}
-        initialTab={manageProjectsInitialTab}
-      />
+        <ManageProjectsDialog
+          open={showManageProjectsDialog}
+          onClose={() => setShowManageProjectsDialog(false)}
+          projects={projects}
+          apiBase={API_BASE}
+          authFetch={authFetch}
+          onProjectsUpdated={() => {
+            fetchProjects()
+            fetchSecrets()
+          }}
+          initialTab={manageProjectsInitialTab}
+        />
       </div>
     </div>
   )

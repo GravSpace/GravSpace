@@ -59,9 +59,9 @@ function FederationPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-14 border-b bg-card/70 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10 shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-primary/10 text-primary">
+      <header className="min-h-14 h-auto py-2.5 sm:py-0 border-b bg-card/70 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10 shrink-0">
+        <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0">
             <Network className="w-4 h-4" />
           </div>
           <div>
@@ -71,13 +71,13 @@ function FederationPage() {
                 Mesh Node
               </span>
             </div>
-            <p className="text-[11px] text-muted-foreground">
+            <p className="hidden sm:block text-[11px] text-muted-foreground">
               Cross-cluster bucket replication, selective folder sharing, and fault-tolerant outbox.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
           {isConnected ? (
             <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-500 text-[11px] font-semibold shadow-xs">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -90,9 +90,9 @@ function FederationPage() {
             </div>
           )}
 
-          <Button variant="outline" size="sm" onClick={() => loadData()} disabled={loading} className="h-8 text-xs font-medium">
-            <RefreshCw className={`w-3.5 h-3.5 mr-1.5 ${loading ? 'animate-spin' : ''}`} />
-            <span>Refresh</span>
+          <Button variant="outline" size="sm" onClick={() => loadData()} disabled={loading} className="h-8 text-xs font-medium" aria-label="Refresh federation">
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-1.5 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Button variant="outline" size="sm" onClick={() => setOpenConnectPeer(true)} className="h-8 text-xs font-medium">
             <Server className="w-3.5 h-3.5 mr-1.5" />
@@ -105,7 +105,7 @@ function FederationPage() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-4 flex flex-col gap-3.5 max-w-7xl w-full mx-auto">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-4 flex flex-col gap-3.5 max-w-7xl w-full mx-auto">
         <NodeNetworkCard apiBase={API_BASE} />
 
         <FederationMetricsBanner

@@ -213,13 +213,13 @@ function UsersPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div>
-          <h1 className="text-lg font-semibold tracking-tight">Identity & Access Management</h1>
-          <p className="text-xs text-muted-foreground">Control security credentials and access permissions.</p>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">Identity & Access Management</h1>
+          <p className="hidden sm:block text-xs text-muted-foreground">Control security credentials and access permissions.</p>
         </div>
-        <div className="flex items-center gap-3" suppressHydrationWarning>
-          <div className="relative" suppressHydrationWarning>
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto" suppressHydrationWarning>
+          <div className="relative flex-1 min-w-[140px] sm:flex-none" suppressHydrationWarning>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={searchQuery}
@@ -228,21 +228,21 @@ function UsersPage() {
               autoComplete="off"
               data-protonpass-ignore="true"
               data-1p-ignore="true"
-              className="h-8 w-48 pl-8 text-xs"
+              className="h-8 w-full sm:w-48 pl-8 text-xs"
             />
           </div>
-          <Button variant="outline" size="sm" className="h-8" onClick={fetchUsers} disabled={loading}>
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+          <Button variant="outline" size="sm" className="h-8" onClick={fetchUsers} disabled={loading} aria-label="Refresh users">
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-2 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
           <Button size="sm" className="h-8" onClick={() => setShowCreateDialog(true)}>
-            <UserPlus className="w-3.5 h-3.5 mr-2" />
+            <UserPlus className="w-3.5 h-3.5 mr-1.5" />
             Provision User
           </Button>
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-6 space-y-3">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-6 space-y-3">
         {filteredUsers.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
             <div className="h-16 w-16 rounded-2xl bg-muted/50 flex items-center justify-center mb-4">

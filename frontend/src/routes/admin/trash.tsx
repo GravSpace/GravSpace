@@ -226,15 +226,15 @@ function TrashPage() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50 dark:bg-slate-950/50">
-      <header className="h-16 border-b bg-card/50 backdrop-blur-md px-6 flex items-center justify-between sticky top-0 z-10">
+      <header className="min-h-14 sm:min-h-16 h-auto py-2.5 sm:py-0 border-b bg-card/50 backdrop-blur-md px-3.5 sm:px-6 flex flex-wrap items-center justify-between gap-2.5 sticky top-0 z-10">
         <div className="flex items-center gap-2">
-          <Trash2 className="w-5 h-5 text-rose-500" />
+          <Trash2 className="w-5 h-5 text-rose-500 shrink-0" />
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">Recycle Bin</h1>
-            <p className="text-xs text-muted-foreground">Soft-deleted objects pending permanent removal.</p>
+            <h1 className="text-base sm:text-lg font-semibold tracking-tight">Recycle Bin</h1>
+            <p className="hidden sm:block text-xs text-muted-foreground">Soft-deleted objects pending permanent removal.</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           {selectedCount > 0 && (
             <div className="flex items-center gap-1.5 px-3 py-1 bg-primary/10 border border-primary/20 rounded-full animate-in fade-in zoom-in duration-200">
               <span className="text-xs font-bold text-primary mr-1">{selectedCount} selected</span>
@@ -258,7 +258,7 @@ function TrashPage() {
             </div>
           )}
 
-          <div className="relative" suppressHydrationWarning>
+          <div className="relative flex-1 min-w-[140px] sm:flex-none" suppressHydrationWarning>
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
             <Input
               value={search}
@@ -268,7 +268,7 @@ function TrashPage() {
               autoComplete="off"
               data-protonpass-ignore="true"
               data-1p-ignore="true"
-              className="h-8 w-44 pl-8 text-xs"
+              className="h-8 w-full sm:w-44 pl-8 text-xs"
             />
             {search && (
               <button
@@ -286,6 +286,7 @@ function TrashPage() {
               setSelectedBucket(e.target.value)
               setSelectedIDs(new Set())
             }}
+            aria-label="Filter by bucket"
             className="h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
           >
             <option value="">All Buckets</option>
@@ -294,8 +295,9 @@ function TrashPage() {
             ))}
           </select>
 
-          <Button variant="outline" size="sm" onClick={fetchTrash} disabled={loading} className="h-8">
-            <RefreshCw className={`w-3.5 h-3.5 mr-2 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          <Button variant="outline" size="sm" onClick={fetchTrash} disabled={loading} className="h-8" aria-label="Refresh recycle bin">
+            <RefreshCw className={`w-3.5 h-3.5 sm:mr-2 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </Button>
 
           <Button
@@ -305,13 +307,13 @@ function TrashPage() {
             onClick={emptyTrash}
             disabled={items.length === 0}
           >
-            <Trash2 className="w-3.5 h-3.5 mr-2" />
+            <Trash2 className="w-3.5 h-3.5 mr-1.5" />
             Empty {selectedBucket ? `"${selectedBucket}"` : 'All'}
           </Button>
         </div>
       </header>
 
-      <main className="flex-1 overflow-auto p-4 flex flex-col gap-3">
+      <main className="flex-1 overflow-auto p-3.5 sm:p-4 flex flex-col gap-3">
         {loading && items.length === 0 && (
           <div className="flex flex-col items-center justify-center h-64 gap-3 opacity-50">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />

@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react'
-import { RotateCw, ShieldAlert, Copy, Eye, EyeOff, Trash2, ArrowLeftRight, Download, Key } from 'lucide-react'
+import { ShieldAlert, Copy, Trash2, Download, Key } from 'lucide-react'
+import { Tabs, TabsList, TabsTab } from '@ui-sdk/react/tabs'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
-import { Tabs, TabsList, TabsTrigger } from '../ui/tabs'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
-import { Textarea } from '../ui/textarea'
 import { Switch } from '../ui/switch'
 import { Badge } from '../ui/badge'
 import { toast } from 'sonner'
@@ -16,6 +15,9 @@ import {
   getEnvTheme,
   downloadKeyStoreCredentials,
 } from './vaultTypes'
+import { SecretFileOverview } from './SecretFileOverview'
+import { SecretRotateTab } from './SecretRotateTab'
+import { SecretVersionsTab } from './SecretVersionsTab'
 
 interface Props {
   open: boolean
@@ -42,17 +44,10 @@ export function SecretDetailDialog({
   const [versions, setVersions] = useState<SecretVersion[]>([])
   const [loadingVersions, setLoadingVersions] = useState(false)
 
-  // Rotate state
-  const [newValue, setNewValue] = useState('')
-  const [rotateComment, setRotateComment] = useState('')
-  const [rotating, setRotating] = useState(false)
-
-  // Edit meta state
   const [description, setDescription] = useState('')
   const [requiresApproval, setRequiresApproval] = useState(false)
   const [updatingMeta, setUpdatingMeta] = useState(false)
 
-  // Revealed value
   const [revealedValue, setRevealedValue] = useState<string | null>(null)
   const [revealing, setRevealing] = useState(false)
 
@@ -61,8 +56,6 @@ export function SecretDetailDialog({
       setDescription(secret.description || '')
       setRequiresApproval(secret.requires_approval)
       setRevealedValue(secret.value || null)
-      setNewValue('')
-      setRotateComment('')
       fetchVersions()
     }
   }, [secret, open])
@@ -108,35 +101,6 @@ export function SecretDetailDialog({
     }
   }
 
-  async function handleRotate(e: React.FormEvent) {
-    e.preventDefault()
-    if (!secret || !newValue.trim()) return
-
-    setRotating(true)
-    try {
-      const res = await authFetch(`${apiBase}/admin/vault/secrets/${secret.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          value: newValue.trim(),
-          comment: rotateComment.trim() || 'Manual rotation',
-        }),
-      })
-
-      if (!res.ok) throw new Error('Failed to rotate secret')
-      toast.success(`Secret rotated to v${secret.current_version + 1}.`)
-      setNewValue('')
-      setRotateComment('')
-      onSecretUpdated()
-      fetchVersions()
-      setActiveTab('overview')
-    } catch (err: any) {
-      toast.error(err.message || 'Error rotating secret.')
-    } finally {
-      setRotating(false)
-    }
-  }
-
   async function handleRollback(targetVersion: number) {
     if (!secret) return
     if (!window.confirm(`Rollback secret "${secret.name}" to version ${targetVersion}?`)) return
@@ -147,13 +111,13 @@ export function SecretDetailDialog({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_version: targetVersion }),
       })
-
       if (!res.ok) throw new Error('Failed to rollback')
       toast.success(`Rolled back to version ${targetVersion}.`)
+      setRevealedValue(null)
       onSecretUpdated()
       fetchVersions()
-    } catch (err: any) {
-      toast.error(err.message || 'Error rolling back.')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Error rolling back.')
     }
   }
 
@@ -172,8 +136,8 @@ export function SecretDetailDialog({
       if (!res.ok) throw new Error('Failed to update settings')
       toast.success('Secret settings updated.')
       onSecretUpdated()
-    } catch (err: any) {
-      toast.error(err.message || 'Error saving settings.')
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Error saving settings.')
     } finally {
       setUpdatingMeta(false)
     }
@@ -186,15 +150,15 @@ export function SecretDetailDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-xl max-h-[92vh] flex flex-col text-xs">
-        <DialogHeader className="px-6 py-4 border-b border-border/50 bg-muted/20 flex flex-row items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
+      <DialogContent className="sm:max-w-xl rounded-2xl border border-slate-200 dark:border-slate-800 bg-card p-0 overflow-hidden shadow-xl max-h-[92vh] flex flex-col text-xs">
+        <DialogHeader className="px-4 sm:px-6 py-4 border-b border-border/50 bg-muted/20 flex flex-row items-center justify-between shrink-0 pr-12">
+          <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
               <typeConf.icon className={`w-5 h-5 ${typeConf.color}`} />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <DialogTitle className="text-base font-semibold tracking-tight font-mono">{secret.name}</DialogTitle>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <DialogTitle className="text-base font-semibold tracking-tight font-mono truncate">{secret.name}</DialogTitle>
                 <Badge variant="outline" className={`text-[10px] ${envTheme.badge}`}>
                   <span className={`w-1.5 h-1.5 rounded-full ${envTheme.dot} mr-1 inline-block`} />
                   {secret.environment}
@@ -210,18 +174,27 @@ export function SecretDetailDialog({
           </div>
         </DialogHeader>
 
-        <div className="px-6 py-2 border-b border-border/40 bg-muted/10 shrink-0">
-          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
-            <TabsList className="h-8 bg-transparent p-0 gap-2">
-              <TabsTrigger value="overview" className="h-7 text-xs px-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
-                Overview & Value
-              </TabsTrigger>
-              <TabsTrigger value="rotate" className="h-7 text-xs px-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
+        <div className="px-4 sm:px-6 py-2 border-b border-border/40 bg-muted/10 shrink-0 overflow-x-auto scrollbar-none">
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'overview' | 'rotate' | 'versions')}>
+            <TabsList aria-label="Secret details sections" className="h-8 bg-transparent p-0 gap-2 inline-flex items-center whitespace-nowrap">
+              <TabsTab
+                value="overview"
+                className="h-7 text-xs px-3 rounded-md text-muted-foreground hover:text-foreground data-selected:bg-primary/10 data-selected:text-primary data-selected:font-semibold cursor-pointer"
+              >
+                Overview &amp; Value
+              </TabsTab>
+              <TabsTab
+                value="rotate"
+                className="h-7 text-xs px-3 rounded-md text-muted-foreground hover:text-foreground data-selected:bg-primary/10 data-selected:text-primary data-selected:font-semibold cursor-pointer"
+              >
                 Rotate / Update
-              </TabsTrigger>
-              <TabsTrigger value="versions" className="h-7 text-xs px-3 data-[state=active]:bg-primary/10 data-[state=active]:text-primary">
+              </TabsTab>
+              <TabsTab
+                value="versions"
+                className="h-7 text-xs px-3 rounded-md text-muted-foreground hover:text-foreground data-selected:bg-primary/10 data-selected:text-primary data-selected:font-semibold cursor-pointer"
+              >
                 Version History ({versions.length})
-              </TabsTrigger>
+              </TabsTab>
             </TabsList>
           </Tabs>
         </div>
@@ -229,67 +202,14 @@ export function SecretDetailDialog({
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
           {activeTab === 'overview' && (
             <div className="space-y-4">
-              {/* Secret Value View Box */}
-              <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                    Secret Value (AES-256-GCM)
-                  </span>
-                    <div className="flex items-center gap-1.5">
-                      <Button variant="ghost" size="sm" onClick={handleReveal} disabled={revealing} className="h-7 text-[11px] gap-1">
-                        {revealedValue ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        {revealedValue ? 'Hide' : 'Reveal'}
-                      </Button>
-                      {revealedValue && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            navigator.clipboard.writeText(revealedValue)
-                            toast.success('Copied value to clipboard')
-                          }}
-                          className="h-7 text-[11px] gap-1"
-                        >
-                          <Copy className="w-3.5 h-3.5" /> Copy
-                        </Button>
-                      )}
-                      {onDownload && (
-                        <div className="flex items-center gap-1">
-                          {secret.secret_type === 'keystore' ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => onDownload(secret, 'bundle')}
-                              className="h-7 text-[11px] gap-1 text-primary hover:text-primary font-semibold"
-                              title="Download binary .jks and companion credentials file in a single .zip bundle"
-                            >
-                              <Download className="w-3.5 h-3.5" /> Download Bundle (.zip)
-                            </Button>
-                          ) : (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => onDownload(secret, 'file')}
-                              className="h-7 text-[11px] gap-1 text-primary hover:text-primary"
-                            >
-                              <Download className="w-3.5 h-3.5" /> Download
-                            </Button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                </div>
+              <SecretFileOverview
+                secret={secret}
+                revealedValue={revealedValue}
+                revealing={revealing}
+                onReveal={handleReveal}
+                onDownload={onDownload}
+              />
 
-                <div className="font-mono text-xs p-2.5 rounded-lg bg-background border border-border/40 select-all break-all">
-                  {revealedValue ? (
-                    <span className="text-foreground">{revealedValue}</span>
-                  ) : (
-                    <span className="text-muted-foreground tracking-widest">••••••••••••••••••••••••••••••••</span>
-                  )}
-                </div>
-              </div>
-
-              {/* PAM Toggle */}
               <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/20 flex items-center justify-between">
                 <div>
                   <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
@@ -303,7 +223,6 @@ export function SecretDetailDialog({
                 <Switch checked={requiresApproval} onCheckedChange={setRequiresApproval} />
               </div>
 
-              {/* KeyStore Metadata Details */}
               {secret.secret_type === 'keystore' && secret.metadata && (
                 <div className="p-3.5 rounded-xl bg-muted/40 border border-border/60 space-y-2.5 text-xs">
                   <div className="flex items-center justify-between">
@@ -370,7 +289,6 @@ export function SecretDetailDialog({
                 </div>
               )}
 
-              {/* Description */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold">Description</Label>
                 <Input value={description} onChange={(e) => setDescription(e.target.value)} className="h-9 text-xs" />
@@ -395,88 +313,27 @@ export function SecretDetailDialog({
           )}
 
           {activeTab === 'rotate' && (
-            <form onSubmit={handleRotate} className="space-y-3.5">
-              <div className="p-3 rounded-xl bg-primary/5 border border-primary/20 flex items-start gap-2">
-                <RotateCw className="w-4 h-4 text-primary mt-0.5 shrink-0" />
-                <p className="text-[11px] text-muted-foreground">
-                  Rotating will create <strong>version {secret.current_version + 1}</strong>. The old version will be archived in history and can be rolled back anytime.
-                </p>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">New Secret Value</Label>
-                <Textarea
-                  value={newValue}
-                  onChange={(e) => setNewValue(e.target.value)}
-                  placeholder="Paste new token, connection string, or secret payload..."
-                  className="min-h-[100px] font-mono text-xs resize-none"
-                  required
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs font-semibold">Change Reason / Audit Comment</Label>
-                <Input
-                  value={rotateComment}
-                  onChange={(e) => setRotateComment(e.target.value)}
-                  placeholder="e.g. Scheduled quarterly credential rotation"
-                  className="h-9 text-xs"
-                />
-              </div>
-
-              <Button type="submit" size="sm" disabled={rotating} className="w-full h-8 gap-1.5">
-                <RotateCw className={`w-3.5 h-3.5 ${rotating ? 'animate-spin' : ''}`} />
-                {rotating ? 'Encrypting & Rotating...' : `Rotate to Version ${secret.current_version + 1}`}
-              </Button>
-            </form>
+            <SecretRotateTab
+              secret={secret}
+              apiBase={apiBase}
+              authFetch={authFetch}
+              revealedValue={revealedValue}
+              onRotated={() => {
+                setRevealedValue(null)
+                onSecretUpdated()
+                fetchVersions()
+                setActiveTab('overview')
+              }}
+            />
           )}
 
           {activeTab === 'versions' && (
-            <div className="space-y-2">
-              {loadingVersions ? (
-                <div className="py-8 text-center text-muted-foreground">Loading versions...</div>
-              ) : versions.length === 0 ? (
-                <div className="py-8 text-center text-muted-foreground">No historical versions found</div>
-              ) : (
-                versions.map((v) => {
-                  const isCurrent = v.version === secret.current_version
-                  return (
-                    <div
-                      key={v.version}
-                      className={`p-3 rounded-xl border flex items-center justify-between transition-colors ${
-                        isCurrent ? 'bg-primary/5 border-primary/40' : 'bg-muted/20 border-border/40 hover:bg-muted/40'
-                      }`}
-                    >
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xs">v{v.version}</span>
-                          {isCurrent && (
-                            <Badge className="text-[9px] bg-primary/20 text-primary border-primary/30 py-0 h-4">
-                              Current
-                            </Badge>
-                          )}
-                          <span className="text-[10px] text-muted-foreground font-mono">{v.created_at.slice(0, 16)}</span>
-                        </div>
-                        <p className="text-[11px] text-muted-foreground italic">
-                          {v.comment || 'No comment provided'}
-                        </p>
-                      </div>
-
-                      {!isCurrent && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleRollback(v.version)}
-                          className="h-7 text-[10px] gap-1 hover:bg-primary hover:text-primary-foreground"
-                        >
-                          <ArrowLeftRight className="w-3 h-3" /> Rollback
-                        </Button>
-                      )}
-                    </div>
-                  )
-                })
-              )}
-            </div>
+            <SecretVersionsTab
+              currentVersion={secret.current_version}
+              versions={versions}
+              loading={loadingVersions}
+              onRollback={handleRollback}
+            />
           )}
         </div>
       </DialogContent>

@@ -38,6 +38,11 @@ async fn run_startup_recovery(storage: &FileStorage) {
         Err(e) => warn!("Startup federation catch-up failed: {e}"),
         _ => {}
     }
+
+    let storage_c = storage.clone();
+    tokio::spawn(async move {
+        crate::workers::federation_announce::announce_all_enabled_shares(&storage_c).await;
+    });
 }
 
 /// Probes remote peer `/health` endpoints and triggers immediate catch-up when a peer
@@ -178,7 +183,7 @@ async fn drain_queue_phase(
             serde_json::json!({ "id": item.id, "share_id": share.id, "status": "syncing" }),
         );
 
-        match transfer_sync_item(storage, transfer_client, &item, peer).await {
+        match transfer_sync_item(storage, transfer_client, &item, share, peer).await {
             TransferOutcome::Success => {
                 let _ = db::federation::mark_item_completed(conn, item.id).await;
                 let _ = db::federation::update_share_status(conn, share.id, "in_sync").await;

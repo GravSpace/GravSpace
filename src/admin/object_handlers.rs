@@ -235,9 +235,13 @@ pub async fn put_object(
             "Invalid object key: suffix reserved for object controls".to_string(),
         ));
     }
+    let replicated = is_replicated_request(&headers);
     let version_id = storage
-        .put_object_with_options(&bucket, &key, body.to_vec(), None, is_replicated_request(&headers))
+        .put_object_with_options(&bucket, &key, body.to_vec(), None, replicated)
         .await?;
+    if replicated {
+        storage.record_inbound_from_headers(&headers, &bucket, "admin").await;
+    }
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:PutObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
     }
@@ -251,9 +255,13 @@ pub async fn delete_object(
     Query(query): Query<ObjectVersionQuery>,
 ) -> Result<Response, AppError> {
     let vid = query.version_id.or(query.version_id_camel);
+    let replicated = is_replicated_request(&headers);
     storage
-        .delete_object_with_options(&bucket, &key, vid.as_deref(), false, is_replicated_request(&headers))
+        .delete_object_with_options(&bucket, &key, vid.as_deref(), false, replicated)
         .await?;
+    if replicated {
+        storage.record_inbound_from_headers(&headers, &bucket, "admin").await;
+    }
     if let Some(ref audit) = storage.audit {
         audit.log(Some("admin"), "s3:DeleteObject", &format!("{bucket}/{key}"), "success", None, None, None).await;
     }

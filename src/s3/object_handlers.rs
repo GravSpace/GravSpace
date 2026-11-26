@@ -375,6 +375,11 @@ pub async fn put_object(
         .get("x-gravspace-replicated")
         .and_then(|h| h.to_str().ok())
         == Some("1");
+    let replicated_headers = if is_replicated {
+        Some(headers.clone())
+    } else {
+        None
+    };
     let encryption = headers
         .get("x-amz-server-side-encryption")
         .and_then(|h| h.to_str().ok());
@@ -386,6 +391,11 @@ pub async fn put_object(
         .await
     {
         Ok(version_id) => {
+            if let Some(ref rep_headers) = replicated_headers {
+                storage
+                    .record_inbound_from_headers(rep_headers, &bucket, &username)
+                    .await;
+            }
             if let Some(ref audit) = storage.audit {
                 let audit_c = audit.clone();
                 let u = username.clone();
@@ -456,6 +466,11 @@ pub async fn delete_object(
         .await
     {
         Ok(_) => {
+            if is_replicated {
+                storage
+                    .record_inbound_from_headers(request.headers(), &bucket, &username)
+                    .await;
+            }
             if let Some(ref audit) = storage.audit {
                 let audit_c = audit.clone();
                 let u = username.clone();

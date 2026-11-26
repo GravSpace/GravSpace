@@ -87,7 +87,7 @@ function LoginPage() {
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40%] h-[40%] bg-indigo-600/5 blur-[100px] rounded-full" />
       </div>
 
-      <div className="w-full max-w-sm px-6 z-10 scale-95 md:scale-100">
+      <div className="w-full max-w-sm px-4 sm:px-6 py-8 z-10">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-xl shadow-indigo-500/20 mb-4 transition-transform hover:scale-105 duration-300 p-2">
             <img src="/logo.png" alt="GravSpace Logo" className="w-full h-full object-contain" />

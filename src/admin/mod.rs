@@ -2,6 +2,7 @@ pub mod analytics_handlers;
 pub mod auth_handlers;
 pub mod bucket_handlers;
 pub mod federation_handlers;
+pub mod federation_inbound_handlers;
 pub mod federation_peer_handlers;
 pub mod federation_probe;
 pub mod federation_share_handlers;
